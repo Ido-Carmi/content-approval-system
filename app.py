@@ -644,8 +644,8 @@ def show_review_page():
                 estimated_lines_from_chars = text_length // 40
                 # Give more weight to actual newlines (multiply by 1.2 to account for line spacing)
                 estimated_lines = max(int(text_lines * 1.5), estimated_lines_from_chars)
-                # Calculate height: 40px per line, minimum 250px, maximum 800px
-                calculated_height = min(max(150, estimated_lines * 30), 1000)
+                # Calculate height: 40px per line, minimum 250px, maximum 2000px
+                calculated_height = min(max(150, estimated_lines * 30), 2000)
 
                 edited_text = st.text_area(
                     "Content",
