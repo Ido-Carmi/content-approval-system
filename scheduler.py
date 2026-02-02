@@ -16,28 +16,107 @@ class Scheduler:
         self.db = database
         self.fb = facebook_handler
         self.timezone = pytz.timezone('Asia/Jerusalem')
+        
+        # Jewish holidays (non-work days only) - dates for 2024-2027
+        # These are the first days of multi-day holidays that are non-work days
+        self.jewish_holidays = {
+            # 2024
+            '2024-04-23': 'Passover Day 1',
+            '2024-04-29': 'Passover Day 7',
+            '2024-06-12': 'Shavuot',
+            '2024-10-03': 'Rosh Hashanah Day 1',
+            '2024-10-04': 'Rosh Hashanah Day 2',
+            '2024-10-12': 'Yom Kippur',
+            '2024-10-17': 'Sukkot Day 1',
+            '2024-10-24': 'Simchat Torah',
+            
+            # 2025
+            '2025-04-13': 'Passover Day 1',
+            '2025-04-19': 'Passover Day 7',
+            '2025-06-02': 'Shavuot',
+            '2025-09-23': 'Rosh Hashanah Day 1',
+            '2025-09-24': 'Rosh Hashanah Day 2',
+            '2025-10-02': 'Yom Kippur',
+            '2025-10-07': 'Sukkot Day 1',
+            '2025-10-14': 'Simchat Torah',
+            
+            # 2026
+            '2026-04-02': 'Passover Day 1',
+            '2026-04-08': 'Passover Day 7',
+            '2026-05-22': 'Shavuot',
+            '2026-09-12': 'Rosh Hashanah Day 1',
+            '2026-09-13': 'Rosh Hashanah Day 2',
+            '2026-09-21': 'Yom Kippur',
+            '2026-09-26': 'Sukkot Day 1',
+            '2026-10-03': 'Simchat Torah',
+            
+            # 2027
+            '2027-04-22': 'Passover Day 1',
+            '2027-04-28': 'Passover Day 7',
+            '2027-06-11': 'Shavuot',
+            '2027-10-02': 'Rosh Hashanah Day 1',
+            '2027-10-03': 'Rosh Hashanah Day 2',
+            '2027-10-11': 'Yom Kippur',
+            '2027-10-16': 'Sukkot Day 1',
+            '2027-10-23': 'Simchat Torah',
+        }
+    
+    def load_config(self) -> Dict:
+        """Load configuration from file"""
+        config_file = Path("config.json")
+        if config_file.exists():
+            with open(config_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        return {}
     
     def load_posting_windows(self) -> List[time]:
         """Load posting windows from config"""
-        config_file = Path("config.json")
+        config = self.load_config()
+        windows_str = config.get('posting_windows', ['09:00', '14:00', '19:00'])
         
-        if config_file.exists():
-            with open(config_file, 'r', encoding='utf-8') as f:
-                config = json.load(f)
-                windows_str = config.get('posting_windows', ['09:00', '14:00', '19:00'])
-                
-                windows = []
-                for w in windows_str:
-                    hour, minute = map(int, w.split(':'))
-                    windows.append(time(hour, minute))
-                
-                return sorted(windows)
+        windows = []
+        for w in windows_str:
+            hour, minute = map(int, w.split(':'))
+            windows.append(time(hour, minute))
         
-        return [time(9, 0), time(14, 0), time(19, 0)]
+        return sorted(windows)
+    
+    def is_shabbat(self, date: datetime.date) -> bool:
+        """Check if a date is Friday or Saturday (Shabbat)"""
+        # Friday = 4, Saturday = 5
+        return date.weekday() in [4, 5]
+    
+    def is_jewish_holiday(self, date: datetime.date) -> bool:
+        """Check if a date is a Jewish holiday (non-work day)"""
+        date_str = date.strftime('%Y-%m-%d')
+        return date_str in self.jewish_holidays
+    
+    def should_skip_date(self, date: datetime.date) -> bool:
+        """
+        Check if a date should be skipped based on config
+        
+        Args:
+            date: Date to check
+            
+        Returns:
+            True if date should be skipped, False otherwise
+        """
+        config = self.load_config()
+        skip_shabbat = config.get('skip_shabbat', True)
+        skip_holidays = config.get('skip_jewish_holidays', True)
+        
+        if skip_shabbat and self.is_shabbat(date):
+            return True
+        
+        if skip_holidays and self.is_jewish_holiday(date):
+            return True
+        
+        return False
     
     def get_next_available_slot(self) -> datetime:
         """
-        Get the next available posting slot based on configured windows
+        Get the next available posting slot based on configured windows,
+        skipping Shabbat and Jewish holidays if configured
         
         Returns:
             datetime object of the next available slot (with timezone)
@@ -49,16 +128,17 @@ class Scheduler:
         scheduled_posts = self.db.get_scheduled_posts()
         scheduled_times = [datetime.fromisoformat(p['scheduled_time']) for p in scheduled_posts]
         
-        # Try to find a slot today
+        # Try to find a slot today (if not skipped)
         current_date = now.date()
-        for window_time in windows:
-            slot = self.timezone.localize(datetime.combine(current_date, window_time))
-            
-            # Check if this slot is in the future and not already taken
-            if slot > now and slot not in scheduled_times:
-                return slot
+        if not self.should_skip_date(current_date):
+            for window_time in windows:
+                slot = self.timezone.localize(datetime.combine(current_date, window_time))
+                
+                # Check if this slot is in the future and not already taken
+                if slot > now and slot not in scheduled_times:
+                    return slot
         
-        # If no slots available today, start checking tomorrow
+        # If no slots available today, start checking future days
         days_checked = 0
         max_days = 365  # Don't look more than a year ahead
         
@@ -66,89 +146,68 @@ class Scheduler:
             days_checked += 1
             check_date = current_date + timedelta(days=days_checked)
             
+            # Skip if this date should be skipped
+            if self.should_skip_date(check_date):
+                continue
+            
             for window_time in windows:
                 slot = self.timezone.localize(datetime.combine(check_date, window_time))
                 
                 if slot not in scheduled_times:
                     return slot
         
-        # Fallback: if somehow all slots are taken for a year, just use tomorrow at first window
+        # Fallback: if somehow all slots are taken for a year, just use next valid day at first window
+        fallback_days = 1
+        while fallback_days < 365:
+            fallback_date = current_date + timedelta(days=fallback_days)
+            if not self.should_skip_date(fallback_date):
+                return self.timezone.localize(
+                    datetime.combine(fallback_date, windows[0])
+                )
+            fallback_days += 1
+        
+        # Ultimate fallback
         return self.timezone.localize(
             datetime.combine(current_date + timedelta(days=1), windows[0])
         )
     
     def schedule_post(self, entry_id: int, text: str) -> str:
         """
-        Schedule a post for the next available slot
+        Schedule a post for the next available window
         
         Args:
-            entry_id: Database ID of the entry
-            text: The formatted text to post
+            entry_id: Entry ID to schedule
+            text: Post text (already formatted with number)
             
         Returns:
-            ISO format string of the scheduled time
+            String representation of scheduled time
         """
-        next_slot = self.get_next_available_slot()
-        self.db.schedule_post(entry_id, text, next_slot.isoformat())
+        scheduled_time = self.get_next_available_slot()
         
-        return next_slot.strftime('%Y-%m-%d %H:%M %Z')
+        # Add to scheduled_posts table
+        self.db.schedule_post(entry_id, text, scheduled_time.isoformat())
+        
+        return scheduled_time.strftime("%d/%m/%Y %H:%M")
     
-    def publish_due_posts(self) -> List[Dict]:
+    def publish_due_posts(self):
         """
-        Check for and publish any posts that are due
-        
-        Returns:
-            List of published posts with their results
+        Publish all posts that are due now
         """
         if not self.fb:
-            return []
+            print("Facebook handler not configured")
+            return
         
         now = datetime.now(self.timezone)
-        due_posts = self.db.get_posts_due_for_publishing(now.isoformat())
-        
-        results = []
-        
-        for post in due_posts:
-            try:
-                # Publish to Facebook
-                fb_result = self.fb.publish_post(post['text'])
-                
-                # Mark as published in database
-                self.db.mark_as_published(post['id'], fb_result['id'])
-                
-                results.append({
-                    'success': True,
-                    'post_id': post['id'],
-                    'facebook_id': fb_result['id'],
-                    'scheduled_time': post['scheduled_time']
-                })
-                
-            except Exception as e:
-                results.append({
-                    'success': False,
-                    'post_id': post['id'],
-                    'error': str(e),
-                    'scheduled_time': post['scheduled_time']
-                })
-        
-        return results
-    
-    def get_scheduled_summary(self) -> Dict:
-        """Get a summary of scheduled posts by date"""
         scheduled = self.db.get_scheduled_posts()
         
-        summary = {}
         for post in scheduled:
-            scheduled_dt = datetime.fromisoformat(post['scheduled_time'])
-            date_key = scheduled_dt.date().isoformat()
+            scheduled_time = datetime.fromisoformat(post['scheduled_time'])
             
-            if date_key not in summary:
-                summary[date_key] = []
-            
-            summary[date_key].append({
-                'id': post['id'],
-                'time': scheduled_dt.strftime('%H:%M'),
-                'text_preview': post['text'][:50] + '...' if len(post['text']) > 50 else post['text']
-            })
-        
-        return summary
+            # If the scheduled time has passed, publish it
+            if scheduled_time <= now:
+                try:
+                    result = self.fb.publish_post(post['text'])
+                    self.db.mark_as_published(post['id'], result['id'])
+                    print(f"✓ Published post #{post['id']}: {result['id']}")
+                except Exception as e:
+                    print(f"✗ Failed to publish post #{post['id']}: {str(e)}")

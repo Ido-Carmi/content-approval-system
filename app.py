@@ -205,6 +205,7 @@ def main():
     elif page == "📊 Statistics":
         show_statistics_page()
 
+
 def show_settings_page():
     st.header("⚙️ Settings")
     
@@ -215,317 +216,351 @@ def show_settings_page():
         with open(config_file, 'r', encoding='utf-8') as f:
             config = json.load(f)
     
-    # Google Sheets Configuration
-    st.subheader("📊 Google Sheets Configuration")
-    sheet_id = st.text_input(
-        "Google Sheet ID",
-        value=config.get('google_sheet_id', ''),
-        help="The ID from your Google Sheets URL"
-    )
+    # === Google Sheets Configuration ===
+    with st.expander("📊 Google Sheets Configuration", expanded=False):
+        sheet_id = st.text_input(
+            "Google Sheet ID",
+            value=config.get('google_sheet_id', ''),
+            help="The ID from your Google Sheets URL",
+            key="sheet_id"
+        )
+        
+        credentials_file = st.text_input(
+            "Google Credentials File",
+            value=config.get('google_credentials_file', 'credentials.json'),
+            help="Path to your Google API credentials JSON file",
+            key="creds_file"
+        )
+        
+        st.info("💡 Make sure your Google Sheets credentials are configured in Streamlit Secrets")
     
-    credentials_file = st.text_input(
-        "Google Credentials File",
-        value=config.get('google_credentials_file', 'credentials.json'),
-        help="Path to your Google API credentials JSON file"
-    )
+    # === Facebook Configuration ===
+    with st.expander("📘 Facebook Configuration", expanded=False):
+        fb_page_id = st.text_input(
+            "Facebook Page ID",
+            value=config.get('facebook_page_id', ''),
+            help="Your Facebook Page ID",
+            key="fb_page"
+        )
+        
+        fb_token = st.text_input(
+            "Facebook Access Token",
+            value=config.get('facebook_access_token', ''),
+            type="password",
+            help="Your Facebook Page Access Token",
+            key="fb_token"
+        )
     
-    # Facebook Configuration
-    st.subheader("📘 Facebook Configuration")
-    fb_page_id = st.text_input(
-        "Facebook Page ID",
-        value=config.get('facebook_page_id', ''),
-        help="Your Facebook Page ID"
-    )
+    # === Scheduling Configuration ===
+    with st.expander("⏰ Scheduling Configuration", expanded=False):
+        st.markdown("### Posting Time Windows")
+        st.write("Configure the times when posts should be published (Israel timezone)")
+        
+        # Get existing windows
+        windows = config.get('posting_windows', ['09:00', '14:00', '19:00'])
+        
+        # Allow editing windows
+        num_windows = st.number_input("Number of posting windows per day", min_value=1, max_value=10, value=len(windows), key="num_windows")
+        
+        new_windows = []
+        cols = st.columns(min(num_windows, 3))
+        for i in range(num_windows):
+            with cols[i % 3]:
+                default_time = time(9, 0) if i >= len(windows) else datetime.strptime(windows[i], "%H:%M").time()
+                window_time = st.time_input(f"Window {i+1}", value=default_time, key=f"window_{i}")
+                new_windows.append(window_time.strftime("%H:%M"))
+        
+        st.divider()
+        
+        st.markdown("### Skip Days")
+        skip_shabbat = st.checkbox(
+            "Skip Fridays and Saturdays",
+            value=config.get('skip_shabbat', True),
+            help="Don't schedule posts on Shabbat (Friday and Saturday)",
+            key="skip_shabbat"
+        )
+        
+        skip_jewish_holidays = st.checkbox(
+            "Skip Jewish Holidays (non-work days)",
+            value=config.get('skip_jewish_holidays', True),
+            help="Don't schedule posts on major Jewish holidays that are non-work days",
+            key="skip_holidays"
+        )
+        
+        if skip_jewish_holidays:
+            st.info("📅 Skipped holidays: Rosh Hashanah, Yom Kippur, Sukkot, Simchat Torah, Passover, Shavuot")
     
-    fb_token = st.text_input(
-        "Facebook Access Token",
-        value=config.get('facebook_access_token', ''),
-        type="password",
-        help="Your Facebook Page Access Token"
-    )
-    
-    # Post Numbering
-    st.subheader("🔢 Post Numbering")
-    starting_number = st.number_input(
-        "Starting Number",
-        min_value=1,
-        value=config.get('starting_number', 1),
-        help="The starting number for post numbering"
-    )
-    
-    current_number = st.session_state.db.get_current_post_number()
-    st.info(f"Current post number: **#{current_number}**")
-    
-    if st.button("Reset Post Number"):
-        st.session_state.db.reset_post_number(starting_number)
-        st.success(f"Post number reset to {starting_number}")
-        st.rerun()
-    
-    st.divider()
-    st.subheader("🗑️ Database Management")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        if st.button("🗑️ Delete All Pending Entries", type="secondary"):
-            conn = st.session_state.db.get_connection()
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM entries WHERE status = 'pending'")
-            cursor.execute("DELETE FROM processed_timestamps")
-            conn.commit()
-            conn.close()
-            st.success("✅ All pending entries deleted!")
+    # === Post Numbering ===
+    with st.expander("🔢 Post Numbering", expanded=False):
+        starting_number = st.number_input(
+            "Starting Number",
+            min_value=1,
+            value=config.get('starting_number', 1),
+            help="The starting number for post numbering",
+            key="start_num"
+        )
+        
+        current_number = st.session_state.db.get_current_post_number()
+        st.info(f"Current post number: **#{current_number}**")
+        
+        if st.button("Reset Post Number", key="reset_num"):
+            st.session_state.db.reset_post_number(starting_number)
+            st.success(f"Post number reset to {starting_number}")
             st.rerun()
+    
+    # === Sync Configuration ===
+    with st.expander("🗓️ Sync Configuration", expanded=False):
+        # Get start date from config or use today as default
+        default_start_date = datetime.now(pytz.timezone('Asia/Jerusalem')).date()
+        if 'sync_start_date' in config and config['sync_start_date']:
+            try:
+                default_start_date = datetime.fromisoformat(config['sync_start_date']).date()
+            except:
+                pass  # Use default if parsing fails
 
-    with col2:
-        if st.button("⚠️ Clear Entire Database", type="secondary"):
-            if st.checkbox("I'm sure I want to delete everything"):
-                conn = st.session_state.db.get_connection()
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM entries")
-                cursor.execute("DELETE FROM scheduled_posts")
-                cursor.execute("DELETE FROM processed_timestamps")
-                conn.commit()
-                conn.close()
-                st.success("✅ Database cleared!")
-                st.rerun()
-    
-    # Posting Windows
-    st.subheader("⏰ Posting Time Windows")
-    st.write("Configure the times when posts should be published (Israel timezone)")
-    
-    # Get existing windows
-    windows = config.get('posting_windows', ['09:00', '14:00', '19:00'])
-    
-    # Allow editing windows
-    num_windows = st.number_input("Number of posting windows per day", min_value=1, max_value=10, value=len(windows))
-    
-    new_windows = []
-    cols = st.columns(min(num_windows, 3))
-    for i in range(num_windows):
-        with cols[i % 3]:
-            default_time = time(9, 0) if i >= len(windows) else datetime.strptime(windows[i], "%H:%M").time()
-            window_time = st.time_input(f"Window {i+1}", value=default_time, key=f"window_{i}")
-            new_windows.append(window_time.strftime("%H:%M"))
-    
-    # Sync Start Date
-    st.subheader("🗓️ Sync Configuration")
+        start_date = st.date_input(
+            "Start reading from date",
+            value=default_start_date,
+            help="Only sync entries from this date forward. Older entries will be ignored.",
+            format="DD/MM/YYYY",
+            key="start_date"
+        )
 
-    # Get start date from config or use today as default
-    default_start_date = datetime.now(pytz.timezone('Asia/Jerusalem')).date()
-    if 'sync_start_date' in config and config['sync_start_date']:
-        try:
-            default_start_date = datetime.fromisoformat(config['sync_start_date']).date()
-        except:
-            pass  # Use default if parsing fails
-
-    start_date = st.date_input(
-        "Start reading from date",
-        value=default_start_date,
-        help="Only sync entries from this date forward. Older entries will be ignored.",
-        format="DD/MM/YYYY"
-    )
-
-    if st.button("Set Start Date"):
-        config['sync_start_date'] = start_date.isoformat()
-        with open(config_file, 'w', encoding='utf-8') as f:
-            json.dump(config, f, indent=2, ensure_ascii=False)
-        st.success(f"✅ Start date set to {start_date}")
-
-    st.divider()
-    
-    # Notification Settings
-    st.subheader("📧 Notification Settings")
-    
-    notifications_enabled = st.checkbox(
-        "Enable Notifications",
-        value=config.get('notifications_enabled', False),
-        help="Enable email notifications for pending entries and empty windows"
-    )
-    
-    # App URL
-    app_url = st.text_input(
-        "App URL",
-        value=config.get('app_url', 'http://localhost:8501'),
-        help="URL of this app (will be included in notification emails)"
-    )
-    
-    # Gmail Configuration
-    st.write("**Gmail Configuration**")
-    st.info("💡 Use your Gmail address and an App Password (not your regular password)")
-    
-    gmail_email = st.text_input(
-        "Gmail Address",
-        value=config.get('gmail_email', ''),
-        placeholder="your-email@gmail.com",
-        help="Your Gmail address that will send the notifications"
-    )
-    
-    gmail_app_password = st.text_input(
-        "Gmail App Password",
-        value=config.get('gmail_app_password', ''),
-        type="password",
-        help="Generate this from Google Account settings (not your regular password)"
-    )
-    
-    with st.expander("📖 How to get Gmail App Password"):
-        st.markdown("""
-        1. Go to [Google Account Settings](https://myaccount.google.com/)
-        2. Click **Security** → **2-Step Verification** (enable if not already)
-        3. Scroll down to **App passwords**
-        4. Click **App passwords**
-        5. Select **Mail** and **Other (Custom name)**
-        6. Name it "Content Approval System"
-        7. Click **Generate**
-        8. Copy the 16-character password
-        9. Paste it above
-        """)
-    
-    # Pending Threshold
-    pending_threshold = st.number_input(
-        "Pending Threshold",
-        min_value=1,
-        max_value=1000,
-        value=config.get('pending_threshold', 20),
-        help="Send notification when pending entries exceed this number"
-    )
-    
-    # Email Addresses
-    st.write("**Notification Email Addresses**")
-    
-    # Get existing emails
-    existing_emails = config.get('notification_emails', [])
-    
-    # Input for new email
-    new_email = st.text_input("Add email address", placeholder="email@example.com")
-    
-    col1, col2 = st.columns([1, 5])
-    with col1:
-        if st.button("➕ Add Email"):
-            if new_email and new_email not in existing_emails:
-                existing_emails.append(new_email)
-                config['notification_emails'] = existing_emails
-                with open(config_file, 'w', encoding='utf-8') as f:
-                    json.dump(config, f, indent=2, ensure_ascii=False)
-                st.success(f"Added {new_email}")
-                st.rerun()
-            elif new_email in existing_emails:
-                st.warning("Email already exists")
+        if st.button("Set Start Date", key="set_date"):
+            config['sync_start_date'] = start_date.isoformat()
+            with open(config_file, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=2, ensure_ascii=False)
+            st.success(f"✅ Start date set to {start_date}")
+        
+        st.divider()
+        
+        # Last sync info
+        last_sync = config.get('last_sync', 'Never')
+        st.info(f"Last sync: **{last_sync}**")
+        
+        if st.button("🔄 Sync Now", key="sync_now"):
+            if st.session_state.sheets_handler:
+                with st.spinner("Syncing with Google Sheets..."):
+                    try:
+                        # Get start date filter
+                        start_date_str = config.get('sync_start_date')
+                        
+                        new_entries = st.session_state.sheets_handler.fetch_new_entries()
+                        added_count = 0
+                        skipped_count = 0
+                        
+                        for entry in new_entries:
+                            # Skip entries before start date
+                            if start_date_str:
+                                try:
+                                    entry_date = pd.to_datetime(entry['timestamp'], dayfirst=True).date()
+                                    filter_date = datetime.fromisoformat(start_date_str).date()
+                                    if entry_date < filter_date:
+                                        skipped_count += 1
+                                        continue
+                                except:
+                                    pass  # If parsing fails, include the entry
+                            
+                            if st.session_state.db.add_entry(entry['timestamp'], entry['text']):
+                                added_count += 1
+                        
+                        config['last_sync'] = datetime.now(pytz.timezone('Asia/Jerusalem')).strftime("%Y-%m-%d %H:%M:%S")
+                        with open(config_file, 'w', encoding='utf-8') as f:
+                            json.dump(config, f, indent=2, ensure_ascii=False)
+                        
+                        msg = f"✅ Synced successfully! Added {added_count} new entries."
+                        if skipped_count > 0:
+                            msg += f" Skipped {skipped_count} entries before {start_date_str}."
+                        st.success(msg)
+                        
+                        # Check if we should send notification
+                        if config.get('notifications_enabled', False):
+                            pending_count = st.session_state.db.get_statistics()['pending']
+                            threshold = config.get('pending_threshold', 20)
+                            
+                            if pending_count > threshold:
+                                notif = NotificationHandler()
+                                
+                                # Check for empty windows
+                                next_empty = check_for_empty_windows(st.session_state.scheduler)
+                                notif.send_pending_threshold_alert(pending_count, next_empty)
+                                st.info(f"📧 Notification sent - {pending_count} pending entries exceed threshold of {threshold}")
+                    except Exception as e:
+                        st.error(f"Sync failed: {str(e)}")
             else:
-                st.warning("Please enter an email address")
+                st.warning("Please configure Google Sheets settings first")
     
-    # Display existing emails with delete option
-    if existing_emails:
-        st.write(f"**Configured emails ({len(existing_emails)}):**")
-        for idx, email in enumerate(existing_emails):
-            col1, col2 = st.columns([5, 1])
-            with col1:
-                st.text(email)
-            with col2:
-                if st.button("🗑️", key=f"delete_email_{idx}"):
-                    existing_emails.remove(email)
+    # === Notification Settings ===
+    with st.expander("📧 Notification Settings", expanded=False):
+        notifications_enabled = st.checkbox(
+            "Enable Notifications",
+            value=config.get('notifications_enabled', False),
+            help="Enable email notifications for pending entries and empty windows",
+            key="notif_enabled"
+        )
+        
+        # App URL
+        app_url = st.text_input(
+            "App URL",
+            value=config.get('app_url', 'http://localhost:8501'),
+            help="URL of this app (will be included in notification emails)",
+            key="app_url"
+        )
+        
+        # Gmail Configuration
+        st.markdown("### Gmail Configuration")
+        st.info("💡 Use your Gmail address and an App Password (not your regular password)")
+        
+        gmail_email = st.text_input(
+            "Gmail Address",
+            value=config.get('gmail_email', ''),
+            placeholder="your-email@gmail.com",
+            help="Your Gmail address that will send the notifications",
+            key="gmail_addr"
+        )
+        
+        gmail_app_password = st.text_input(
+            "Gmail App Password",
+            value=config.get('gmail_app_password', ''),
+            type="password",
+            help="Generate this from Google Account settings (not your regular password)",
+            key="gmail_pass"
+        )
+        
+        st.markdown("""
+        <details>
+        <summary>📖 How to get Gmail App Password (click to expand)</summary>
+        <ol>
+        <li>Go to <a href="https://myaccount.google.com/">Google Account Settings</a></li>
+        <li>Click <strong>Security</strong> → <strong>2-Step Verification</strong> (enable if not already)</li>
+        <li>Scroll down to <strong>App passwords</strong></li>
+        <li>Click <strong>App passwords</strong></li>
+        <li>Select <strong>Mail</strong> and <strong>Other (Custom name)</strong></li>
+        <li>Name it "Content Approval System"</li>
+        <li>Click <strong>Generate</strong></li>
+        <li>Copy the 16-character password</li>
+        <li>Paste it above</li>
+        </ol>
+        </details>
+        """, unsafe_allow_html=True)
+        
+        # Pending Threshold
+        pending_threshold = st.number_input(
+            "Pending Threshold",
+            min_value=1,
+            max_value=1000,
+            value=config.get('pending_threshold', 20),
+            help="Send notification when pending entries exceed this number",
+            key="pending_thresh"
+        )
+        
+        # Email Addresses
+        st.markdown("### Notification Recipients")
+        
+        # Get existing emails
+        existing_emails = config.get('notification_emails', [])
+        
+        # Input for new email
+        new_email = st.text_input("Add email address", placeholder="email@example.com", key="new_email")
+        
+        col1, col2 = st.columns([1, 5])
+        with col1:
+            if st.button("➕ Add Email", key="add_email"):
+                if new_email and new_email not in existing_emails:
+                    existing_emails.append(new_email)
                     config['notification_emails'] = existing_emails
                     with open(config_file, 'w', encoding='utf-8') as f:
                         json.dump(config, f, indent=2, ensure_ascii=False)
-                    st.success(f"Removed {email}")
+                    st.success(f"Added {new_email}")
                     st.rerun()
-    else:
-        st.info("No email addresses configured yet")
-    
-    # Test Notification Button
-    st.divider()
-    if st.button("📧 Send Test Notification"):
-        if not notifications_enabled:
-            st.warning("Notifications are disabled. Enable them first!")
-        elif not gmail_email or not gmail_app_password:
-            st.warning("Gmail credentials not configured!")
-        elif not existing_emails:
-            st.warning("No email addresses configured!")
-        else:
-            try:
-                # Temporarily save config for test
-                test_config = config.copy()
-                test_config['notifications_enabled'] = notifications_enabled
-                test_config['gmail_email'] = gmail_email
-                test_config['gmail_app_password'] = gmail_app_password
-                test_config['notification_emails'] = existing_emails
-                test_config['pending_threshold'] = pending_threshold
-                test_config['app_url'] = app_url
-                
-                with open(config_file, 'w', encoding='utf-8') as f:
-                    json.dump(test_config, f, indent=2, ensure_ascii=False)
-                
-                # Send test notification
-                notif = NotificationHandler()
-                if notif.send_test_notification():
-                    st.success("✅ Test notification sent successfully! Check your email.")
+                elif new_email in existing_emails:
+                    st.warning("Email already exists")
                 else:
-                    st.error("❌ Failed to send test notification. Check your Gmail credentials.")
-            except Exception as e:
-                st.error(f"Error sending test notification: {str(e)}")
-
-    st.divider()
-
-    # Last sync info
-    st.subheader("🔄 Sync Information")
-    last_sync = config.get('last_sync', 'Never')
-    st.info(f"Last sync with Google Sheets: **{last_sync}**")
-    
-    if st.button("🔄 Sync Now"):
-        if st.session_state.sheets_handler:
-            with st.spinner("Syncing with Google Sheets..."):
-                try:
-                    # Get start date filter
-                    start_date_str = config.get('sync_start_date')
-                    
-                    new_entries = st.session_state.sheets_handler.fetch_new_entries()
-                    added_count = 0
-                    skipped_count = 0
-                    
-                    for entry in new_entries:
-                        # Skip entries before start date
-                        if start_date_str:
-                            try:
-                                entry_date = pd.to_datetime(entry['timestamp'], dayfirst=True).date()
-                                filter_date = datetime.fromisoformat(start_date_str).date()
-                                if entry_date < filter_date:
-                                    skipped_count += 1
-                                    continue
-                            except:
-                                pass  # If parsing fails, include the entry
-                        
-                        if st.session_state.db.add_entry(entry['timestamp'], entry['text']):
-                            added_count += 1
-                    
-                    config['last_sync'] = datetime.now(pytz.timezone('Asia/Jerusalem')).strftime("%Y-%m-%d %H:%M:%S")
-                    with open(config_file, 'w', encoding='utf-8') as f:
-                        json.dump(config, f, indent=2, ensure_ascii=False)
-                    
-                    msg = f"✅ Synced successfully! Added {added_count} new entries."
-                    if skipped_count > 0:
-                        msg += f" Skipped {skipped_count} entries before {start_date_str}."
-                    st.success(msg)
-                    
-                    # Check if we should send notification
-                    if config.get('notifications_enabled', False):
-                        pending_count = st.session_state.db.get_statistics()['pending']
-                        threshold = config.get('pending_threshold', 20)
-                        
-                        if pending_count > threshold:
-                            notif = NotificationHandler()
-                            
-                            # Check for empty windows
-                            next_empty = check_for_empty_windows(st.session_state.scheduler)
-                            notif.send_pending_threshold_alert(pending_count, next_empty)
-                            st.info(f"📧 Notification sent - {pending_count} pending entries exceed threshold of {threshold}")
-                except Exception as e:
-                    st.error(f"Sync failed: {str(e)}")
+                    st.warning("Please enter an email address")
+        
+        # Display existing emails with delete option
+        if existing_emails:
+            st.write(f"**Configured emails ({len(existing_emails)}):**")
+            for idx, email in enumerate(existing_emails):
+                col1, col2 = st.columns([5, 1])
+                with col1:
+                    st.text(email)
+                with col2:
+                    if st.button("🗑️", key=f"delete_email_{idx}"):
+                        existing_emails.remove(email)
+                        config['notification_emails'] = existing_emails
+                        with open(config_file, 'w', encoding='utf-8') as f:
+                            json.dump(config, f, indent=2, ensure_ascii=False)
+                        st.success(f"Removed {email}")
+                        st.rerun()
         else:
-            st.warning("Please configure Google Sheets settings first")
+            st.info("No email addresses configured yet")
+        
+        # Test Notification Button
+        st.divider()
+        if st.button("📧 Send Test Notification", key="test_notif"):
+            if not notifications_enabled:
+                st.warning("Notifications are disabled. Enable them first!")
+            elif not gmail_email or not gmail_app_password:
+                st.warning("Gmail credentials not configured!")
+            elif not existing_emails:
+                st.warning("No email addresses configured!")
+            else:
+                try:
+                    # Temporarily save config for test
+                    test_config = config.copy()
+                    test_config['notifications_enabled'] = notifications_enabled
+                    test_config['gmail_email'] = gmail_email
+                    test_config['gmail_app_password'] = gmail_app_password
+                    test_config['notification_emails'] = existing_emails
+                    test_config['pending_threshold'] = pending_threshold
+                    test_config['app_url'] = app_url
+                    
+                    with open(config_file, 'w', encoding='utf-8') as f:
+                        json.dump(test_config, f, indent=2, ensure_ascii=False)
+                    
+                    # Send test notification
+                    notif = NotificationHandler()
+                    if notif.send_test_notification():
+                        st.success("✅ Test notification sent successfully! Check your email.")
+                    else:
+                        st.error("❌ Failed to send test notification. Check your Gmail credentials.")
+                except Exception as e:
+                    st.error(f"Error sending test notification: {str(e)}")
     
-    # Save configuration
+    # === Database Management ===
+    with st.expander("🗑️ Database Management", expanded=False):
+        st.warning("⚠️ These actions cannot be undone!")
+        
+        col1, col2 = st.columns(2)
+
+        with col1:
+            if st.button("🗑️ Delete All Pending Entries", type="secondary", key="del_pending"):
+                conn = st.session_state.db.get_connection()
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM entries WHERE status = 'pending'")
+                cursor.execute("DELETE FROM processed_timestamps")
+                conn.commit()
+                conn.close()
+                st.success("✅ All pending entries deleted!")
+                st.rerun()
+
+        with col2:
+            if st.button("⚠️ Clear Entire Database", type="secondary", key="clear_db"):
+                if st.checkbox("I'm sure I want to delete everything", key="confirm_clear"):
+                    conn = st.session_state.db.get_connection()
+                    cursor = conn.cursor()
+                    cursor.execute("DELETE FROM entries")
+                    cursor.execute("DELETE FROM scheduled_posts")
+                    cursor.execute("DELETE FROM processed_timestamps")
+                    conn.commit()
+                    conn.close()
+                    st.success("✅ Database cleared!")
+                    st.rerun()
+    
+    # Save configuration button at the bottom
     st.divider()
-    if st.button("💾 Save Configuration", type="primary"):
+    if st.button("💾 Save All Configuration", type="primary", use_container_width=True):
         config = {
             'google_sheet_id': sheet_id,
             'google_credentials_file': credentials_file,
@@ -533,6 +568,8 @@ def show_settings_page():
             'facebook_access_token': fb_token,
             'starting_number': starting_number,
             'posting_windows': new_windows,
+            'skip_shabbat': skip_shabbat,
+            'skip_jewish_holidays': skip_jewish_holidays,
             'notifications_enabled': notifications_enabled,
             'gmail_email': gmail_email,
             'gmail_app_password': gmail_app_password,
