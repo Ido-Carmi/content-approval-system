@@ -235,7 +235,7 @@ class Scheduler:
     
     def unschedule_post(self, entry_id: int) -> bool:
         """
-        Remove post from Facebook scheduler and return to pending
+        Remove post from Facebook scheduler, return to pending, and renumber all following posts
         
         Args:
             entry_id: Entry ID
@@ -250,12 +250,39 @@ class Scheduler:
         if not entry or not entry['facebook_post_id']:
             return False
         
+        unscheduled_number = entry.get('post_number')
+        
         try:
             # Delete from Facebook
             self.fb.delete_scheduled_post(entry['facebook_post_id'])
             
-            # Update database - return to pending
+            # Update database - return to pending and renumber
             self.db.unschedule_entry(entry_id)
+            
+            # Renumber all posts after this one on Facebook
+            if unscheduled_number:
+                posts_to_update = self.db.get_posts_needing_renumber(unscheduled_number)
+                
+                for post in posts_to_update:
+                    # Get scheduled time
+                    scheduled_time = datetime.fromisoformat(post['scheduled_time'])
+                    
+                    # Create new text with updated number
+                    new_text = f"#{post['post_number']}\n\n{post['text']}"
+                    
+                    # Update on Facebook
+                    result = self.fb.update_scheduled_post(
+                        post['facebook_post_id'],
+                        new_text=new_text,
+                        new_time=scheduled_time
+                    )
+                    
+                    # Update database with new Facebook post ID
+                    self.db.schedule_to_facebook(
+                        post['id'],
+                        result['id'],
+                        result['scheduled_time']
+                    )
             
             return True
         except Exception as e:

@@ -366,10 +366,19 @@ def show_review_page():
                 
                 with btn_col1:
                     if st.button("אשר", key=f"approve_{entry['id']}", type="primary", use_container_width=True):
-                        post_number = st.session_state.db.get_next_post_number()
-                        formatted_text = f"#{post_number} {edited_text}"  # Single space instead of \n\n
-                        
+                        # Approve and assign post number (stored separately in database)
                         st.session_state.db.approve_entry(entry['id'], edited_text, "admin")
+                        
+                        # Get the assigned post number
+                        conn = st.session_state.db.get_connection()
+                        cursor = conn.cursor()
+                        cursor.execute('SELECT post_number FROM entries WHERE id = ?', (entry['id'],))
+                        result = cursor.fetchone()
+                        post_number = result['post_number'] if result else 1
+                        conn.close()
+                        
+                        # Format text with number for Facebook only
+                        formatted_text = f"#{post_number}\n\n{edited_text}"
                         
                         try:
                             result = st.session_state.scheduler.schedule_post_to_facebook(
@@ -507,17 +516,16 @@ def show_scheduled_posts_page():
                         st.session_state[edit_key] = False
                     
                     if st.session_state[edit_key]:
-                        # Edit mode - extract post number and content separately
+                        # Edit mode - show content without number
+                        # Extract content without the #number line
                         message = post['message']
-                        # Check if message starts with #number
                         if message.startswith('#') and '\n\n' in message:
-                            # Extract post number (e.g., "#6")
-                            first_line = message.split('\n\n')[0]
                             content_only = '\n\n'.join(message.split('\n\n')[1:])
-                            post_number = first_line
                         else:
-                            post_number = ""
                             content_only = message
+                        
+                        # Get post number from database entry
+                        db_post_number = entry.get('post_number') if entry else None
                         
                         new_content = st.text_area(
                             "ערוך תוכן:",
@@ -530,12 +538,12 @@ def show_scheduled_posts_page():
                         
                         with col1:
                             if st.button("💾 שמור", key=f"save_{post['id']}", type="primary", use_container_width=True):
-                                if entry_id:
-                                    # Reconstruct full text with post number
-                                    if post_number:
-                                        full_text = f"{post_number}\n\n{new_content}"
-                                    else:
-                                        full_text = new_content
+                                if entry_id and db_post_number:
+                                    # Reconstruct full text with post number from database
+                                    full_text = f"#{db_post_number}\n\n{new_content}"
+                                    
+                                    # Also update the text in database (without number)
+                                    st.session_state.db.update_scheduled_post_text(entry_id, new_content)
                                     
                                     with st.spinner("מעדכן ב-Facebook..."):
                                         if st.session_state.scheduler.update_scheduled_post_content(entry_id, full_text):

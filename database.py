@@ -30,6 +30,7 @@ class Database:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp TEXT NOT NULL,
                 text TEXT NOT NULL,
+                post_number INTEGER,
                 status TEXT DEFAULT 'pending',
                 approved_by TEXT,
                 approved_at TEXT,
@@ -115,18 +116,22 @@ class Database:
         return [dict(row) for row in rows]
     
     def approve_entry(self, entry_id: int, edited_text: str, approved_by: str):
-        """Mark entry as approved"""
+        """Mark entry as approved and assign post number"""
         conn = self.get_connection()
         cursor = conn.cursor()
+        
+        # Get next post number
+        post_number = self.get_next_post_number()
         
         cursor.execute('''
             UPDATE entries
             SET status = 'approved',
                 text = ?,
+                post_number = ?,
                 approved_by = ?,
                 approved_at = ?
             WHERE id = ?
-        ''', (edited_text, approved_by, datetime.now().isoformat(), entry_id))
+        ''', (edited_text, post_number, approved_by, datetime.now().isoformat(), entry_id))
         
         conn.commit()
         conn.close()
@@ -156,7 +161,7 @@ class Database:
     
     def unschedule_entry(self, entry_id: int):
         """
-        Return a scheduled entry back to pending
+        Return a scheduled entry back to pending and renumber all following posts
         
         Args:
             entry_id: Entry ID to unschedule
@@ -164,16 +169,53 @@ class Database:
         conn = self.get_connection()
         cursor = conn.cursor()
         
-        cursor.execute('''
-            UPDATE entries
-            SET status = 'pending',
-                facebook_post_id = NULL,
-                scheduled_time = NULL
-            WHERE id = ?
-        ''', (entry_id,))
+        # Get the post number of the entry being unscheduled
+        cursor.execute('SELECT post_number FROM entries WHERE id = ?', (entry_id,))
+        result = cursor.fetchone()
+        
+        if result:
+            unscheduled_number = result['post_number']
+            
+            # Set entry back to pending
+            cursor.execute('''
+                UPDATE entries
+                SET status = 'pending',
+                    facebook_post_id = NULL,
+                    scheduled_time = NULL,
+                    post_number = NULL
+                WHERE id = ?
+            ''', (entry_id,))
+            
+            # Decrement post numbers for all posts after this one
+            if unscheduled_number:
+                cursor.execute('''
+                    UPDATE entries
+                    SET post_number = post_number - 1
+                    WHERE post_number > ? AND post_number IS NOT NULL
+                ''', (unscheduled_number,))
+                
+                # Decrement the counter
+                cursor.execute('UPDATE post_numbers SET current_number = current_number - 1 WHERE id = 1')
         
         conn.commit()
         conn.close()
+    
+    def get_posts_needing_renumber(self, from_number: int) -> List[Dict]:
+        """Get all scheduled posts with post_number >= from_number that need updating on Facebook"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT id, text, post_number, facebook_post_id, scheduled_time
+            FROM entries
+            WHERE status = 'scheduled' AND post_number >= ?
+            ORDER BY post_number ASC
+        ''', (from_number,))
+        
+        rows = cursor.fetchall()
+        conn.close()
+        
+        return [dict(row) for row in rows]
     
     def get_scheduled_entries(self) -> List[Dict]:
         """Get all scheduled entries with Facebook post IDs"""
@@ -181,7 +223,7 @@ class Database:
         cursor = conn.cursor()
         
         cursor.execute('''
-            SELECT id, text, facebook_post_id, scheduled_time
+            SELECT id, text, post_number, facebook_post_id, scheduled_time
             FROM entries
             WHERE status = 'scheduled'
             ORDER BY scheduled_time ASC
