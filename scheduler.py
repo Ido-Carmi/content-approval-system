@@ -311,6 +311,90 @@ class Scheduler:
         
         return rescheduled_count
     
+    def update_scheduled_post_content(self, entry_id: int, new_text: str) -> bool:
+        """
+        Update the content of a scheduled post on Facebook
+        
+        Args:
+            entry_id: Entry ID
+            new_text: New post content
+            
+        Returns:
+            True if successful
+        """
+        entries = self.db.get_scheduled_entries()
+        entry = next((e for e in entries if e['id'] == entry_id), None)
+        
+        if not entry or not entry['facebook_post_id']:
+            return False
+        
+        try:
+            # Get current scheduled time
+            scheduled_time = datetime.fromisoformat(entry['scheduled_time'])
+            
+            # Update on Facebook (delete and recreate with new text)
+            result = self.fb.update_scheduled_post(
+                entry['facebook_post_id'],
+                new_text=new_text,
+                new_time=scheduled_time
+            )
+            
+            # Update in database
+            self.db.update_scheduled_post_text(entry_id, new_text)
+            self.db.schedule_to_facebook(
+                entry_id,
+                result['id'],
+                result['scheduled_time']
+            )
+            
+            return True
+        except Exception as e:
+            print(f"Failed to update post: {str(e)}")
+            return False
+    
+    def swap_post_times(self, entry_id1: int, entry_id2: int) -> bool:
+        """
+        Swap the scheduled times of two posts
+        
+        Args:
+            entry_id1: First entry ID
+            entry_id2: Second entry ID
+            
+        Returns:
+            True if successful
+        """
+        # Get swap info from database
+        swap_info = self.db.swap_scheduled_times(entry_id1, entry_id2)
+        
+        if not swap_info:
+            return False
+        
+        try:
+            # Update on Facebook
+            time1 = datetime.fromisoformat(swap_info['time1'])
+            time2 = datetime.fromisoformat(swap_info['time2'])
+            
+            # Update post 1 to time 2
+            result1 = self.fb.update_scheduled_post(
+                swap_info['post1_fb_id'],
+                new_time=time2
+            )
+            
+            # Update post 2 to time 1
+            result2 = self.fb.update_scheduled_post(
+                swap_info['post2_fb_id'],
+                new_time=time1
+            )
+            
+            # Update database with new Facebook post IDs
+            self.db.schedule_to_facebook(entry_id1, result1['id'], result1['scheduled_time'])
+            self.db.schedule_to_facebook(entry_id2, result2['id'], result2['scheduled_time'])
+            
+            return True
+        except Exception as e:
+            print(f"Failed to swap times: {str(e)}")
+            return False
+    
     def sync_with_facebook(self):
         """
         Sync local database with Facebook's scheduler

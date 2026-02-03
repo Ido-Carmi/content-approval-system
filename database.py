@@ -207,19 +207,127 @@ class Database:
         conn.close()
     
     def deny_entry(self, entry_id: int, denied_by: str):
-        """Mark entry as denied"""
+        """Mark entry as denied with timestamp"""
         conn = self.get_connection()
         cursor = conn.cursor()
         
         cursor.execute('''
             UPDATE entries
             SET status = 'denied',
-                approved_by = ?
+                approved_by = ?,
+                approved_at = ?
             WHERE id = ?
-        ''', (denied_by, entry_id))
+        ''', (denied_by, datetime.now().isoformat(), entry_id))
         
         conn.commit()
         conn.close()
+    
+    def get_denied_entries(self) -> List[Dict]:
+        """Get denied entries from last 24 hours"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        # Get entries denied in last 24 hours
+        cutoff_time = (datetime.now() - timedelta(hours=24)).isoformat()
+        
+        cursor.execute('''
+            SELECT id, timestamp, text, approved_at as denied_at
+            FROM entries
+            WHERE status = 'denied' AND approved_at > ?
+            ORDER BY approved_at DESC
+        ''', (cutoff_time,))
+        
+        rows = cursor.fetchall()
+        conn.close()
+        
+        return [dict(row) for row in rows]
+    
+    def return_denied_to_pending(self, entry_id: int):
+        """Return a denied entry back to pending"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            UPDATE entries
+            SET status = 'pending',
+                approved_by = NULL,
+                approved_at = NULL
+            WHERE id = ?
+        ''', (entry_id,))
+        
+        conn.commit()
+        conn.close()
+    
+    def cleanup_old_denied(self):
+        """Delete denied entries older than 24 hours"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cutoff_time = (datetime.now() - timedelta(hours=24)).isoformat()
+        
+        cursor.execute('''
+            DELETE FROM entries
+            WHERE status = 'denied' AND approved_at < ?
+        ''', (cutoff_time,))
+        
+        conn.commit()
+        conn.close()
+    
+    def update_scheduled_post_text(self, entry_id: int, new_text: str):
+        """Update the text of a scheduled post"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            UPDATE entries
+            SET text = ?
+            WHERE id = ?
+        ''', (new_text, entry_id))
+        
+        conn.commit()
+        conn.close()
+    
+    def swap_scheduled_times(self, entry_id1: int, entry_id2: int):
+        """Swap the scheduled times of two posts"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        # Get both entries' scheduled times
+        cursor.execute('''
+            SELECT id, scheduled_time, facebook_post_id
+            FROM entries
+            WHERE id IN (?, ?)
+        ''', (entry_id1, entry_id2))
+        
+        rows = cursor.fetchall()
+        if len(rows) != 2:
+            conn.close()
+            return False
+        
+        entries = [dict(row) for row in rows]
+        
+        # Swap the scheduled times
+        cursor.execute('''
+            UPDATE entries
+            SET scheduled_time = ?
+            WHERE id = ?
+        ''', (entries[1]['scheduled_time'], entries[0]['id']))
+        
+        cursor.execute('''
+            UPDATE entries
+            SET scheduled_time = ?
+            WHERE id = ?
+        ''', (entries[0]['scheduled_time'], entries[1]['id']))
+        
+        conn.commit()
+        conn.close()
+        
+        return {
+            'post1_fb_id': entries[0]['facebook_post_id'],
+            'post2_fb_id': entries[1]['facebook_post_id'],
+            'time1': entries[0]['scheduled_time'],
+            'time2': entries[1]['scheduled_time']
+        }
     
     def get_next_post_number(self) -> int:
         """Get and increment the post number"""

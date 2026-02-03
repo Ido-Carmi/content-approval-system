@@ -154,6 +154,7 @@ def main():
     pages = [
         ("review", "📥 בדיקת ערכים"),
         ("scheduled", "📅 פוסטים מתוזמנים"),
+        ("denied", "🗑️ ערכים שנדחו"),
         ("stats", "📊 סטטיסטיקה"),
         ("settings", "⚙️ הגדרות")
     ]
@@ -173,6 +174,7 @@ def main():
     page_map = {
         "review": "📥 בדיקת ערכים",
         "scheduled": "📅 פוסטים מתוזמנים",
+        "denied": "🗑️ ערכים שנדחו",
         "stats": "📊 סטטיסטיקה",
         "settings": "⚙️ הגדרות"
     }
@@ -187,9 +189,407 @@ def main():
         show_review_page()
     elif page == "📅 פוסטים מתוזמנים":
         show_scheduled_posts_page()
+    elif page == "🗑️ ערכים שנדחו":
+        show_denied_page()
     elif page == "📊 סטטיסטיקה":
         show_statistics_page()
 
+def show_review_page():
+    st.header("📥 בדיקת ערכים חדשים")
+    
+    # Cleanup old denied entries
+    st.session_state.db.cleanup_old_denied()
+    
+    # Add sync button at the top
+    col1, col2, col3 = st.columns([2, 1, 1])
+    with col3:
+        if st.button("🔄 סנכרן עכשיו"):
+            if st.session_state.sheets_handler:
+                with st.spinner("מסנכרן..."):
+                    try:
+                        config_file = Path("config.json")
+                        config = {}
+                        if config_file.exists():
+                            with open(config_file, 'r', encoding='utf-8') as f:
+                                config = json.load(f)
+                        
+                        start_date_str = config.get('sync_start_date')
+                        new_entries = st.session_state.sheets_handler.fetch_new_entries()
+                        added_count = 0
+                        
+                        for entry in new_entries:
+                            if start_date_str:
+                                try:
+                                    entry_date = pd.to_datetime(entry['timestamp'], dayfirst=True).date()
+                                    filter_date = datetime.fromisoformat(start_date_str).date()
+                                    if entry_date < filter_date:
+                                        continue
+                                except:
+                                    pass
+                            
+                            if st.session_state.db.add_entry(entry['timestamp'], entry['text']):
+                                added_count += 1
+                        
+                        config['last_sync'] = datetime.now(pytz.timezone('Asia/Jerusalem')).strftime("%Y-%m-%d %H:%M:%S")
+                        with open(config_file, 'w', encoding='utf-8') as f:
+                            json.dump(config, f, indent=2, ensure_ascii=False)
+                        
+                        st.success(f"✅ נוספו {added_count} ערכים חדשים!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"הסנכרון נכשל: {str(e)}")
+            else:
+                st.warning("נא להגדיר תחילה את הגדרות Google Sheets")
+    
+    st.markdown("""
+    <style>
+        .content-box {
+            background-color: #f0f2f6;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+        .entry-card {
+            margin-bottom: 30px;
+        }
+        /* Green approve button */
+        button[kind="primary"] p {
+            color: white !important;
+        }
+        button[kind="primary"] {
+            background-color: #28a745 !important;
+            border-color: #28a745 !important;
+        }
+        button[kind="primary"]:hover {
+            background-color: #218838 !important;
+            border-color: #1e7e34 !important;
+        }
+        /* Red deny button */
+        button[kind="secondary"] p {
+            color: white !important;
+        }
+        button[kind="secondary"] {
+            background-color: #dc3545 !important;
+            border-color: #dc3545 !important;
+        }
+        button[kind="secondary"]:hover {
+            background-color: #c82333 !important;
+            border-color: #bd2130 !important;
+        }
+        /* Responsive grid */
+        @media (min-width: 1400px) {
+            /* 4 columns on very wide screens */
+            .stColumn {
+                width: 25% !important;
+            }
+        }
+        @media (min-width: 1024px) and (max-width: 1399px) {
+            /* 3 columns on wide screens */
+            .stColumn {
+                width: 33.33% !important;
+            }
+        }
+        @media (min-width: 768px) and (max-width: 1023px) {
+            /* 2 columns on medium screens */
+            .stColumn {
+                width: 50% !important;
+            }
+        }
+        @media (max-width: 767px) {
+            /* 1 column on mobile */
+            .stColumn {
+                width: 100% !important;
+            }
+        }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    pending_entries = st.session_state.db.get_pending_entries()
+    
+    if not pending_entries:
+        st.info("אין ערכים ממתינים לבדיקה")
+        return
+    
+    st.success(f"**{len(pending_entries)} ערכים** ממתינים לבדיקה")
+    
+    # Create 4 columns for responsive layout
+    num_columns = 4
+    cols = st.columns(num_columns)
+    
+    for idx, entry in enumerate(pending_entries):
+        col_idx = idx % num_columns
+        
+        with cols[col_idx]:
+            with st.container():
+                st.markdown('<div class="entry-card">', unsafe_allow_html=True)
+                
+                st.markdown(f"### 📅 {entry['timestamp']}")
+                
+                st.markdown('<div class="content-box">', unsafe_allow_html=True)
+                st.markdown(f"**תוכן:**")
+                
+                edited_text = st.text_area(
+                    "ערוך כאן:",
+                    value=entry['text'],
+                    height=150,
+                    key=f"text_{entry['id']}",
+                    label_visibility="collapsed"
+                )
+                st.markdown('</div>', unsafe_allow_html=True)
+                
+                # Buttons side by side
+                btn_col1, btn_col2 = st.columns(2)
+                
+                with btn_col1:
+                    if st.button("אשר", key=f"approve_{entry['id']}", type="primary", use_container_width=True):
+                        post_number = st.session_state.db.get_next_post_number()
+                        formatted_text = f"#{post_number}\n\n{edited_text}"
+                        
+                        st.session_state.db.approve_entry(entry['id'], edited_text, "admin")
+                        
+                        try:
+                            result = st.session_state.scheduler.schedule_post_to_facebook(
+                                entry['id'],
+                                formatted_text
+                            )
+                            st.success(f"✅ תוזמן ל-{result['scheduled_time']}")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"נכשל בתזמון: {str(e)}")
+                
+                with btn_col2:
+                    if st.button("דחה", key=f"deny_{entry['id']}", type="secondary", use_container_width=True):
+                        st.session_state.db.deny_entry(entry['id'], "admin")
+                        st.success("הערך נדחה (יישמר ל-24 שעות)")
+                        st.rerun()
+                
+                st.markdown('</div>', unsafe_allow_html=True)
+
+def show_denied_page():
+    st.header("🗑️ ערכים שנדחו")
+    
+    st.info("ערכים נדחים נשמרים ל-24 שעות. לאחר מכן הם נמחקים אוטומטית.")
+    
+    # Cleanup old entries
+    st.session_state.db.cleanup_old_denied()
+    
+    denied_entries = st.session_state.db.get_denied_entries()
+    
+    if not denied_entries:
+        st.info("אין ערכים נדחים")
+        return
+    
+    st.warning(f"**{len(denied_entries)} ערכים** נדחו ב-24 השעות האחרונות")
+    
+    for entry in denied_entries:
+        with st.container():
+            denied_at = datetime.fromisoformat(entry['denied_at'])
+            hours_ago = (datetime.now() - denied_at).total_seconds() / 3600
+            hours_remaining = max(0, 24 - hours_ago)
+            
+            st.markdown(f"### 📅 {entry['timestamp']}")
+            st.caption(f"נדחה לפני {hours_ago:.1f} שעות • יימחק בעוד {hours_remaining:.1f} שעות")
+            
+            st.markdown('<div class="content-box">', unsafe_allow_html=True)
+            st.text_area(
+                "תוכן:",
+                value=entry['text'],
+                height=150,
+                key=f"denied_text_{entry['id']}",
+                disabled=True
+            )
+            st.markdown('</div>', unsafe_allow_html=True)
+            
+            if st.button("↩️ החזר להמתנה", key=f"restore_{entry['id']}", use_container_width=True):
+                st.session_state.db.return_denied_to_pending(entry['id'])
+                st.success("הערך הוחזר להמתנה!")
+                st.rerun()
+            
+            st.divider()
+
+def show_scheduled_posts_page():
+    st.header("📅 פוסטים מתוזמנים")
+    
+    st.markdown("""
+    הפוסטים מתוזמנים ישירות ל-Facebook ויפורסמו אוטומטית.
+    תוכל לצפות בהם גם ב-[Facebook Creator Studio](https://business.facebook.com/creatorstudio)!
+    """)
+    
+    if not st.session_state.facebook_handler or not st.session_state.scheduler:
+        st.warning("נא להגדיר תחילה את הגדרות Facebook")
+        return
+    
+    col1, col2 = st.columns([3, 1])
+    with col2:
+        if st.button("🔄 סנכרן עם Facebook"):
+            with st.spinner("מסנכרן..."):
+                st.session_state.scheduler.sync_with_facebook()
+                st.success("סונכרן!")
+                st.rerun()
+    
+    try:
+        fb_posts = st.session_state.facebook_handler.get_scheduled_posts()
+        db_entries = st.session_state.db.get_scheduled_entries()
+        
+        entry_map = {entry['facebook_post_id']: entry for entry in db_entries}
+        
+        if not fb_posts:
+            st.info("אין פוסטים מתוזמנים כרגע ב-Facebook")
+            return
+        
+        st.success(f"**{len(fb_posts)} פוסטים** מתוזמנים ב-Facebook")
+        
+        # Group by date
+        posts_by_date = {}
+        for post in fb_posts:
+            scheduled_dt = datetime.fromisoformat(post['scheduled_time'])
+            date_key = scheduled_dt.strftime('%A, %d/%m/%Y')
+            
+            if date_key not in posts_by_date:
+                posts_by_date[date_key] = []
+            posts_by_date[date_key].append(post)
+        
+        # Display by date
+        for date_str, posts in sorted(posts_by_date.items()):
+            st.subheader(date_str)
+            
+            # Sort posts by time
+            sorted_posts = sorted(posts, key=lambda x: x['scheduled_time'])
+            
+            for idx, post in enumerate(sorted_posts):
+                scheduled_dt = datetime.fromisoformat(post['scheduled_time'])
+                time_str = scheduled_dt.strftime('%H:%M')
+                
+                entry = entry_map.get(post['id'])
+                entry_id = entry['id'] if entry else None
+                
+                with st.container():
+                    st.markdown(f"### ⏰ {time_str}")
+                    
+                    # Check if in edit mode
+                    edit_key = f"edit_mode_{post['id']}"
+                    if edit_key not in st.session_state:
+                        st.session_state[edit_key] = False
+                    
+                    if st.session_state[edit_key]:
+                        # Edit mode
+                        new_text = st.text_area(
+                            "ערוך תוכן:",
+                            value=post['message'],
+                            height=150,
+                            key=f"edit_text_{post['id']}"
+                        )
+                        
+                        col1, col2, col3 = st.columns([2, 2, 1])
+                        
+                        with col1:
+                            if st.button("💾 שמור", key=f"save_{post['id']}", type="primary"):
+                                if entry_id:
+                                    with st.spinner("מעדכן ב-Facebook..."):
+                                        if st.session_state.scheduler.update_scheduled_post_content(entry_id, new_text):
+                                            st.success("✅ הפוסט עודכן!")
+                                            st.session_state[edit_key] = False
+                                            st.rerun()
+                                        else:
+                                            st.error("העדכון נכשל")
+                        
+                        with col2:
+                            if st.button("✖️ ביטול", key=f"cancel_{post['id']}"):
+                                st.session_state[edit_key] = False
+                                st.rerun()
+                    else:
+                        # View mode
+                        st.text_area(
+                            "תוכן הפוסט:",
+                            value=post['message'],
+                            height=100,
+                            key=f"post_{post['id']}",
+                            disabled=True
+                        )
+                        
+                        col1, col2, col3, col4 = st.columns([2, 2, 1, 1])
+                        
+                        with col1:
+                            if st.button("✏️ ערוך", key=f"edit_{post['id']}"):
+                                st.session_state[edit_key] = True
+                                st.rerun()
+                        
+                        with col2:
+                            if st.button("🔙 החזר להמתנה", key=f"unschedule_{post['id']}"):
+                                if entry_id:
+                                    with st.spinner("מבטל תזמון..."):
+                                        if st.session_state.scheduler.unschedule_post(entry_id):
+                                            st.success("✅ הוחזר להמתנה!")
+                                            st.rerun()
+                                        else:
+                                            st.error("ביטול התזמון נכשל")
+                        
+                        with col3:
+                            # Move up button (disabled for first post)
+                            if idx > 0:
+                                prev_post = sorted_posts[idx - 1]
+                                prev_entry = entry_map.get(prev_post['id'])
+                                if st.button("⬆️", key=f"up_{post['id']}"):
+                                    if entry_id and prev_entry:
+                                        with st.spinner("מחליף זמנים..."):
+                                            if st.session_state.scheduler.swap_post_times(entry_id, prev_entry['id']):
+                                                st.success("✅ הזמנים הוחלפו!")
+                                                st.rerun()
+                                            else:
+                                                st.error("ההחלפה נכשלה")
+                        
+                        with col4:
+                            # Move down button (disabled for last post)
+                            if idx < len(sorted_posts) - 1:
+                                next_post = sorted_posts[idx + 1]
+                                next_entry = entry_map.get(next_post['id'])
+                                if st.button("⬇️", key=f"down_{post['id']}"):
+                                    if entry_id and next_entry:
+                                        with st.spinner("מחליף זמנים..."):
+                                            if st.session_state.scheduler.swap_post_times(entry_id, next_entry['id']):
+                                                st.success("✅ הזמנים הוחלפו!")
+                                                st.rerun()
+                                            else:
+                                                st.error("ההחלפה נכשלה")
+                    
+                    st.divider()
+        
+    except Exception as e:
+        st.error(f"שגיאה בטעינת הפוסטים המתוזמנים: {str(e)}")
+        st.info("וודא שלטוקן של Facebook יש הרשאה 'pages_manage_posts'")
+
+def show_statistics_page():
+    st.header("📊 סטטיסטיקה")
+    
+    stats = st.session_state.db.get_statistics()
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("ממתינים", stats['pending'])
+    
+    with col2:
+        st.metric("מתוזמנים", stats['scheduled'])
+    
+    with col3:
+        st.metric("פורסמו", stats['published'])
+    
+    with col4:
+        st.metric("נדחו", stats['denied'])
+    
+    st.divider()
+    
+    st.subheader("פעילות אחרונה")
+    recent = st.session_state.db.get_recent_activity(20)
+    
+    if recent:
+        df = pd.DataFrame(recent)
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    else:
+        st.info("אין פעילות עדיין")
+
+if __name__ == "__main__":
+    main()
 def show_settings_page():
     st.header("⚙️ הגדרות")
     
@@ -558,244 +958,3 @@ def show_settings_page():
         st.success("✅ ההגדרות נשמרו בהצלחה!")
         st.info("נא לרענן את הדף כדי להחיל את השינויים")
 
-def show_review_page():
-    st.header("📥 בדיקת ערכים חדשים")
-    
-    # Add sync button at the top
-    col1, col2, col3 = st.columns([2, 1, 1])
-    with col3:
-        if st.button("🔄 סנכרן עכשיו"):
-            if st.session_state.sheets_handler:
-                with st.spinner("מסנכרן..."):
-                    try:
-                        config_file = Path("config.json")
-                        config = {}
-                        if config_file.exists():
-                            with open(config_file, 'r', encoding='utf-8') as f:
-                                config = json.load(f)
-                        
-                        start_date_str = config.get('sync_start_date')
-                        new_entries = st.session_state.sheets_handler.fetch_new_entries()
-                        added_count = 0
-                        
-                        for entry in new_entries:
-                            if start_date_str:
-                                try:
-                                    entry_date = pd.to_datetime(entry['timestamp'], dayfirst=True).date()
-                                    filter_date = datetime.fromisoformat(start_date_str).date()
-                                    if entry_date < filter_date:
-                                        continue
-                                except:
-                                    pass
-                            
-                            if st.session_state.db.add_entry(entry['timestamp'], entry['text']):
-                                added_count += 1
-                        
-                        config['last_sync'] = datetime.now(pytz.timezone('Asia/Jerusalem')).strftime("%Y-%m-%d %H:%M:%S")
-                        with open(config_file, 'w', encoding='utf-8') as f:
-                            json.dump(config, f, indent=2, ensure_ascii=False)
-                        
-                        st.success(f"✅ נוספו {added_count} ערכים חדשים!")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"הסנכרון נכשל: {str(e)}")
-            else:
-                st.warning("נא להגדיר תחילה את הגדרות Google Sheets")
-    
-    st.markdown("""
-    <style>
-        .content-box {
-            background-color: #f0f2f6;
-            padding: 20px;
-            border-radius: 10px;
-            margin-bottom: 20px;
-            max-width: 600px;
-        }
-        .entry-card {
-            margin-bottom: 30px;
-        }
-    </style>
-    """, unsafe_allow_html=True)
-    
-    pending_entries = st.session_state.db.get_pending_entries()
-    
-    if not pending_entries:
-        st.info("אין ערכים ממתינים לבדיקה")
-        return
-    
-    st.success(f"**{len(pending_entries)} ערכים** ממתינים לבדיקה")
-    
-    # Create multi-column layout (2 columns on desktop)
-    num_columns = 2
-    cols = st.columns(num_columns)
-    
-    for idx, entry in enumerate(pending_entries):
-        col_idx = idx % num_columns
-        
-        with cols[col_idx]:
-            with st.container():
-                st.markdown('<div class="entry-card">', unsafe_allow_html=True)
-                
-                st.markdown(f"### 📅 {entry['timestamp']}")
-                
-                st.markdown('<div class="content-box">', unsafe_allow_html=True)
-                st.markdown(f"**תוכן:**")
-                
-                edited_text = st.text_area(
-                    "ערוך כאן:",
-                    value=entry['text'],
-                    height=150,
-                    key=f"text_{entry['id']}",
-                    label_visibility="collapsed"
-                )
-                st.markdown('</div>', unsafe_allow_html=True)
-                
-                btn_col1, btn_col2 = st.columns(2)
-                
-                with btn_col1:
-                    if st.button(f"✅ אשר", key=f"approve_{entry['id']}", use_container_width=True):
-                        post_number = st.session_state.db.get_next_post_number()
-                        formatted_text = f"#{post_number}\n\n{edited_text}"
-                        
-                        st.session_state.db.approve_entry(entry['id'], edited_text, "admin")
-                        
-                        try:
-                            result = st.session_state.scheduler.schedule_post_to_facebook(
-                                entry['id'],
-                                formatted_text
-                            )
-                            st.success(f"✅ תוזמן ל-Facebook ל-{result['scheduled_time']}")
-                            st.info(f"מזהה פוסט ב-Facebook: {result['facebook_post_id']}")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"נכשל בתזמון ל-Facebook: {str(e)}")
-                            st.info("הפוסט אושר אך לא תוזמן. בדוק את הרשאות הטוקן של Facebook.")
-                
-                with btn_col2:
-                    if st.button(f"❌ דחה", key=f"deny_{entry['id']}", use_container_width=True):
-                        st.session_state.db.deny_entry(entry['id'], "admin")
-                        st.success("הערך נדחה")
-                        st.rerun()
-                
-                st.markdown('</div>', unsafe_allow_html=True)
-                st.divider()
-
-def show_scheduled_posts_page():
-    st.header("📅 פוסטים מתוזמנים")
-    
-    st.markdown("""
-    הפוסטים מתוזמנים ישירות ל-Facebook ויפורסמו אוטומטית.
-    תוכל לצפות בהם גם ב-[Facebook Creator Studio](https://business.facebook.com/creatorstudio)!
-    """)
-    
-    if not st.session_state.facebook_handler or not st.session_state.scheduler:
-        st.warning("נא להגדיר תחילה את הגדרות Facebook")
-        return
-    
-    col1, col2 = st.columns([3, 1])
-    with col2:
-        if st.button("🔄 סנכרן עם Facebook"):
-            with st.spinner("מסנכרן..."):
-                st.session_state.scheduler.sync_with_facebook()
-                st.success("סונכרן!")
-                st.rerun()
-    
-    try:
-        fb_posts = st.session_state.facebook_handler.get_scheduled_posts()
-        
-        db_entries = st.session_state.db.get_scheduled_entries()
-        
-        entry_map = {entry['facebook_post_id']: entry for entry in db_entries}
-        
-        if not fb_posts:
-            st.info("אין פוסטים מתוזמנים כרגע ב-Facebook")
-            return
-        
-        st.success(f"**{len(fb_posts)} פוסטים** מתוזמנים ב-Facebook")
-        
-        posts_by_date = {}
-        for post in fb_posts:
-            scheduled_dt = datetime.fromisoformat(post['scheduled_time'])
-            date_key = scheduled_dt.strftime('%A, %d/%m/%Y')
-            
-            if date_key not in posts_by_date:
-                posts_by_date[date_key] = []
-            posts_by_date[date_key].append(post)
-        
-        for date_str, posts in sorted(posts_by_date.items()):
-            st.subheader(date_str)
-            
-            for post in sorted(posts, key=lambda x: x['scheduled_time']):
-                scheduled_dt = datetime.fromisoformat(post['scheduled_time'])
-                time_str = scheduled_dt.strftime('%H:%M')
-                
-                entry = entry_map.get(post['id'])
-                entry_id = entry['id'] if entry else None
-                
-                with st.container():
-                    st.markdown(f"### ⏰ {time_str}")
-                    
-                    st.text_area(
-                        "תוכן הפוסט:",
-                        value=post['message'],
-                        height=100,
-                        key=f"post_{post['id']}",
-                        disabled=True
-                    )
-                    
-                    col1, col2, col3 = st.columns([2, 2, 1])
-                    
-                    with col1:
-                        if st.button(f"🔙 החזר להמתנה", key=f"unschedule_{post['id']}"):
-                            if entry_id:
-                                with st.spinner("מבטל תזמון ב-Facebook..."):
-                                    if st.session_state.scheduler.unschedule_post(entry_id):
-                                        st.success("✅ הוחזר להמתנה! תוכל לערוך ולאשר אותו מחדש.")
-                                        st.rerun()
-                                    else:
-                                        st.error("ביטול התזמון נכשל")
-                            else:
-                                st.warning("הערך לא נמצא במסד הנתונים")
-                    
-                    with col2:
-                        if st.button(f"🔗 צפה ב-Facebook", key=f"fb_view_{post['id']}"):
-                            st.markdown(f"[פתח ב-Creator Studio](https://business.facebook.com/creatorstudio)")
-                    
-                    st.divider()
-        
-    except Exception as e:
-        st.error(f"שגיאה בטעינת הפוסטים המתוזמנים: {str(e)}")
-        st.info("וודא שלטוקן של Facebook יש הרשאה 'pages_manage_posts'")
-
-def show_statistics_page():
-    st.header("📊 סטטיסטיקה")
-    
-    stats = st.session_state.db.get_statistics()
-    
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric("ממתינים", stats['pending'])
-    
-    with col2:
-        st.metric("מתוזמנים", stats['scheduled'])
-    
-    with col3:
-        st.metric("פורסמו", stats['published'])
-    
-    with col4:
-        st.metric("נדחו", stats['denied'])
-    
-    st.divider()
-    
-    st.subheader("פעילות אחרונה")
-    recent = st.session_state.db.get_recent_activity(20)
-    
-    if recent:
-        df = pd.DataFrame(recent)
-        st.dataframe(df, use_container_width=True, hide_index=True)
-    else:
-        st.info("אין פעילות עדיין")
-
-if __name__ == "__main__":
-    main()
