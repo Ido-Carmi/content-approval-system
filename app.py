@@ -654,8 +654,6 @@ def show_statistics_page():
     else:
         st.info("אין פעילות עדיין")
 
-if __name__ == "__main__":
-    main()
 def show_settings_page():
     st.header("⚙️ הגדרות")
     
@@ -1024,3 +1022,7 @@ def show_settings_page():
         st.success("✅ ההגדרות נשמרו בהצלחה!")
         st.info("נא לרענן את הדף כדי להחיל את השינויים")
 
+
+
+if __name__ == "__main__":
+    main()
