@@ -39,6 +39,34 @@ if 'facebook_handler' not in st.session_state:
 if 'scheduler' not in st.session_state:
     st.session_state.scheduler = None
 
+def calculate_textarea_height(text: str) -> int:
+    """
+    Calculate optimal height for textarea based on text length
+    
+    Args:
+        text: The text content
+        
+    Returns:
+        Height in pixels
+    """
+    if not text:
+        return 100
+    
+    # Count lines
+    lines = text.count('\n') + 1
+    
+    # Estimate lines based on character count (assuming ~60 chars per line)
+    estimated_lines = len(text) / 60
+    
+    # Take the maximum of actual lines and estimated lines
+    total_lines = max(lines, estimated_lines)
+    
+    # Calculate height (approximately 20px per line, min 100px, max 400px)
+    height = int(total_lines * 20) + 40  # +40 for padding
+    
+    # Clamp between min and max
+    return max(100, min(400, height))
+
 def init_handlers():
     """Initialize handlers with credentials"""
     config_file = Path("config.json")
@@ -193,18 +221,6 @@ def main():
         show_denied_page()
     elif page == "📊 סטטיסטיקה":
         show_statistics_page()
-
-def calculate_textarea_height(text: str) -> int:
-    """Calculate appropriate height for text area based on content"""
-    lines = text.count('\n') + 1
-    # Count long lines that will wrap (assume 80 chars per line)
-    for line in text.split('\n'):
-        if len(line) > 80:
-            lines += len(line) // 80
-    
-    # Min 100px, max 400px, ~20px per line
-    height = max(100, min(400, lines * 20 + 40))
-    return height
 
 def show_review_page():
     st.header("📥 בדיקת ערכים חדשים")
@@ -531,7 +547,7 @@ def show_scheduled_posts_page():
                         new_content = st.text_area(
                             "ערוך תוכן:",
                             value=content_only,
-                            height=150,
+                            height=calculate_textarea_height(content_only),
                             key=f"edit_text_{post['id']}"
                         )
                         
@@ -563,7 +579,7 @@ def show_scheduled_posts_page():
                         st.text_area(
                             "תוכן הפוסט:",
                             value=post['message'],
-                            height=100,
+                            height=calculate_textarea_height(post['message']),
                             key=f"post_{post['id']}",
                             disabled=True
                         )
