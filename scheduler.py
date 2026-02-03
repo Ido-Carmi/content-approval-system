@@ -354,7 +354,7 @@ class Scheduler:
     
     def swap_post_times(self, entry_id1: int, entry_id2: int) -> bool:
         """
-        Swap the scheduled times of two posts
+        Swap the scheduled times and numbers of two posts
         
         Args:
             entry_id1: First entry ID
@@ -363,26 +363,30 @@ class Scheduler:
         Returns:
             True if successful
         """
-        # Get swap info from database
+        # Get swap info from database (includes swapped texts)
         swap_info = self.db.swap_scheduled_times(entry_id1, entry_id2)
         
         if not swap_info:
             return False
         
         try:
-            # Update on Facebook
+            # Update on Facebook with swapped times AND texts
             time1 = datetime.fromisoformat(swap_info['time1'])
             time2 = datetime.fromisoformat(swap_info['time2'])
+            text1 = swap_info['text1']
+            text2 = swap_info['text2']
             
-            # Update post 1 to time 2
+            # Update post 1 to time 2 and text 2
             result1 = self.fb.update_scheduled_post(
                 swap_info['post1_fb_id'],
+                new_text=text2,
                 new_time=time2
             )
             
-            # Update post 2 to time 1
+            # Update post 2 to time 1 and text 1
             result2 = self.fb.update_scheduled_post(
                 swap_info['post2_fb_id'],
+                new_text=text1,
                 new_time=time1
             )
             

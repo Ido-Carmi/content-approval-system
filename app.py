@@ -194,6 +194,18 @@ def main():
     elif page == "📊 סטטיסטיקה":
         show_statistics_page()
 
+def calculate_textarea_height(text: str) -> int:
+    """Calculate appropriate height for text area based on content"""
+    lines = text.count('\n') + 1
+    # Count long lines that will wrap (assume 80 chars per line)
+    for line in text.split('\n'):
+        if len(line) > 80:
+            lines += len(line) // 80
+    
+    # Min 100px, max 400px, ~20px per line
+    height = max(100, min(400, lines * 20 + 40))
+    return height
+
 def show_review_page():
     st.header("📥 בדיקת ערכים חדשים")
     
@@ -251,6 +263,12 @@ def show_review_page():
         }
         .entry-card {
             margin-bottom: 30px;
+        }
+        /* Make text areas flexible height */
+        textarea {
+            min-height: 100px !important;
+            max-height: 400px !important;
+            height: auto !important;
         }
         /* Green approve button */
         button[kind="primary"] p {
@@ -331,7 +349,7 @@ def show_review_page():
                 edited_text = st.text_area(
                     "ערוך כאן:",
                     value=entry['text'],
-                    height=150,
+                    height=calculate_textarea_height(entry['text']),
                     key=f"text_{entry['id']}",
                     label_visibility="collapsed"
                 )
@@ -343,7 +361,7 @@ def show_review_page():
                 with btn_col1:
                     if st.button("אשר", key=f"approve_{entry['id']}", type="primary", use_container_width=True):
                         post_number = st.session_state.db.get_next_post_number()
-                        formatted_text = f"#{post_number}\n\n{edited_text}"
+                        formatted_text = f"#{post_number} {edited_text}"  # Single space instead of \n\n
                         
                         st.session_state.db.approve_entry(entry['id'], edited_text, "admin")
                         
@@ -381,31 +399,39 @@ def show_denied_page():
     
     st.warning(f"**{len(denied_entries)} ערכים** נדחו ב-24 השעות האחרונות")
     
-    for entry in denied_entries:
-        with st.container():
-            denied_at = datetime.fromisoformat(entry['denied_at'])
-            hours_ago = (datetime.now() - denied_at).total_seconds() / 3600
-            hours_remaining = max(0, 24 - hours_ago)
-            
-            st.markdown(f"### 📅 {entry['timestamp']}")
-            st.caption(f"נדחה לפני {hours_ago:.1f} שעות • יימחק בעוד {hours_remaining:.1f} שעות")
-            
-            st.markdown('<div class="content-box">', unsafe_allow_html=True)
-            st.text_area(
-                "תוכן:",
-                value=entry['text'],
-                height=150,
-                key=f"denied_text_{entry['id']}",
-                disabled=True
-            )
-            st.markdown('</div>', unsafe_allow_html=True)
-            
-            if st.button("↩️ החזר להמתנה", key=f"restore_{entry['id']}", use_container_width=True):
-                st.session_state.db.return_denied_to_pending(entry['id'])
-                st.success("הערך הוחזר להמתנה!")
-                st.rerun()
-            
-            st.divider()
+    # Use same responsive columns as review page
+    num_columns = 4
+    cols = st.columns(num_columns)
+    
+    for idx, entry in enumerate(denied_entries):
+        col_idx = idx % num_columns
+        
+        with cols[col_idx]:
+            with st.container():
+                denied_at = datetime.fromisoformat(entry['denied_at'])
+                hours_ago = (datetime.now() - denied_at).total_seconds() / 3600
+                hours_remaining = max(0, 24 - hours_ago)
+                
+                st.markdown(f"### 📅 {entry['timestamp']}")
+                st.caption(f"נדחה לפני {hours_ago:.1f} שעות • יימחק בעוד {hours_remaining:.1f} שעות")
+                
+                st.markdown('<div class="content-box">', unsafe_allow_html=True)
+                st.markdown(f"**תוכן:**")
+                
+                st.text_area(
+                    "תוכן:",
+                    value=entry['text'],
+                    height=calculate_textarea_height(entry['text']),
+                    key=f"denied_text_{entry['id']}",
+                    disabled=True,
+                    label_visibility="collapsed"
+                )
+                st.markdown('</div>', unsafe_allow_html=True)
+                
+                if st.button("↩️ החזר להמתנה", key=f"restore_{entry['id']}", use_container_width=True):
+                    st.session_state.db.return_denied_to_pending(entry['id'])
+                    st.success("הערך הוחזר להמתנה!")
+                    st.rerun()
 
 def show_scheduled_posts_page():
     st.header("📅 פוסטים מתוזמנים")
@@ -439,9 +465,12 @@ def show_scheduled_posts_page():
         
         st.success(f"**{len(fb_posts)} פוסטים** מתוזמנים ב-Facebook")
         
-        # Group by date
+        # Sort ALL posts by scheduled time (not grouped by date)
+        all_sorted_posts = sorted(fb_posts, key=lambda x: x['scheduled_time'])
+        
+        # Group by date for display
         posts_by_date = {}
-        for post in fb_posts:
+        for post in all_sorted_posts:
             scheduled_dt = datetime.fromisoformat(post['scheduled_time'])
             date_key = scheduled_dt.strftime('%A, %d/%m/%Y')
             
@@ -453,10 +482,10 @@ def show_scheduled_posts_page():
         for date_str, posts in sorted(posts_by_date.items()):
             st.subheader(date_str)
             
-            # Sort posts by time
-            sorted_posts = sorted(posts, key=lambda x: x['scheduled_time'])
-            
-            for idx, post in enumerate(sorted_posts):
+            for post in posts:
+                # Find post's index in ALL posts (not just this date)
+                post_idx = next(i for i, p in enumerate(all_sorted_posts) if p['id'] == post['id'])
+                
                 scheduled_dt = datetime.fromisoformat(post['scheduled_time'])
                 time_str = scheduled_dt.strftime('%H:%M')
                 
@@ -507,7 +536,7 @@ def show_scheduled_posts_page():
                             disabled=True
                         )
                         
-                        col1, col2, col3, col4 = st.columns([2, 2, 1, 1])
+                        col1, col2, col3, col4 = st.columns(4)
                         
                         with col1:
                             if st.button("✏️ ערוך", key=f"edit_{post['id']}"):
@@ -525,9 +554,9 @@ def show_scheduled_posts_page():
                                             st.error("ביטול התזמון נכשל")
                         
                         with col3:
-                            # Move up button (disabled for first post)
-                            if idx > 0:
-                                prev_post = sorted_posts[idx - 1]
+                            # Move up button (disabled for first post in ALL posts)
+                            if post_idx > 0:
+                                prev_post = all_sorted_posts[post_idx - 1]
                                 prev_entry = entry_map.get(prev_post['id'])
                                 if st.button("⬆️", key=f"up_{post['id']}"):
                                     if entry_id and prev_entry:
@@ -537,11 +566,14 @@ def show_scheduled_posts_page():
                                                 st.rerun()
                                             else:
                                                 st.error("ההחלפה נכשלה")
+                            else:
+                                # Disabled button placeholder
+                                st.button("⬆️", key=f"up_{post['id']}", disabled=True)
                         
                         with col4:
-                            # Move down button (disabled for last post)
-                            if idx < len(sorted_posts) - 1:
-                                next_post = sorted_posts[idx + 1]
+                            # Move down button (disabled for last post in ALL posts)
+                            if post_idx < len(all_sorted_posts) - 1:
+                                next_post = all_sorted_posts[post_idx + 1]
                                 next_entry = entry_map.get(next_post['id'])
                                 if st.button("⬇️", key=f"down_{post['id']}"):
                                     if entry_id and next_entry:
@@ -551,6 +583,9 @@ def show_scheduled_posts_page():
                                                 st.rerun()
                                             else:
                                                 st.error("ההחלפה נכשלה")
+                            else:
+                                # Disabled button placeholder
+                                st.button("⬇️", key=f"down_{post['id']}", disabled=True)
                     
                     st.divider()
         
