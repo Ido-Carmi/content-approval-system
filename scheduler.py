@@ -267,8 +267,8 @@ class Scheduler:
                     # Get scheduled time
                     scheduled_time = datetime.fromisoformat(post['scheduled_time'])
                     
-                    # Create new text with updated number
-                    new_text = f"#{post['post_number']}\n\n{post['text']}"
+                    # Create new text with updated number (space, not newlines)
+                    new_text = f"#{post['post_number']} {post['text']}"
                     
                     # Update on Facebook
                     result = self.fb.update_scheduled_post(
@@ -338,13 +338,14 @@ class Scheduler:
         
         return rescheduled_count
     
-    def update_scheduled_post_content(self, entry_id: int, new_text: str) -> bool:
+    def update_scheduled_post_content(self, entry_id: int, new_text_with_number: str) -> bool:
         """
         Update the content of a scheduled post on Facebook
+        NOTE: Database text should already be updated by caller (without number)
         
         Args:
             entry_id: Entry ID
-            new_text: New post content
+            new_text_with_number: Full post text including number for Facebook
             
         Returns:
             True if successful
@@ -362,12 +363,11 @@ class Scheduler:
             # Update on Facebook (delete and recreate with new text)
             result = self.fb.update_scheduled_post(
                 entry['facebook_post_id'],
-                new_text=new_text,
+                new_text=new_text_with_number,
                 new_time=scheduled_time
             )
             
-            # Update in database
-            self.db.update_scheduled_post_text(entry_id, new_text)
+            # Update Facebook post ID in database
             self.db.schedule_to_facebook(
                 entry_id,
                 result['id'],
@@ -381,7 +381,7 @@ class Scheduler:
     
     def swap_post_times(self, entry_id1: int, entry_id2: int) -> bool:
         """
-        Swap the scheduled times and numbers of two posts
+        Swap the scheduled times and post numbers of two posts
         
         Args:
             entry_id1: First entry ID
@@ -390,30 +390,42 @@ class Scheduler:
         Returns:
             True if successful
         """
-        # Get swap info from database (includes swapped texts)
+        # First get the entries to know their texts (without numbers)
+        entries = self.db.get_scheduled_entries()
+        entry1 = next((e for e in entries if e['id'] == entry_id1), None)
+        entry2 = next((e for e in entries if e['id'] == entry_id2), None)
+        
+        if not entry1 or not entry2:
+            return False
+        
+        # Swap in database (swaps times AND post_numbers)
         swap_info = self.db.swap_scheduled_times(entry_id1, entry_id2)
         
         if not swap_info:
             return False
         
         try:
-            # Update on Facebook with swapped times AND texts
+            # After swap: entry1 has number2 at time2, entry2 has number1 at time1
             time1 = datetime.fromisoformat(swap_info['time1'])
             time2 = datetime.fromisoformat(swap_info['time2'])
-            text1 = swap_info['text1']
-            text2 = swap_info['text2']
+            number1 = swap_info['number1']
+            number2 = swap_info['number2']
             
-            # Update post 1 to time 2 and text 2
+            # Build new texts with swapped numbers
+            text1_with_new_number = f"#{number2} {entry1['text']}"  # entry1 gets number2
+            text2_with_new_number = f"#{number1} {entry2['text']}"  # entry2 gets number1
+            
+            # Update post 1: new time (time2), new number (number2)
             result1 = self.fb.update_scheduled_post(
                 swap_info['post1_fb_id'],
-                new_text=text2,
+                new_text=text1_with_new_number,
                 new_time=time2
             )
             
-            # Update post 2 to time 1 and text 1
+            # Update post 2: new time (time1), new number (number1)
             result2 = self.fb.update_scheduled_post(
                 swap_info['post2_fb_id'],
-                new_text=text1,
+                new_text=text2_with_new_number,
                 new_time=time1
             )
             

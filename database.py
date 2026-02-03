@@ -330,15 +330,13 @@ class Database:
         conn.close()
     
     def swap_scheduled_times(self, entry_id1: int, entry_id2: int):
-        """Swap the scheduled times of two posts and their numbers"""
-        import re
-        
+        """Swap the scheduled times AND post numbers of two posts"""
         conn = self.get_connection()
         cursor = conn.cursor()
         
-        # Get both entries' scheduled times and texts
+        # Get both entries' scheduled times, post numbers, and Facebook IDs
         cursor.execute('''
-            SELECT id, scheduled_time, facebook_post_id, text
+            SELECT id, scheduled_time, post_number, facebook_post_id
             FROM entries
             WHERE id IN (?, ?)
         ''', (entry_id1, entry_id2))
@@ -350,18 +348,7 @@ class Database:
         
         entries = [dict(row) for row in rows]
         
-        # Extract post numbers from texts
-        def extract_number(text):
-            match = re.match(r'^#(\d+)\s', text)
-            return match.group(1) if match else None
-        
-        def replace_number(text, new_num):
-            return re.sub(r'^#\d+\s', f'#{new_num} ', text)
-        
-        num1 = extract_number(entries[0]['text'])
-        num2 = extract_number(entries[1]['text'])
-        
-        # Swap times
+        # Swap scheduled times
         cursor.execute('''
             UPDATE entries
             SET scheduled_time = ?
@@ -374,22 +361,18 @@ class Database:
             WHERE id = ?
         ''', (entries[0]['scheduled_time'], entries[1]['id']))
         
-        # Swap numbers in texts if both have numbers
-        if num1 and num2:
-            new_text1 = replace_number(entries[0]['text'], num2)
-            new_text2 = replace_number(entries[1]['text'], num1)
-            
-            cursor.execute('''
-                UPDATE entries
-                SET text = ?
-                WHERE id = ?
-            ''', (new_text1, entries[0]['id']))
-            
-            cursor.execute('''
-                UPDATE entries
-                SET text = ?
-                WHERE id = ?
-            ''', (new_text2, entries[1]['id']))
+        # Swap post numbers
+        cursor.execute('''
+            UPDATE entries
+            SET post_number = ?
+            WHERE id = ?
+        ''', (entries[1]['post_number'], entries[0]['id']))
+        
+        cursor.execute('''
+            UPDATE entries
+            SET post_number = ?
+            WHERE id = ?
+        ''', (entries[0]['post_number'], entries[1]['id']))
         
         conn.commit()
         conn.close()
@@ -399,8 +382,8 @@ class Database:
             'post2_fb_id': entries[1]['facebook_post_id'],
             'time1': entries[0]['scheduled_time'],
             'time2': entries[1]['scheduled_time'],
-            'text1': new_text1 if num1 and num2 else entries[0]['text'],
-            'text2': new_text2 if num1 and num2 else entries[1]['text']
+            'number1': entries[0]['post_number'],
+            'number2': entries[1]['post_number']
         }
     
     def get_next_post_number(self) -> int:

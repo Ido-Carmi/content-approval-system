@@ -378,7 +378,7 @@ def show_review_page():
                         conn.close()
                         
                         # Format text with number for Facebook only
-                        formatted_text = f"#{post_number}\n\n{edited_text}"
+                        formatted_text = f"#{post_number} {edited_text}"
                         
                         try:
                             result = st.session_state.scheduler.schedule_post_to_facebook(
@@ -517,10 +517,11 @@ def show_scheduled_posts_page():
                     
                     if st.session_state[edit_key]:
                         # Edit mode - show content without number
-                        # Extract content without the #number line
+                        # Extract content without the #number prefix
                         message = post['message']
-                        if message.startswith('#') and '\n\n' in message:
-                            content_only = '\n\n'.join(message.split('\n\n')[1:])
+                        if message.startswith('#') and ' ' in message:
+                            # Split on first space after number
+                            content_only = message.split(' ', 1)[1]
                         else:
                             content_only = message
                         
@@ -540,7 +541,7 @@ def show_scheduled_posts_page():
                             if st.button("💾 שמור", key=f"save_{post['id']}", type="primary", use_container_width=True):
                                 if entry_id and db_post_number:
                                     # Reconstruct full text with post number from database
-                                    full_text = f"#{db_post_number}\n\n{new_content}"
+                                    full_text = f"#{db_post_number} {new_content}"
                                     
                                     # Also update the text in database (without number)
                                     st.session_state.db.update_scheduled_post_text(entry_id, new_content)
