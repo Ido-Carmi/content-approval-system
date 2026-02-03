@@ -609,6 +609,10 @@ def show_review_page():
             padding: 20px;
             border-radius: 10px;
             margin-bottom: 20px;
+            max-width: 600px;
+        }
+        .entry-card {
+            margin-bottom: 30px;
         }
     </style>
     """, unsafe_allow_html=True)
@@ -621,49 +625,60 @@ def show_review_page():
     
     st.success(f"**{len(pending_entries)} ערכים** ממתינים לבדיקה")
     
-    for entry in pending_entries:
-        st.markdown(f"### 📅 {entry['timestamp']}")
+    # Create multi-column layout (2 columns on desktop)
+    num_columns = 2
+    cols = st.columns(num_columns)
+    
+    for idx, entry in enumerate(pending_entries):
+        col_idx = idx % num_columns
         
-        st.markdown('<div class="content-box">', unsafe_allow_html=True)
-        st.markdown(f"**תוכן:**")
-        
-        edited_text = st.text_area(
-            "ערוך כאן:",
-            value=entry['text'],
-            height=150,
-            key=f"text_{entry['id']}",
-            label_visibility="collapsed"
-        )
-        st.markdown('</div>', unsafe_allow_html=True)
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            if st.button(f"✅ אשר", key=f"approve_{entry['id']}", use_container_width=True):
-                post_number = st.session_state.db.get_next_post_number()
-                formatted_text = f"#{post_number}\n\n{edited_text}"
+        with cols[col_idx]:
+            with st.container():
+                st.markdown('<div class="entry-card">', unsafe_allow_html=True)
                 
-                st.session_state.db.approve_entry(entry['id'], edited_text, "admin")
+                st.markdown(f"### 📅 {entry['timestamp']}")
                 
-                try:
-                    result = st.session_state.scheduler.schedule_post_to_facebook(
-                        entry['id'],
-                        formatted_text
-                    )
-                    st.success(f"✅ תוזמן ל-Facebook ל-{result['scheduled_time']}")
-                    st.info(f"מזהה פוסט ב-Facebook: {result['facebook_post_id']}")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"נכשל בתזמון ל-Facebook: {str(e)}")
-                    st.info("הפוסט אושר אך לא תוזמן. בדוק את הרשאות הטוקן של Facebook.")
-        
-        with col2:
-            if st.button(f"❌ דחה", key=f"deny_{entry['id']}", use_container_width=True):
-                st.session_state.db.deny_entry(entry['id'], "admin")
-                st.success("הערך נדחה")
-                st.rerun()
-        
-        st.divider()
+                st.markdown('<div class="content-box">', unsafe_allow_html=True)
+                st.markdown(f"**תוכן:**")
+                
+                edited_text = st.text_area(
+                    "ערוך כאן:",
+                    value=entry['text'],
+                    height=150,
+                    key=f"text_{entry['id']}",
+                    label_visibility="collapsed"
+                )
+                st.markdown('</div>', unsafe_allow_html=True)
+                
+                btn_col1, btn_col2 = st.columns(2)
+                
+                with btn_col1:
+                    if st.button(f"✅ אשר", key=f"approve_{entry['id']}", use_container_width=True):
+                        post_number = st.session_state.db.get_next_post_number()
+                        formatted_text = f"#{post_number}\n\n{edited_text}"
+                        
+                        st.session_state.db.approve_entry(entry['id'], edited_text, "admin")
+                        
+                        try:
+                            result = st.session_state.scheduler.schedule_post_to_facebook(
+                                entry['id'],
+                                formatted_text
+                            )
+                            st.success(f"✅ תוזמן ל-Facebook ל-{result['scheduled_time']}")
+                            st.info(f"מזהה פוסט ב-Facebook: {result['facebook_post_id']}")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"נכשל בתזמון ל-Facebook: {str(e)}")
+                            st.info("הפוסט אושר אך לא תוזמן. בדוק את הרשאות הטוקן של Facebook.")
+                
+                with btn_col2:
+                    if st.button(f"❌ דחה", key=f"deny_{entry['id']}", use_container_width=True):
+                        st.session_state.db.deny_entry(entry['id'], "admin")
+                        st.success("הערך נדחה")
+                        st.rerun()
+                
+                st.markdown('</div>', unsafe_allow_html=True)
+                st.divider()
 
 def show_scheduled_posts_page():
     st.header("📅 פוסטים מתוזמנים")
