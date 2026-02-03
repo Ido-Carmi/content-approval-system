@@ -21,7 +21,7 @@ except:
 
 # Page configuration
 st.set_page_config(
-    page_title="Content Approval System",
+    page_title="מערכת אישור ופרסום תוכן",
     page_icon="✅",
     layout="wide"
 )
@@ -103,7 +103,7 @@ def check_for_empty_windows(scheduler):
     return None
 
 def main():
-    st.title("📝 Content Approval & Publishing System")
+    st.title("📝 מערכת אישור ופרסום תוכן")
     
     if 'current_page' not in st.session_state:
         st.session_state.current_page = "review"
@@ -115,7 +115,7 @@ def main():
             st.session_state.current_page = new_page
             st.rerun()
     
-    st.sidebar.markdown("### Navigation")
+    st.sidebar.markdown("### ניווט")
     
     st.sidebar.markdown("""
     <style>
@@ -152,10 +152,10 @@ def main():
     """, unsafe_allow_html=True)
     
     pages = [
-        ("review", "📥 Review Entries"),
-        ("scheduled", "📅 Scheduled Posts"),
-        ("stats", "📊 Statistics"),
-        ("settings", "⚙️ Settings")
+        ("review", "📥 בדיקת ערכים"),
+        ("scheduled", "📅 פוסטים מתוזמנים"),
+        ("stats", "📊 סטטיסטיקה"),
+        ("settings", "⚙️ הגדרות")
     ]
     
     nav_html = ""
@@ -171,27 +171,27 @@ def main():
     st.sidebar.markdown(nav_html, unsafe_allow_html=True)
     
     page_map = {
-        "review": "📥 Review Entries",
-        "scheduled": "📅 Scheduled Posts",
-        "stats": "📊 Statistics",
-        "settings": "⚙️ Settings"
+        "review": "📥 בדיקת ערכים",
+        "scheduled": "📅 פוסטים מתוזמנים",
+        "stats": "📊 סטטיסטיקה",
+        "settings": "⚙️ הגדרות"
     }
     
-    page = page_map.get(st.session_state.current_page, "📥 Review Entries")
+    page = page_map.get(st.session_state.current_page, "📥 בדיקת ערכים")
     
     init_handlers()
     
-    if page == "⚙️ Settings":
+    if page == "⚙️ הגדרות":
         show_settings_page()
-    elif page == "📥 Review Entries":
+    elif page == "📥 בדיקת ערכים":
         show_review_page()
-    elif page == "📅 Scheduled Posts":
+    elif page == "📅 פוסטים מתוזמנים":
         show_scheduled_posts_page()
-    elif page == "📊 Statistics":
+    elif page == "📊 סטטיסטיקה":
         show_statistics_page()
 
 def show_settings_page():
-    st.header("⚙️ Settings")
+    st.header("⚙️ הגדרות")
     
     config_file = Path("config.json")
     config = {}
@@ -199,109 +199,109 @@ def show_settings_page():
         with open(config_file, 'r', encoding='utf-8') as f:
             config = json.load(f)
     
-    with st.expander("📊 Google Sheets Configuration", expanded=False):
+    with st.expander("📊 הגדרות Google Sheets", expanded=False):
         sheet_id = st.text_input(
-            "Google Sheet ID",
+            "מזהה גיליון",
             value=config.get('google_sheet_id', ''),
-            help="The ID from your Google Sheets URL",
+            help="המזהה מכתובת ה-URL של הגיליון",
             key="sheet_id"
         )
         
         credentials_file = st.text_input(
-            "Google Credentials File",
+            "קובץ אישורים",
             value=config.get('google_credentials_file', 'credentials.json'),
-            help="Path to your Google API credentials JSON file",
+            help="נתיב לקובץ האישורים של Google API",
             key="creds_file"
         )
         
-        st.info("💡 Make sure your Google Sheets credentials are configured in Streamlit Secrets")
+        st.info("💡 וודא שהאישורים מוגדרים ב-Streamlit Secrets")
     
-    with st.expander("📘 Facebook Configuration", expanded=False):
+    with st.expander("📘 הגדרות Facebook", expanded=False):
         fb_page_id = st.text_input(
-            "Facebook Page ID",
+            "מזהה עמוד",
             value=config.get('facebook_page_id', ''),
-            help="Your Facebook Page ID",
+            help="מזהה עמוד הפייסבוק שלך",
             key="fb_page"
         )
         
         fb_token = st.text_input(
-            "Facebook Access Token",
+            "טוקן גישה",
             value=config.get('facebook_access_token', ''),
             type="password",
-            help="Your Facebook Page Access Token",
+            help="טוקן הגישה לעמוד הפייסבוק",
             key="fb_token"
         )
     
-    with st.expander("⏰ Scheduling Configuration", expanded=False):
-        st.markdown("### Posting Time Windows")
-        st.write("Configure the times when posts should be published (Israel timezone)")
+    with st.expander("⏰ הגדרות תזמון", expanded=False):
+        st.markdown("### חלונות פרסום")
+        st.write("הגדר את השעות בהן הפוסטים יפורסמו (שעון ישראל)")
         
         windows = config.get('posting_windows', ['09:00', '14:00', '19:00'])
         
-        num_windows = st.number_input("Number of posting windows per day", min_value=1, max_value=10, value=len(windows), key="num_windows")
+        num_windows = st.number_input("מספר חלונות פרסום ביום", min_value=1, max_value=10, value=len(windows), key="num_windows")
         
         new_windows = []
         cols = st.columns(min(num_windows, 3))
         for i in range(num_windows):
             with cols[i % 3]:
                 default_time = time(9, 0) if i >= len(windows) else datetime.strptime(windows[i], "%H:%M").time()
-                window_time = st.time_input(f"Window {i+1}", value=default_time, key=f"window_{i}")
+                window_time = st.time_input(f"חלון {i+1}", value=default_time, key=f"window_{i}")
                 new_windows.append(window_time.strftime("%H:%M"))
         
         st.divider()
         
-        st.markdown("### Skip Days")
+        st.markdown("### ימים לדילוג")
         skip_shabbat = st.checkbox(
-            "Skip Fridays and Saturdays",
+            "דלג על ימי שישי ושבת",
             value=config.get('skip_shabbat', True),
-            help="Don't schedule posts on Shabbat (Friday and Saturday)",
+            help="אל תתזמן פוסטים בשבת",
             key="skip_shabbat"
         )
         
         skip_jewish_holidays = st.checkbox(
-            "Skip Jewish Holidays (non-work days)",
+            "דלג על חגים יהודיים (ימי חג)",
             value=config.get('skip_jewish_holidays', True),
-            help="Don't schedule posts on major Jewish holidays that are non-work days",
+            help="אל תתזמן פוסטים בחגים מרכזיים",
             key="skip_holidays"
         )
         
         if skip_jewish_holidays:
-            st.info("📅 Skipped holidays: Rosh Hashanah, Yom Kippur, Sukkot, Simchat Torah, Passover, Shavuot")
+            st.info("📅 חגים שידולגו: ראש השנה, יום כיפור, סוכות, שמחת תורה, פסח, שבועות")
         
         st.divider()
         
-        st.markdown("### Apply Changes to Scheduled Posts")
-        st.write("If you changed the posting windows above, click below to reschedule all existing posts to the new times:")
+        st.markdown("### החל שינויים על פוסטים קיימים")
+        st.write("אם שינית את חלונות הפרסום למעלה, לחץ כאן כדי לתזמן מחדש את כל הפוסטים הקיימים:")
         
-        if st.button("📅 Apply to Existing Schedule", key="apply_windows"):
+        if st.button("📅 החל על לוח זמנים קיים", key="apply_windows"):
             if st.session_state.scheduler:
-                with st.spinner("Rescheduling all posts on Facebook..."):
+                with st.spinner("מתזמן מחדש את כל הפוסטים ב-Facebook..."):
                     try:
                         count = st.session_state.scheduler.reschedule_all_to_new_windows()
-                        st.success(f"✅ Rescheduled {count} posts to new windows!")
+                        st.success(f"✅ תוזמנו מחדש {count} פוסטים!")
                     except Exception as e:
-                        st.error(f"Error: {str(e)}")
+                        st.error(f"שגיאה: {str(e)}")
             else:
-                st.warning("Scheduler not initialized")
+                st.warning("המתזמן לא מופעל")
     
-    with st.expander("🔢 Post Numbering", expanded=False):
+    with st.expander("🔢 מספור פוסטים", expanded=False):
         starting_number = st.number_input(
-            "Starting Number",
+            "מספר התחלתי",
             min_value=1,
             value=config.get('starting_number', 1),
-            help="The starting number for post numbering",
+            help="המספר ממנו יתחיל מספור הפוסטים",
             key="start_num"
         )
         
         current_number = st.session_state.db.get_current_post_number()
-        st.info(f"Current post number: **#{current_number}**")
+        st.info(f"מספר פוסט נוכחי: **#{current_number}**")
         
-        if st.button("Reset Post Number", key="reset_num"):
+        if st.button("איפוס מספור", key="reset_num"):
             st.session_state.db.reset_post_number(starting_number)
-            st.success(f"Post number reset to {starting_number}")
+            st.success(f"המספור אופס ל-{starting_number}")
             st.rerun()
     
-    with st.expander("🗓️ Sync Configuration", expanded=False):
+    with st.expander("🗓️ הגדרות סנכרון", expanded=False):
         default_start_date = datetime.now(pytz.timezone('Asia/Jerusalem')).date()
         if 'sync_start_date' in config and config['sync_start_date']:
             try:
@@ -310,27 +310,27 @@ def show_settings_page():
                 pass
 
         start_date = st.date_input(
-            "Start reading from date",
+            "התחל לקרוא מתאריך",
             value=default_start_date,
-            help="Only sync entries from this date forward. Older entries will be ignored.",
+            help="רק ערכים מתאריך זה ואילך יסונכרנו",
             format="DD/MM/YYYY",
             key="start_date"
         )
 
-        if st.button("Set Start Date", key="set_date"):
+        if st.button("הגדר תאריך", key="set_date"):
             config['sync_start_date'] = start_date.isoformat()
             with open(config_file, 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=2, ensure_ascii=False)
-            st.success(f"✅ Start date set to {start_date}")
+            st.success(f"✅ התאריך הוגדר ל-{start_date}")
         
         st.divider()
         
-        last_sync = config.get('last_sync', 'Never')
-        st.info(f"Last sync: **{last_sync}**")
+        last_sync = config.get('last_sync', 'אף פעם')
+        st.info(f"סנכרון אחרון: **{last_sync}**")
         
-        if st.button("🔄 Sync Now", key="sync_now"):
+        if st.button("🔄 סנכרן עכשיו", key="sync_now"):
             if st.session_state.sheets_handler:
-                with st.spinner("Syncing with Google Sheets..."):
+                with st.spinner("מסנכרן עם Google Sheets..."):
                     try:
                         start_date_str = config.get('sync_start_date')
                         
@@ -356,9 +356,9 @@ def show_settings_page():
                         with open(config_file, 'w', encoding='utf-8') as f:
                             json.dump(config, f, indent=2, ensure_ascii=False)
                         
-                        msg = f"✅ Synced successfully! Added {added_count} new entries."
+                        msg = f"✅ סונכרן בהצלחה! נוספו {added_count} ערכים חדשים."
                         if skipped_count > 0:
-                            msg += f" Skipped {skipped_count} entries before {start_date_str}."
+                            msg += f" דולגו {skipped_count} ערכים לפני {start_date_str}."
                         st.success(msg)
                         
                         if config.get('notifications_enabled', False):
@@ -369,95 +369,95 @@ def show_settings_page():
                                 notif = NotificationHandler()
                                 next_empty = check_for_empty_windows(st.session_state.scheduler)
                                 notif.send_pending_threshold_alert(pending_count, next_empty)
-                                st.info(f"📧 Notification sent - {pending_count} pending entries exceed threshold of {threshold}")
+                                st.info(f"📧 התראה נשלחה - {pending_count} ערכים ממתינים חורגים מהסף של {threshold}")
                     except Exception as e:
-                        st.error(f"Sync failed: {str(e)}")
+                        st.error(f"הסנכרון נכשל: {str(e)}")
             else:
-                st.warning("Please configure Google Sheets settings first")
+                st.warning("נא להגדיר תחילה את הגדרות Google Sheets")
     
-    with st.expander("📧 Notification Settings", expanded=False):
+    with st.expander("📧 הגדרות התראות", expanded=False):
         notifications_enabled = st.checkbox(
-            "Enable Notifications",
+            "הפעל התראות",
             value=config.get('notifications_enabled', False),
-            help="Enable email notifications for pending entries and empty windows",
+            help="הפעל התראות אימייל עבור ערכים ממתינים וחלונות ריקים",
             key="notif_enabled"
         )
         
         app_url = st.text_input(
-            "App URL",
+            "כתובת האפליקציה",
             value=config.get('app_url', 'http://localhost:8501'),
-            help="URL of this app (will be included in notification emails)",
+            help="כתובת ה-URL של האפליקציה",
             key="app_url"
         )
         
-        st.markdown("### Gmail Configuration")
-        st.info("💡 Use your Gmail address and an App Password (not your regular password)")
+        st.markdown("### הגדרות Gmail")
+        st.info("💡 השתמש בכתובת Gmail שלך וב-App Password (לא הסיסמה הרגילה)")
         
         gmail_email = st.text_input(
-            "Gmail Address",
+            "כתובת Gmail",
             value=config.get('gmail_email', ''),
             placeholder="your-email@gmail.com",
-            help="Your Gmail address that will send the notifications",
+            help="כתובת ה-Gmail ממנה יישלחו ההתראות",
             key="gmail_addr"
         )
         
         gmail_app_password = st.text_input(
-            "Gmail App Password",
+            "App Password של Gmail",
             value=config.get('gmail_app_password', ''),
             type="password",
-            help="Generate this from Google Account settings (not your regular password)",
+            help="צור זאת מהגדרות חשבון Google",
             key="gmail_pass"
         )
         
         st.markdown("""
         <details>
-        <summary>📖 How to get Gmail App Password (click to expand)</summary>
+        <summary>📖 איך לקבל Gmail App Password</summary>
         <ol>
-        <li>Go to <a href="https://myaccount.google.com/">Google Account Settings</a></li>
-        <li>Click <strong>Security</strong> → <strong>2-Step Verification</strong> (enable if not already)</li>
-        <li>Scroll down to <strong>App passwords</strong></li>
-        <li>Click <strong>App passwords</strong></li>
-        <li>Select <strong>Mail</strong> and <strong>Other (Custom name)</strong></li>
-        <li>Name it "Content Approval System"</li>
-        <li>Click <strong>Generate</strong></li>
-        <li>Copy the 16-character password</li>
-        <li>Paste it above</li>
+        <li>עבור להגדרות חשבון Google</li>
+        <li>לחץ על אבטחה → אימות דו-שלבי</li>
+        <li>גלול למטה ל-App passwords</li>
+        <li>לחץ על App passwords</li>
+        <li>בחר Mail ו-Other (Custom name)</li>
+        <li>תן לזה שם "Content Approval System"</li>
+        <li>לחץ על Generate</li>
+        <li>העתק את הסיסמה בת 16 התווים</li>
+        <li>הדבק אותה למעלה</li>
         </ol>
         </details>
         """, unsafe_allow_html=True)
         
         pending_threshold = st.number_input(
-            "Pending Threshold",
+            "סף ערכים ממתינים",
             min_value=1,
             max_value=1000,
             value=config.get('pending_threshold', 20),
-            help="Send notification when pending entries exceed this number",
+            help="שלח התראה כשהערכים הממתינים עוברים את המספר הזה",
             key="pending_thresh"
         )
         
-        st.markdown("### Notification Recipients")
+        st.markdown("### נמעני התראות")
         
         existing_emails = config.get('notification_emails', [])
         
-        new_email = st.text_input("Add email address", placeholder="email@example.com", key="new_email")
+        new_email = st.text_input("הוסף כתובת אימייל", placeholder="email@example.com", key="new_email")
         
         col1, col2 = st.columns([1, 5])
         with col1:
-            if st.button("➕ Add Email", key="add_email"):
+            if st.button("➕ הוסף", key="add_email"):
                 if new_email and new_email not in existing_emails:
                     existing_emails.append(new_email)
                     config['notification_emails'] = existing_emails
                     with open(config_file, 'w', encoding='utf-8') as f:
                         json.dump(config, f, indent=2, ensure_ascii=False)
-                    st.success(f"Added {new_email}")
+                    st.success(f"נוסף {new_email}")
                     st.rerun()
                 elif new_email in existing_emails:
-                    st.warning("Email already exists")
+                    st.warning("האימייל כבר קיים")
                 else:
-                    st.warning("Please enter an email address")
+                    st.warning("נא להזין כתובת אימייל")
         
         if existing_emails:
-            st.write(f"**Configured emails ({len(existing_emails)}):**")
+            st.write(f"**אימיילים מוגדרים ({len(existing_emails)}):**")
             for idx, email in enumerate(existing_emails):
                 col1, col2 = st.columns([5, 1])
                 with col1:
@@ -468,19 +468,19 @@ def show_settings_page():
                         config['notification_emails'] = existing_emails
                         with open(config_file, 'w', encoding='utf-8') as f:
                             json.dump(config, f, indent=2, ensure_ascii=False)
-                        st.success(f"Removed {email}")
+                        st.success(f"הוסר {email}")
                         st.rerun()
         else:
-            st.info("No email addresses configured yet")
+            st.info("לא הוגדרו כתובות אימייל עדיין")
         
         st.divider()
-        if st.button("📧 Send Test Notification", key="test_notif"):
+        if st.button("📧 שלח התראת בדיקה", key="test_notif"):
             if not notifications_enabled:
-                st.warning("Notifications are disabled. Enable them first!")
+                st.warning("ההתראות מבוטלות. הפעל אותן תחילה!")
             elif not gmail_email or not gmail_app_password:
-                st.warning("Gmail credentials not configured!")
+                st.warning("פרטי Gmail לא הוגדרו!")
             elif not existing_emails:
-                st.warning("No email addresses configured!")
+                st.warning("לא הוגדרו כתובות אימייל!")
             else:
                 try:
                     test_config = config.copy()
@@ -496,42 +496,42 @@ def show_settings_page():
                     
                     notif = NotificationHandler()
                     if notif.send_test_notification():
-                        st.success("✅ Test notification sent successfully! Check your email.")
+                        st.success("✅ התראת בדיקה נשלחה בהצלחה! בדוק את האימייל שלך.")
                     else:
-                        st.error("❌ Failed to send test notification. Check your Gmail credentials.")
+                        st.error("❌ שליחת התראת הבדיקה נכשלה. בדוק את פרטי Gmail.")
                 except Exception as e:
-                    st.error(f"Error sending test notification: {str(e)}")
+                    st.error(f"שגיאה בשליחת התראת בדיקה: {str(e)}")
     
-    with st.expander("🗑️ Database Management", expanded=False):
-        st.warning("⚠️ These actions cannot be undone!")
+    with st.expander("🗑️ ניהול מסד נתונים", expanded=False):
+        st.warning("⚠️ פעולות אלה לא ניתנות לביטול!")
         
         col1, col2 = st.columns(2)
 
         with col1:
-            if st.button("🗑️ Delete All Pending Entries", type="secondary", key="del_pending"):
+            if st.button("🗑️ מחק את כל הערכים הממתינים", type="secondary", key="del_pending"):
                 conn = st.session_state.db.get_connection()
                 cursor = conn.cursor()
                 cursor.execute("DELETE FROM entries WHERE status = 'pending'")
                 cursor.execute("DELETE FROM processed_timestamps")
                 conn.commit()
                 conn.close()
-                st.success("✅ All pending entries deleted!")
+                st.success("✅ כל הערכים הממתינים נמחקו!")
                 st.rerun()
 
         with col2:
-            if st.button("⚠️ Clear Entire Database", type="secondary", key="clear_db"):
-                if st.checkbox("I'm sure I want to delete everything", key="confirm_clear"):
+            if st.button("⚠️ נקה את כל מסד הנתונים", type="secondary", key="clear_db"):
+                if st.checkbox("אני בטוח שאני רוצה למחוק הכל", key="confirm_clear"):
                     conn = st.session_state.db.get_connection()
                     cursor = conn.cursor()
                     cursor.execute("DELETE FROM entries")
                     cursor.execute("DELETE FROM processed_timestamps")
                     conn.commit()
                     conn.close()
-                    st.success("✅ Database cleared!")
+                    st.success("✅ מסד הנתונים נוקה!")
                     st.rerun()
     
     st.divider()
-    if st.button("💾 Save All Configuration", type="primary", use_container_width=True):
+    if st.button("💾 שמור את כל ההגדרות", type="primary", use_container_width=True):
         config = {
             'google_sheet_id': sheet_id,
             'google_credentials_file': credentials_file,
@@ -547,7 +547,7 @@ def show_settings_page():
             'notification_emails': existing_emails,
             'pending_threshold': pending_threshold,
             'app_url': app_url,
-            'last_sync': config.get('last_sync', 'Never'),
+            'last_sync': config.get('last_sync', 'אף פעם'),
             'sync_start_date': config.get('sync_start_date'),
             'last_empty_window_alert': config.get('last_empty_window_alert')
         }
@@ -555,28 +555,60 @@ def show_settings_page():
         with open(config_file, 'w', encoding='utf-8') as f:
             json.dump(config, f, indent=2, ensure_ascii=False)
         
-        st.success("✅ Configuration saved successfully!")
-        st.info("Please refresh the page to apply changes")
+        st.success("✅ ההגדרות נשמרו בהצלחה!")
+        st.info("נא לרענן את הדף כדי להחיל את השינויים")
 
 def show_review_page():
-    st.header("📥 Review New Entries")
+    st.header("📥 בדיקת ערכים חדשים")
+    
+    # Add sync button at the top
+    col1, col2, col3 = st.columns([2, 1, 1])
+    with col3:
+        if st.button("🔄 סנכרן עכשיו"):
+            if st.session_state.sheets_handler:
+                with st.spinner("מסנכרן..."):
+                    try:
+                        config_file = Path("config.json")
+                        config = {}
+                        if config_file.exists():
+                            with open(config_file, 'r', encoding='utf-8') as f:
+                                config = json.load(f)
+                        
+                        start_date_str = config.get('sync_start_date')
+                        new_entries = st.session_state.sheets_handler.fetch_new_entries()
+                        added_count = 0
+                        
+                        for entry in new_entries:
+                            if start_date_str:
+                                try:
+                                    entry_date = pd.to_datetime(entry['timestamp'], dayfirst=True).date()
+                                    filter_date = datetime.fromisoformat(start_date_str).date()
+                                    if entry_date < filter_date:
+                                        continue
+                                except:
+                                    pass
+                            
+                            if st.session_state.db.add_entry(entry['timestamp'], entry['text']):
+                                added_count += 1
+                        
+                        config['last_sync'] = datetime.now(pytz.timezone('Asia/Jerusalem')).strftime("%Y-%m-%d %H:%M:%S")
+                        with open(config_file, 'w', encoding='utf-8') as f:
+                            json.dump(config, f, indent=2, ensure_ascii=False)
+                        
+                        st.success(f"✅ נוספו {added_count} ערכים חדשים!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"הסנכרון נכשל: {str(e)}")
+            else:
+                st.warning("נא להגדיר תחילה את הגדרות Google Sheets")
     
     st.markdown("""
     <style>
-        button[kind="primary"] {
-            background-color: #28a745 !important;
-            border-color: #28a745 !important;
-        }
-        button[kind="primary"]:hover {
-            background-color: #218838 !important;
-        }
-        button[kind="secondary"] {
-            background-color: #dc3545 !important;
-            border-color: #dc3545 !important;
-            color: white !important;
-        }
-        button[kind="secondary"]:hover {
-            background-color: #c82333 !important;
+        .content-box {
+            background-color: #f0f2f6;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
         }
     </style>
     """, unsafe_allow_html=True)
@@ -584,69 +616,73 @@ def show_review_page():
     pending_entries = st.session_state.db.get_pending_entries()
     
     if not pending_entries:
-        st.info("No pending entries to review")
+        st.info("אין ערכים ממתינים לבדיקה")
         return
     
-    st.success(f"**{len(pending_entries)} entries** waiting for review")
+    st.success(f"**{len(pending_entries)} ערכים** ממתינים לבדיקה")
     
     for entry in pending_entries:
-        with st.container():
-            st.markdown(f"### 📅 {entry['timestamp']}")
-            
-            edited_text = st.text_area(
-                "Content:",
-                value=entry['text'],
-                height=150,
-                key=f"text_{entry['id']}"
-            )
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                if st.button(f"✅ Approve", key=f"approve_{entry['id']}", type="primary"):
-                    post_number = st.session_state.db.get_next_post_number()
-                    formatted_text = f"#{post_number}\n\n{edited_text}"
-                    
-                    st.session_state.db.approve_entry(entry['id'], edited_text, "admin")
-                    
-                    try:
-                        result = st.session_state.scheduler.schedule_post_to_facebook(
-                            entry['id'],
-                            formatted_text
-                        )
-                        st.success(f"✅ Scheduled to Facebook for {result['scheduled_time']}")
-                        st.info(f"Facebook Post ID: {result['facebook_post_id']}")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Failed to schedule to Facebook: {str(e)}")
-                        st.info("Post was approved but not scheduled. Check Facebook token permissions.")
-            
-            with col2:
-                if st.button(f"❌ Deny", key=f"deny_{entry['id']}", type="secondary"):
-                    st.session_state.db.deny_entry(entry['id'], "admin")
-                    st.success("Entry denied")
+        st.markdown(f"### 📅 {entry['timestamp']}")
+        
+        st.markdown('<div class="content-box">', unsafe_allow_html=True)
+        st.markdown(f"**תוכן:**")
+        
+        edited_text = st.text_area(
+            "ערוך כאן:",
+            value=entry['text'],
+            height=150,
+            key=f"text_{entry['id']}",
+            label_visibility="collapsed"
+        )
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button(f"✅ אשר", key=f"approve_{entry['id']}", use_container_width=True):
+                post_number = st.session_state.db.get_next_post_number()
+                formatted_text = f"#{post_number}\n\n{edited_text}"
+                
+                st.session_state.db.approve_entry(entry['id'], edited_text, "admin")
+                
+                try:
+                    result = st.session_state.scheduler.schedule_post_to_facebook(
+                        entry['id'],
+                        formatted_text
+                    )
+                    st.success(f"✅ תוזמן ל-Facebook ל-{result['scheduled_time']}")
+                    st.info(f"מזהה פוסט ב-Facebook: {result['facebook_post_id']}")
                     st.rerun()
-            
-            st.divider()
+                except Exception as e:
+                    st.error(f"נכשל בתזמון ל-Facebook: {str(e)}")
+                    st.info("הפוסט אושר אך לא תוזמן. בדוק את הרשאות הטוקן של Facebook.")
+        
+        with col2:
+            if st.button(f"❌ דחה", key=f"deny_{entry['id']}", use_container_width=True):
+                st.session_state.db.deny_entry(entry['id'], "admin")
+                st.success("הערך נדחה")
+                st.rerun()
+        
+        st.divider()
 
 def show_scheduled_posts_page():
-    st.header("📅 Scheduled Posts")
+    st.header("📅 פוסטים מתוזמנים")
     
     st.markdown("""
-    Posts are scheduled directly to Facebook and will publish automatically.
-    You can view them in [Facebook Creator Studio](https://business.facebook.com/creatorstudio) too!
+    הפוסטים מתוזמנים ישירות ל-Facebook ויפורסמו אוטומטית.
+    תוכל לצפות בהם גם ב-[Facebook Creator Studio](https://business.facebook.com/creatorstudio)!
     """)
     
     if not st.session_state.facebook_handler or not st.session_state.scheduler:
-        st.warning("Please configure Facebook settings first")
+        st.warning("נא להגדיר תחילה את הגדרות Facebook")
         return
     
     col1, col2 = st.columns([3, 1])
     with col2:
-        if st.button("🔄 Sync with Facebook"):
-            with st.spinner("Syncing..."):
+        if st.button("🔄 סנכרן עם Facebook"):
+            with st.spinner("מסנכרן..."):
                 st.session_state.scheduler.sync_with_facebook()
-                st.success("Synced!")
+                st.success("סונכרן!")
                 st.rerun()
     
     try:
@@ -657,10 +693,10 @@ def show_scheduled_posts_page():
         entry_map = {entry['facebook_post_id']: entry for entry in db_entries}
         
         if not fb_posts:
-            st.info("No posts currently scheduled on Facebook")
+            st.info("אין פוסטים מתוזמנים כרגע ב-Facebook")
             return
         
-        st.success(f"**{len(fb_posts)} posts** scheduled on Facebook")
+        st.success(f"**{len(fb_posts)} פוסטים** מתוזמנים ב-Facebook")
         
         posts_by_date = {}
         for post in fb_posts:
@@ -685,7 +721,7 @@ def show_scheduled_posts_page():
                     st.markdown(f"### ⏰ {time_str}")
                     
                     st.text_area(
-                        "Post content:",
+                        "תוכן הפוסט:",
                         value=post['message'],
                         height=100,
                         key=f"post_{post['id']}",
@@ -695,56 +731,56 @@ def show_scheduled_posts_page():
                     col1, col2, col3 = st.columns([2, 2, 1])
                     
                     with col1:
-                        if st.button(f"🔙 Return to Pending", key=f"unschedule_{post['id']}"):
+                        if st.button(f"🔙 החזר להמתנה", key=f"unschedule_{post['id']}"):
                             if entry_id:
-                                with st.spinner("Unscheduling from Facebook..."):
+                                with st.spinner("מבטל תזמון ב-Facebook..."):
                                     if st.session_state.scheduler.unschedule_post(entry_id):
-                                        st.success("✅ Returned to pending! You can edit and re-approve it.")
+                                        st.success("✅ הוחזר להמתנה! תוכל לערוך ולאשר אותו מחדש.")
                                         st.rerun()
                                     else:
-                                        st.error("Failed to unschedule")
+                                        st.error("ביטול התזמון נכשל")
                             else:
-                                st.warning("Entry not found in database")
+                                st.warning("הערך לא נמצא במסד הנתונים")
                     
                     with col2:
-                        if st.button(f"🔗 View in Facebook", key=f"fb_view_{post['id']}"):
-                            st.markdown(f"[Open in Creator Studio](https://business.facebook.com/creatorstudio)")
+                        if st.button(f"🔗 צפה ב-Facebook", key=f"fb_view_{post['id']}"):
+                            st.markdown(f"[פתח ב-Creator Studio](https://business.facebook.com/creatorstudio)")
                     
                     st.divider()
         
     except Exception as e:
-        st.error(f"Error loading scheduled posts: {str(e)}")
-        st.info("Make sure your Facebook token has 'pages_manage_posts' permission")
+        st.error(f"שגיאה בטעינת הפוסטים המתוזמנים: {str(e)}")
+        st.info("וודא שלטוקן של Facebook יש הרשאה 'pages_manage_posts'")
 
 def show_statistics_page():
-    st.header("📊 Statistics")
+    st.header("📊 סטטיסטיקה")
     
     stats = st.session_state.db.get_statistics()
     
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.metric("Pending", stats['pending'])
+        st.metric("ממתינים", stats['pending'])
     
     with col2:
-        st.metric("Scheduled", stats['scheduled'])
+        st.metric("מתוזמנים", stats['scheduled'])
     
     with col3:
-        st.metric("Published", stats['published'])
+        st.metric("פורסמו", stats['published'])
     
     with col4:
-        st.metric("Denied", stats['denied'])
+        st.metric("נדחו", stats['denied'])
     
     st.divider()
     
-    st.subheader("Recent Activity")
+    st.subheader("פעילות אחרונה")
     recent = st.session_state.db.get_recent_activity(20)
     
     if recent:
         df = pd.DataFrame(recent)
         st.dataframe(df, use_container_width=True, hide_index=True)
     else:
-        st.info("No activity yet")
+        st.info("אין פעילות עדיין")
 
 if __name__ == "__main__":
     main()
