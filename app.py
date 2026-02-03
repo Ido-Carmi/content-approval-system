@@ -42,6 +42,7 @@ if 'scheduler' not in st.session_state:
 def calculate_textarea_height(text: str) -> int:
     """
     Calculate optimal height for textarea based on text length
+    Works better with Hebrew text and long lines
     
     Args:
         text: The text content
@@ -52,20 +53,28 @@ def calculate_textarea_height(text: str) -> int:
     if not text:
         return 100
     
-    # Count lines
+    # Count actual line breaks
     lines = text.count('\n') + 1
     
-    # Estimate lines based on character count (assuming ~60 chars per line)
-    estimated_lines = len(text) / 60
+    # For each line, calculate how many display lines it will take
+    # Assuming ~50 characters per line (works better for Hebrew)
+    wrapped_lines = 0
+    for line in text.split('\n'):
+        if len(line) == 0:
+            wrapped_lines += 1
+        else:
+            # Each line wraps at approximately 50 chars
+            wrapped_lines += max(1, (len(line) + 49) // 50)
     
-    # Take the maximum of actual lines and estimated lines
-    total_lines = max(lines, estimated_lines)
+    # Use the larger of actual lines or wrapped lines
+    total_lines = max(lines, wrapped_lines)
     
-    # Calculate height (approximately 20px per line, min 100px, max 400px)
-    height = int(total_lines * 20) + 40  # +40 for padding
+    # Calculate height: 24px per line + 50px padding
+    # This gives more space per line for better readability
+    height = int(total_lines * 24) + 50
     
-    # Clamp between min and max
-    return max(100, min(400, height))
+    # Clamp between min 120px and max 500px
+    return max(120, min(500, height))
 
 def init_handlers():
     """Initialize handlers with credentials"""
@@ -279,12 +288,6 @@ def show_review_page():
         }
         .entry-card {
             margin-bottom: 30px;
-        }
-        /* Make text areas flexible height */
-        textarea {
-            min-height: 100px !important;
-            max-height: 400px !important;
-            height: auto !important;
         }
         /* Green approve button */
         button[kind="primary"] p {
