@@ -21,7 +21,7 @@ except:
 
 # Page configuration
 st.set_page_config(
-    page_title="מערכת אישור ופרסום תוכן",
+    page_title="IDF Confessions",
     page_icon="✅",
     layout="wide"
 )
@@ -189,9 +189,9 @@ def main():
     """, unsafe_allow_html=True)
     
     pages = [
-        ("review", "📥 בדיקת ערכים"),
+        ("review", "📥 וידויים ממתינים לאישור"),
         ("scheduled", "📅 פוסטים מתוזמנים"),
-        ("denied", "🗑️ ערכים שנדחו"),
+        ("denied", "🗑️ וידויים שנדחו"),
         ("stats", "📊 סטטיסטיקה"),
         ("settings", "⚙️ הגדרות")
     ]
@@ -209,30 +209,30 @@ def main():
     st.sidebar.markdown(nav_html, unsafe_allow_html=True)
     
     page_map = {
-        "review": "📥 בדיקת ערכים",
+        "review": "📥 וידויים ממתינים לאישור",
         "scheduled": "📅 פוסטים מתוזמנים",
-        "denied": "🗑️ ערכים שנדחו",
+        "denied": "🗑️ וידויים שנדחו",
         "stats": "📊 סטטיסטיקה",
         "settings": "⚙️ הגדרות"
     }
     
-    page = page_map.get(st.session_state.current_page, "📥 בדיקת ערכים")
+    page = page_map.get(st.session_state.current_page, "📥 וידויים ממתינים לאישור")
     
     init_handlers()
     
     if page == "⚙️ הגדרות":
         show_settings_page()
-    elif page == "📥 בדיקת ערכים":
+    elif page == "📥 וידויים ממתינים לאישור":
         show_review_page()
     elif page == "📅 פוסטים מתוזמנים":
         show_scheduled_posts_page()
-    elif page == "🗑️ ערכים שנדחו":
+    elif page == "🗑️ וידויים שנדחו":
         show_denied_page()
     elif page == "📊 סטטיסטיקה":
         show_statistics_page()
 
 def show_review_page():
-    st.header("📥 בדיקת ערכים חדשים")
+    st.header("📥 וידויים ממתינים לאישור")
     
     # Cleanup old denied entries
     st.session_state.db.cleanup_old_denied()
@@ -271,7 +271,7 @@ def show_review_page():
                         with open(config_file, 'w', encoding='utf-8') as f:
                             json.dump(config, f, indent=2, ensure_ascii=False)
                         
-                        st.success(f"✅ נוספו {added_count} ערכים חדשים!")
+                        st.success(f"✅ נוספו {added_count} וידויים חדשים!")
                         st.rerun()
                     except Exception as e:
                         st.error(f"הסנכרון נכשל: {str(e)}")
@@ -350,10 +350,10 @@ def show_review_page():
     pending_entries = st.session_state.db.get_pending_entries()
     
     if not pending_entries:
-        st.info("אין ערכים ממתינים לבדיקה")
+        st.info("אין וידויים ממתינים לבדיקה")
         return
     
-    st.success(f"**{len(pending_entries)} ערכים** ממתינים לבדיקה")
+    st.success(f"**{len(pending_entries)} וידויים** ממתינים לבדיקה")
     
     # Create 4 columns for responsive layout
     num_columns = 4
@@ -418,9 +418,9 @@ def show_review_page():
                 st.markdown('</div>', unsafe_allow_html=True)
 
 def show_denied_page():
-    st.header("🗑️ ערכים שנדחו")
+    st.header("🗑️ וידויים שנדחו")
     
-    st.info("ערכים נדחים נשמרים ל-24 שעות. לאחר מכן הם נמחקים אוטומטית.")
+    st.info("וידויים נדחים נשמרים ל-24 שעות. לאחר מכן הם נמחקים אוטומטית.")
     
     # Cleanup old entries
     st.session_state.db.cleanup_old_denied()
@@ -428,10 +428,10 @@ def show_denied_page():
     denied_entries = st.session_state.db.get_denied_entries()
     
     if not denied_entries:
-        st.info("אין ערכים נדחים")
+        st.info("אין וידויים שנדחו ב-24 השעות האחרונות")
         return
     
-    st.warning(f"**{len(denied_entries)} ערכים** נדחו ב-24 השעות האחרונות")
+    st.warning(f"**{len(denied_entries)} וידויים** נדחו ב-24 השעות האחרונות")
     
     # Use same responsive columns as review page
     num_columns = 4
@@ -796,7 +796,7 @@ def show_settings_page():
         start_date = st.date_input(
             "התחל לקרוא מתאריך",
             value=default_start_date,
-            help="רק ערכים מתאריך זה ואילך יסונכרנו",
+            help="רק וידויים מתאריך זה ואילך יסונכרנו",
             format="DD/MM/YYYY",
             key="start_date"
         )
@@ -840,9 +840,9 @@ def show_settings_page():
                         with open(config_file, 'w', encoding='utf-8') as f:
                             json.dump(config, f, indent=2, ensure_ascii=False)
                         
-                        msg = f"✅ סונכרן בהצלחה! נוספו {added_count} ערכים חדשים."
+                        msg = f"✅ סונכרן בהצלחה! נוספו {added_count} וידויים חדשים."
                         if skipped_count > 0:
-                            msg += f" דולגו {skipped_count} ערכים לפני {start_date_str}."
+                            msg += f" דולגו {skipped_count} וידויים לפני {start_date_str}."
                         st.success(msg)
                         
                         if config.get('notifications_enabled', False):
@@ -853,7 +853,7 @@ def show_settings_page():
                                 notif = NotificationHandler()
                                 next_empty = check_for_empty_windows(st.session_state.scheduler)
                                 notif.send_pending_threshold_alert(pending_count, next_empty)
-                                st.info(f"📧 התראה נשלחה - {pending_count} ערכים ממתינים חורגים מהסף של {threshold}")
+                                st.info(f"📧 התראה נשלחה - {pending_count} וידויים ממתינים חורגים מהסף של {threshold}")
                     except Exception as e:
                         st.error(f"הסנכרון נכשל: {str(e)}")
             else:
@@ -863,7 +863,7 @@ def show_settings_page():
         notifications_enabled = st.checkbox(
             "הפעל התראות",
             value=config.get('notifications_enabled', False),
-            help="הפעל התראות אימייל עבור ערכים ממתינים וחלונות ריקים",
+            help="הפעל התראות אימייל עבור וידויים ממתינים וחלונות ריקים",
             key="notif_enabled"
         )
         
@@ -911,11 +911,11 @@ def show_settings_page():
         """, unsafe_allow_html=True)
         
         pending_threshold = st.number_input(
-            "סף ערכים ממתינים",
+            "סף וידויים ממתינים",
             min_value=1,
             max_value=1000,
             value=config.get('pending_threshold', 20),
-            help="שלח התראה כשהערכים הממתינים עוברים את המספר הזה",
+            help="שלח התראה כשהוידויים הממתינים עוברים את המספר הזה",
             key="pending_thresh"
         )
         
@@ -992,14 +992,14 @@ def show_settings_page():
         col1, col2 = st.columns(2)
 
         with col1:
-            if st.button("🗑️ מחק את כל הערכים הממתינים", type="secondary", key="del_pending"):
+            if st.button("🗑️ מחק את כל הוידויים הממתינים", type="secondary", key="del_pending"):
                 conn = st.session_state.db.get_connection()
                 cursor = conn.cursor()
                 cursor.execute("DELETE FROM entries WHERE status = 'pending'")
                 cursor.execute("DELETE FROM processed_timestamps")
                 conn.commit()
                 conn.close()
-                st.success("✅ כל הערכים הממתינים נמחקו!")
+                st.success("✅ כל הוידויים הממתינים נמחקו!")
                 st.rerun()
 
         with col2:
