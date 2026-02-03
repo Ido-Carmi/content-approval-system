@@ -13,10 +13,9 @@ from database import Database
 from scheduler import Scheduler
 from notifications import NotificationHandler
 
-
 import locale
 try:
-    locale.setlocale(locale.LC_TIME, 'en_GB.UTF-8')  # DD/MM/YYYY format
+    locale.setlocale(locale.LC_TIME, 'en_GB.UTF-8')
 except:
     pass
 
@@ -81,31 +80,24 @@ def check_for_empty_windows(scheduler):
     now = datetime.now(israel_tz)
     tomorrow = now + timedelta(hours=24)
     
-    # Get posting windows
     windows = scheduler.load_posting_windows()
+    scheduled_times = scheduler.get_scheduled_times_from_facebook()
+    scheduled_slots = set()
     
-    # Get scheduled posts
-    scheduled = scheduler.db.get_scheduled_posts()
-    scheduled_times = set()
-    for post in scheduled:
-        post_dt = datetime.fromisoformat(post['scheduled_time'])
-        # Store as date + time for comparison
-        scheduled_times.add((post_dt.date(), post_dt.time().replace(second=0, microsecond=0)))
+    for st_dt in scheduled_times:
+        scheduled_slots.add((st_dt.date(), st_dt.time().replace(second=0, microsecond=0)))
     
-    # Check each window in the next 24 hours
     current_date = now.date()
-    for days_ahead in range(2):  # Check today and tomorrow
+    for days_ahead in range(2):
         check_date = current_date + timedelta(days=days_ahead)
         
         for window_time in windows:
             window_dt = israel_tz.localize(datetime.combine(check_date, window_time))
             
-            # Only check windows in the next 24 hours
             if now < window_dt <= tomorrow:
                 window_key = (check_date, window_time)
                 
-                if window_key not in scheduled_times:
-                    # Found an empty window!
+                if window_key not in scheduled_slots:
                     return window_dt.strftime('%d/%m/%Y %H:%M')
     
     return None
@@ -113,11 +105,9 @@ def check_for_empty_windows(scheduler):
 def main():
     st.title("📝 Content Approval & Publishing System")
     
-    # Initialize session state for page if not exists
     if 'current_page' not in st.session_state:
         st.session_state.current_page = "review"
     
-    # Check for page change via query params (for navigation)
     query_params = st.query_params
     if 'page' in query_params:
         new_page = query_params['page']
@@ -125,10 +115,8 @@ def main():
             st.session_state.current_page = new_page
             st.rerun()
     
-    # Sidebar navigation
     st.sidebar.markdown("### Navigation")
     
-    # Custom CSS for navigation
     st.sidebar.markdown("""
     <style>
     .nav-item {
@@ -163,7 +151,6 @@ def main():
     </style>
     """, unsafe_allow_html=True)
     
-    # Navigation items
     pages = [
         ("review", "📥 Review Entries"),
         ("scheduled", "📅 Scheduled Posts"),
@@ -171,7 +158,6 @@ def main():
         ("settings", "⚙️ Settings")
     ]
     
-    # Create navigation
     nav_html = ""
     for page_key, page_label in pages:
         is_active = st.session_state.current_page == page_key
@@ -184,7 +170,6 @@ def main():
     
     st.sidebar.markdown(nav_html, unsafe_allow_html=True)
     
-    # Map page keys to page names for the rest of the app
     page_map = {
         "review": "📥 Review Entries",
         "scheduled": "📅 Scheduled Posts",
@@ -205,18 +190,15 @@ def main():
     elif page == "📊 Statistics":
         show_statistics_page()
 
-
 def show_settings_page():
     st.header("⚙️ Settings")
     
-    # Load existing config
     config_file = Path("config.json")
     config = {}
     if config_file.exists():
         with open(config_file, 'r', encoding='utf-8') as f:
             config = json.load(f)
     
-    # === Google Sheets Configuration ===
     with st.expander("📊 Google Sheets Configuration", expanded=False):
         sheet_id = st.text_input(
             "Google Sheet ID",
@@ -234,7 +216,6 @@ def show_settings_page():
         
         st.info("💡 Make sure your Google Sheets credentials are configured in Streamlit Secrets")
     
-    # === Facebook Configuration ===
     with st.expander("📘 Facebook Configuration", expanded=False):
         fb_page_id = st.text_input(
             "Facebook Page ID",
@@ -251,15 +232,12 @@ def show_settings_page():
             key="fb_token"
         )
     
-    # === Scheduling Configuration ===
     with st.expander("⏰ Scheduling Configuration", expanded=False):
         st.markdown("### Posting Time Windows")
         st.write("Configure the times when posts should be published (Israel timezone)")
         
-        # Get existing windows
         windows = config.get('posting_windows', ['09:00', '14:00', '19:00'])
         
-        # Allow editing windows
         num_windows = st.number_input("Number of posting windows per day", min_value=1, max_value=10, value=len(windows), key="num_windows")
         
         new_windows = []
@@ -289,8 +267,23 @@ def show_settings_page():
         
         if skip_jewish_holidays:
             st.info("📅 Skipped holidays: Rosh Hashanah, Yom Kippur, Sukkot, Simchat Torah, Passover, Shavuot")
+        
+        st.divider()
+        
+        st.markdown("### Apply Changes to Scheduled Posts")
+        st.write("If you changed the posting windows above, click below to reschedule all existing posts to the new times:")
+        
+        if st.button("📅 Apply to Existing Schedule", key="apply_windows"):
+            if st.session_state.scheduler:
+                with st.spinner("Rescheduling all posts on Facebook..."):
+                    try:
+                        count = st.session_state.scheduler.reschedule_all_to_new_windows()
+                        st.success(f"✅ Rescheduled {count} posts to new windows!")
+                    except Exception as e:
+                        st.error(f"Error: {str(e)}")
+            else:
+                st.warning("Scheduler not initialized")
     
-    # === Post Numbering ===
     with st.expander("🔢 Post Numbering", expanded=False):
         starting_number = st.number_input(
             "Starting Number",
@@ -308,15 +301,13 @@ def show_settings_page():
             st.success(f"Post number reset to {starting_number}")
             st.rerun()
     
-    # === Sync Configuration ===
     with st.expander("🗓️ Sync Configuration", expanded=False):
-        # Get start date from config or use today as default
         default_start_date = datetime.now(pytz.timezone('Asia/Jerusalem')).date()
         if 'sync_start_date' in config and config['sync_start_date']:
             try:
                 default_start_date = datetime.fromisoformat(config['sync_start_date']).date()
             except:
-                pass  # Use default if parsing fails
+                pass
 
         start_date = st.date_input(
             "Start reading from date",
@@ -334,7 +325,6 @@ def show_settings_page():
         
         st.divider()
         
-        # Last sync info
         last_sync = config.get('last_sync', 'Never')
         st.info(f"Last sync: **{last_sync}**")
         
@@ -342,7 +332,6 @@ def show_settings_page():
             if st.session_state.sheets_handler:
                 with st.spinner("Syncing with Google Sheets..."):
                     try:
-                        # Get start date filter
                         start_date_str = config.get('sync_start_date')
                         
                         new_entries = st.session_state.sheets_handler.fetch_new_entries()
@@ -350,7 +339,6 @@ def show_settings_page():
                         skipped_count = 0
                         
                         for entry in new_entries:
-                            # Skip entries before start date
                             if start_date_str:
                                 try:
                                     entry_date = pd.to_datetime(entry['timestamp'], dayfirst=True).date()
@@ -359,7 +347,7 @@ def show_settings_page():
                                         skipped_count += 1
                                         continue
                                 except:
-                                    pass  # If parsing fails, include the entry
+                                    pass
                             
                             if st.session_state.db.add_entry(entry['timestamp'], entry['text']):
                                 added_count += 1
@@ -373,15 +361,12 @@ def show_settings_page():
                             msg += f" Skipped {skipped_count} entries before {start_date_str}."
                         st.success(msg)
                         
-                        # Check if we should send notification
                         if config.get('notifications_enabled', False):
                             pending_count = st.session_state.db.get_statistics()['pending']
                             threshold = config.get('pending_threshold', 20)
                             
                             if pending_count > threshold:
                                 notif = NotificationHandler()
-                                
-                                # Check for empty windows
                                 next_empty = check_for_empty_windows(st.session_state.scheduler)
                                 notif.send_pending_threshold_alert(pending_count, next_empty)
                                 st.info(f"📧 Notification sent - {pending_count} pending entries exceed threshold of {threshold}")
@@ -390,7 +375,6 @@ def show_settings_page():
             else:
                 st.warning("Please configure Google Sheets settings first")
     
-    # === Notification Settings ===
     with st.expander("📧 Notification Settings", expanded=False):
         notifications_enabled = st.checkbox(
             "Enable Notifications",
@@ -399,7 +383,6 @@ def show_settings_page():
             key="notif_enabled"
         )
         
-        # App URL
         app_url = st.text_input(
             "App URL",
             value=config.get('app_url', 'http://localhost:8501'),
@@ -407,7 +390,6 @@ def show_settings_page():
             key="app_url"
         )
         
-        # Gmail Configuration
         st.markdown("### Gmail Configuration")
         st.info("💡 Use your Gmail address and an App Password (not your regular password)")
         
@@ -444,7 +426,6 @@ def show_settings_page():
         </details>
         """, unsafe_allow_html=True)
         
-        # Pending Threshold
         pending_threshold = st.number_input(
             "Pending Threshold",
             min_value=1,
@@ -454,13 +435,10 @@ def show_settings_page():
             key="pending_thresh"
         )
         
-        # Email Addresses
         st.markdown("### Notification Recipients")
         
-        # Get existing emails
         existing_emails = config.get('notification_emails', [])
         
-        # Input for new email
         new_email = st.text_input("Add email address", placeholder="email@example.com", key="new_email")
         
         col1, col2 = st.columns([1, 5])
@@ -478,7 +456,6 @@ def show_settings_page():
                 else:
                     st.warning("Please enter an email address")
         
-        # Display existing emails with delete option
         if existing_emails:
             st.write(f"**Configured emails ({len(existing_emails)}):**")
             for idx, email in enumerate(existing_emails):
@@ -496,7 +473,6 @@ def show_settings_page():
         else:
             st.info("No email addresses configured yet")
         
-        # Test Notification Button
         st.divider()
         if st.button("📧 Send Test Notification", key="test_notif"):
             if not notifications_enabled:
@@ -507,7 +483,6 @@ def show_settings_page():
                 st.warning("No email addresses configured!")
             else:
                 try:
-                    # Temporarily save config for test
                     test_config = config.copy()
                     test_config['notifications_enabled'] = notifications_enabled
                     test_config['gmail_email'] = gmail_email
@@ -519,7 +494,6 @@ def show_settings_page():
                     with open(config_file, 'w', encoding='utf-8') as f:
                         json.dump(test_config, f, indent=2, ensure_ascii=False)
                     
-                    # Send test notification
                     notif = NotificationHandler()
                     if notif.send_test_notification():
                         st.success("✅ Test notification sent successfully! Check your email.")
@@ -528,7 +502,6 @@ def show_settings_page():
                 except Exception as e:
                     st.error(f"Error sending test notification: {str(e)}")
     
-    # === Database Management ===
     with st.expander("🗑️ Database Management", expanded=False):
         st.warning("⚠️ These actions cannot be undone!")
         
@@ -551,14 +524,12 @@ def show_settings_page():
                     conn = st.session_state.db.get_connection()
                     cursor = conn.cursor()
                     cursor.execute("DELETE FROM entries")
-                    cursor.execute("DELETE FROM scheduled_posts")
                     cursor.execute("DELETE FROM processed_timestamps")
                     conn.commit()
                     conn.close()
                     st.success("✅ Database cleared!")
                     st.rerun()
     
-    # Save configuration button at the bottom
     st.divider()
     if st.button("💾 Save All Configuration", type="primary", use_container_width=True):
         config = {
@@ -598,7 +569,6 @@ def show_review_page():
         }
         button[kind="primary"]:hover {
             background-color: #218838 !important;
-            border-color: #1e7e34 !important;
         }
         button[kind="secondary"] {
             background-color: #dc3545 !important;
@@ -607,159 +577,144 @@ def show_review_page():
         }
         button[kind="secondary"]:hover {
             background-color: #c82333 !important;
-            border-color: #bd2130 !important;
-        }
-        textarea {
-            direction: rtl !important;
-            text-align: right !important;
         }
     </style>
     """, unsafe_allow_html=True)
     
-    # Get pending entries
-    pending = st.session_state.db.get_pending_entries()
+    pending_entries = st.session_state.db.get_pending_entries()
     
-    if not pending:
-        st.info("🎉 No pending entries to review!")
+    if not pending_entries:
+        st.info("No pending entries to review")
         return
     
-    st.write(f"**{len(pending)} entries** waiting for review")
+    st.success(f"**{len(pending_entries)} entries** waiting for review")
     
-    # Create 3 columns for desktop, 1 for mobile (responsive)
-    cols = st.columns([1, 1, 1])
-    
-    # Display entries in columns
-    for idx, entry in enumerate(pending):
-        # Cycle through columns (0, 1, 2, 0, 1, 2, ...)
-        col_idx = idx % 3
-        
-        with cols[col_idx]:
-            with st.container(border=True):
-                st.caption(f"Entry from {entry['timestamp']}")
-                
-                # Editable text area with dynamic height
-                text_lines = entry['text'].count('\n') + 1
-                text_length = len(entry['text'])
-                # Estimate lines: prioritize newlines, then character count
-                estimated_lines_from_chars = text_length // 40
-                # Give more weight to actual newlines (multiply by 1.2 to account for line spacing)
-                estimated_lines = max(int(text_lines * 1.5), estimated_lines_from_chars)
-                # Calculate height: 40px per line, minimum 250px, maximum 2000px
-                calculated_height = min(max(150, estimated_lines * 31), 2000)
-
-                edited_text = st.text_area(
-                    "Content",
-                    value=entry['text'],
-                    height=calculated_height,
-                    key=f"text_{entry['id']}",
-                    label_visibility="collapsed"
-                )
-                
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    if st.button("Approve", key=f"approve_{entry['id']}", type="primary", use_container_width=True):
-                        # Get next post number
-                        post_number = st.session_state.db.get_next_post_number()
-                        
-                        # Format the post with number
-                        formatted_text = f"#{post_number}\n\n{edited_text}"
-                        
-                        # Approve and schedule
-                        st.session_state.db.approve_entry(entry['id'], edited_text, 'admin')
-                        
-                        # Schedule for next available window
-                        if st.session_state.scheduler:
-                            scheduled_time = st.session_state.scheduler.schedule_post(
-                                entry['id'],
-                                formatted_text
-                            )
-                            st.success(f"✅ Approved and scheduled for {scheduled_time}")
-                        else:
-                            st.success("✅ Approved!")
-                        
+    for entry in pending_entries:
+        with st.container():
+            st.markdown(f"### 📅 {entry['timestamp']}")
+            
+            edited_text = st.text_area(
+                "Content:",
+                value=entry['text'],
+                height=150,
+                key=f"text_{entry['id']}"
+            )
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                if st.button(f"✅ Approve", key=f"approve_{entry['id']}", type="primary"):
+                    post_number = st.session_state.db.get_next_post_number()
+                    formatted_text = f"#{post_number}\n\n{edited_text}"
+                    
+                    st.session_state.db.approve_entry(entry['id'], edited_text, "admin")
+                    
+                    try:
+                        result = st.session_state.scheduler.schedule_post_to_facebook(
+                            entry['id'],
+                            formatted_text
+                        )
+                        st.success(f"✅ Scheduled to Facebook for {result['scheduled_time']}")
+                        st.info(f"Facebook Post ID: {result['facebook_post_id']}")
                         st.rerun()
-                
-                with col2:
-                    if st.button("Deny", key=f"deny_{entry['id']}", type="secondary", use_container_width=True):
-                        st.session_state.db.deny_entry(entry['id'], 'admin')
-                        st.success("❌ Entry denied")
-                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to schedule to Facebook: {str(e)}")
+                        st.info("Post was approved but not scheduled. Check Facebook token permissions.")
+            
+            with col2:
+                if st.button(f"❌ Deny", key=f"deny_{entry['id']}", type="secondary"):
+                    st.session_state.db.deny_entry(entry['id'], "admin")
+                    st.success("Entry denied")
+                    st.rerun()
+            
+            st.divider()
 
 def show_scheduled_posts_page():
     st.header("📅 Scheduled Posts")
     
-    # Get scheduled posts
-    scheduled = st.session_state.db.get_scheduled_posts()
+    st.markdown("""
+    Posts are scheduled directly to Facebook and will publish automatically.
+    You can view them in [Facebook Creator Studio](https://business.facebook.com/creatorstudio) too!
+    """)
     
-    if not scheduled:
-        st.info("No posts scheduled for publishing")
+    if not st.session_state.facebook_handler or not st.session_state.scheduler:
+        st.warning("Please configure Facebook settings first")
         return
     
-    st.write(f"**{len(scheduled)} posts** scheduled")
+    col1, col2 = st.columns([3, 1])
+    with col2:
+        if st.button("🔄 Sync with Facebook"):
+            with st.spinner("Syncing..."):
+                st.session_state.scheduler.sync_with_facebook()
+                st.success("Synced!")
+                st.rerun()
     
-    # Group by date
-    posts_by_date = {}
-    for post in scheduled:
-        scheduled_dt = datetime.fromisoformat(post['scheduled_time'])
-        date_key = scheduled_dt.date()
-        if date_key not in posts_by_date:
-            posts_by_date[date_key] = []
-        posts_by_date[date_key].append(post)
-    
-    # Display by date
-    for date_key in sorted(posts_by_date.keys()):
-        st.subheader(f"📆 {date_key.strftime('%A, %B %d, %Y')}")
+    try:
+        fb_posts = st.session_state.facebook_handler.get_scheduled_posts()
         
-        for post in sorted(posts_by_date[date_key], key=lambda x: x['scheduled_time']):
+        db_entries = st.session_state.db.get_scheduled_entries()
+        
+        entry_map = {entry['facebook_post_id']: entry for entry in db_entries}
+        
+        if not fb_posts:
+            st.info("No posts currently scheduled on Facebook")
+            return
+        
+        st.success(f"**{len(fb_posts)} posts** scheduled on Facebook")
+        
+        posts_by_date = {}
+        for post in fb_posts:
             scheduled_dt = datetime.fromisoformat(post['scheduled_time'])
+            date_key = scheduled_dt.strftime('%A, %d/%m/%Y')
             
-            with st.expander(f"🕐 {scheduled_dt.strftime('%H:%M')} - Post #{post['id']}"):
-                st.text_area("Content", value=post['text'], height=100, disabled=True, key=f"view_{post['id']}")
+            if date_key not in posts_by_date:
+                posts_by_date[date_key] = []
+            posts_by_date[date_key].append(post)
+        
+        for date_str, posts in sorted(posts_by_date.items()):
+            st.subheader(date_str)
+            
+            for post in sorted(posts, key=lambda x: x['scheduled_time']):
+                scheduled_dt = datetime.fromisoformat(post['scheduled_time'])
+                time_str = scheduled_dt.strftime('%H:%M')
                 
-                col1, col2, col3 = st.columns([2, 2, 6])
+                entry = entry_map.get(post['id'])
+                entry_id = entry['id'] if entry else None
                 
-                with col1:
-                    # Allow rescheduling
-                    new_time = st.time_input(
-                        "Reschedule to",
-                        value=scheduled_dt.time(),
-                        key=f"reschedule_time_{post['id']}"
+                with st.container():
+                    st.markdown(f"### ⏰ {time_str}")
+                    
+                    st.text_area(
+                        "Post content:",
+                        value=post['message'],
+                        height=100,
+                        key=f"post_{post['id']}",
+                        disabled=True
                     )
                     
-                    if st.button("📅 Reschedule", key=f"reschedule_{post['id']}"):
-                        new_datetime = datetime.combine(date_key, new_time)
-                        israel_tz = pytz.timezone('Asia/Jerusalem')
-                        new_datetime = israel_tz.localize(new_datetime)
-                        
-                        st.session_state.db.reschedule_post(post['id'], new_datetime.isoformat())
-                        st.success("Rescheduled!")
-                        st.rerun()
-                
-                with col2:
-                    if st.button("🗑️ Cancel", key=f"cancel_{post['id']}"):
-                        st.session_state.db.cancel_scheduled_post(post['id'])
-                        st.success("Post cancelled")
-                        st.rerun()
-    
-    # Manual posting
-    st.divider()
-    st.subheader("📤 Post Immediately")
-    
-    if st.button("🚀 Publish Next Scheduled Post Now"):
-        if scheduled:
-            next_post = scheduled[0]
-            if st.session_state.facebook_handler:
-                with st.spinner("Publishing..."):
-                    try:
-                        result = st.session_state.facebook_handler.publish_post(next_post['text'])
-                        st.session_state.db.mark_as_published(next_post['id'], result['id'])
-                        st.success(f"✅ Published successfully! Post ID: {result['id']}")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Failed to publish: {str(e)}")
-            else:
-                st.error("Facebook handler not configured")
+                    col1, col2, col3 = st.columns([2, 2, 1])
+                    
+                    with col1:
+                        if st.button(f"🔙 Return to Pending", key=f"unschedule_{post['id']}"):
+                            if entry_id:
+                                with st.spinner("Unscheduling from Facebook..."):
+                                    if st.session_state.scheduler.unschedule_post(entry_id):
+                                        st.success("✅ Returned to pending! You can edit and re-approve it.")
+                                        st.rerun()
+                                    else:
+                                        st.error("Failed to unschedule")
+                            else:
+                                st.warning("Entry not found in database")
+                    
+                    with col2:
+                        if st.button(f"🔗 View in Facebook", key=f"fb_view_{post['id']}"):
+                            st.markdown(f"[Open in Creator Studio](https://business.facebook.com/creatorstudio)")
+                    
+                    st.divider()
+        
+    except Exception as e:
+        st.error(f"Error loading scheduled posts: {str(e)}")
+        st.info("Make sure your Facebook token has 'pages_manage_posts' permission")
 
 def show_statistics_page():
     st.header("📊 Statistics")
@@ -769,34 +724,25 @@ def show_statistics_page():
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.metric("Pending Review", stats['pending'])
+        st.metric("Pending", stats['pending'])
     
     with col2:
-        st.metric("Approved", stats['approved'])
-    
-    with col3:
         st.metric("Scheduled", stats['scheduled'])
     
-    with col4:
+    with col3:
         st.metric("Published", stats['published'])
+    
+    with col4:
+        st.metric("Denied", stats['denied'])
     
     st.divider()
     
-    # Recent activity
-    st.subheader("📋 Recent Activity")
-    
+    st.subheader("Recent Activity")
     recent = st.session_state.db.get_recent_activity(20)
     
     if recent:
         df = pd.DataFrame(recent)
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
-        df = df.sort_values('timestamp', ascending=False)
-        
-        st.dataframe(
-            df[['timestamp', 'status', 'text']],
-            use_container_width=True,
-            hide_index=True
-        )
+        st.dataframe(df, use_container_width=True, hide_index=True)
     else:
         st.info("No activity yet")
 
