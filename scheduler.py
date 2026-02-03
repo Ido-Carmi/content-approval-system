@@ -18,7 +18,6 @@ class Scheduler:
         self.timezone = pytz.timezone('Asia/Jerusalem')
         
         # Jewish holidays (non-work days only) - dates for 2024-2027
-        # These are the first days of multi-day holidays that are non-work days
         self.jewish_holidays = {
             # 2024
             '2024-04-23': 'Passover Day 1',
@@ -83,7 +82,6 @@ class Scheduler:
     
     def is_shabbat(self, date: datetime.date) -> bool:
         """Check if a date is Friday or Saturday (Shabbat)"""
-        # Friday = 4, Saturday = 5
         return date.weekday() in [4, 5]
     
     def is_jewish_holiday(self, date: datetime.date) -> bool:
@@ -92,15 +90,7 @@ class Scheduler:
         return date_str in self.jewish_holidays
     
     def should_skip_date(self, date: datetime.date) -> bool:
-        """
-        Check if a date should be skipped based on config
-        
-        Args:
-            date: Date to check
-            
-        Returns:
-            True if date should be skipped, False otherwise
-        """
+        """Check if a date should be skipped based on config"""
         config = self.load_config()
         skip_shabbat = config.get('skip_shabbat', True)
         skip_holidays = config.get('skip_jewish_holidays', True)
@@ -113,101 +103,232 @@ class Scheduler:
         
         return False
     
+    def get_scheduled_times_from_facebook(self) -> List[datetime]:
+        """Get all scheduled times from Facebook"""
+        try:
+            fb_posts = self.fb.get_scheduled_posts()
+            times = []
+            for post in fb_posts:
+                dt = datetime.fromisoformat(post['scheduled_time'])
+                times.append(dt)
+            return times
+        except:
+            return []
+    
     def get_next_available_slot(self) -> datetime:
         """
-        Get the next available posting slot based on configured windows,
-        skipping Shabbat and Jewish holidays if configured
-        
-        Returns:
-            datetime object of the next available slot (with timezone)
+        Get the next available posting slot
+        Checks Facebook's scheduler to find empty slot
         """
         windows = self.load_posting_windows()
         now = datetime.now(self.timezone)
         
-        # Get already scheduled times
-        scheduled_posts = self.db.get_scheduled_posts()
-        scheduled_times = [datetime.fromisoformat(p['scheduled_time']) for p in scheduled_posts]
+        # Get already scheduled times from Facebook
+        scheduled_times = self.get_scheduled_times_from_facebook()
+        scheduled_slots = set()
+        for st in scheduled_times:
+            # Store as (date, time) tuple for comparison
+            scheduled_slots.add((st.date(), st.time().replace(second=0, microsecond=0)))
         
-        # Try to find a slot today (if not skipped)
+        # Try to find a slot today
         current_date = now.date()
         if not self.should_skip_date(current_date):
             for window_time in windows:
                 slot = self.timezone.localize(datetime.combine(current_date, window_time))
+                slot_key = (slot.date(), slot.time())
                 
-                # Check if this slot is in the future and not already taken
-                if slot > now and slot not in scheduled_times:
+                if slot > now and slot_key not in scheduled_slots:
                     return slot
         
-        # If no slots available today, start checking future days
+        # Look for future slots
         days_checked = 0
-        max_days = 365  # Don't look more than a year ahead
+        max_days = 365
         
         while days_checked < max_days:
             days_checked += 1
             check_date = current_date + timedelta(days=days_checked)
             
-            # Skip if this date should be skipped
             if self.should_skip_date(check_date):
                 continue
             
             for window_time in windows:
                 slot = self.timezone.localize(datetime.combine(check_date, window_time))
+                slot_key = (slot.date(), slot.time())
                 
-                if slot not in scheduled_times:
+                if slot_key not in scheduled_slots:
                     return slot
         
-        # Fallback: if somehow all slots are taken for a year, just use next valid day at first window
+        # Fallback
         fallback_days = 1
         while fallback_days < 365:
             fallback_date = current_date + timedelta(days=fallback_days)
             if not self.should_skip_date(fallback_date):
-                return self.timezone.localize(
-                    datetime.combine(fallback_date, windows[0])
-                )
+                return self.timezone.localize(datetime.combine(fallback_date, windows[0]))
             fallback_days += 1
         
-        # Ultimate fallback
-        return self.timezone.localize(
-            datetime.combine(current_date + timedelta(days=1), windows[0])
-        )
+        return self.timezone.localize(datetime.combine(current_date + timedelta(days=1), windows[0]))
     
-    def schedule_post(self, entry_id: int, text: str) -> str:
+    def schedule_post_to_facebook(self, entry_id: int, text: str) -> Dict:
         """
-        Schedule a post for the next available window
+        Schedule a post to Facebook's native scheduler
         
         Args:
-            entry_id: Entry ID to schedule
+            entry_id: Entry ID
             text: Post text (already formatted with number)
             
         Returns:
-            String representation of scheduled time
+            Dict with scheduled_time and facebook_post_id
         """
         scheduled_time = self.get_next_available_slot()
         
-        # Add to scheduled_posts table
-        self.db.schedule_post(entry_id, text, scheduled_time.isoformat())
+        # Schedule to Facebook
+        result = self.fb.schedule_post(text, scheduled_time)
         
-        return scheduled_time.strftime("%d/%m/%Y %H:%M")
+        # Save to database
+        self.db.schedule_to_facebook(
+            entry_id,
+            result['id'],
+            result['scheduled_time']
+        )
+        
+        return {
+            'scheduled_time': scheduled_time.strftime("%d/%m/%Y %H:%M"),
+            'facebook_post_id': result['id']
+        }
     
-    def publish_due_posts(self):
+    def reschedule_post(self, entry_id: int, new_time: datetime) -> bool:
         """
-        Publish all posts that are due now
-        """
-        if not self.fb:
-            print("Facebook handler not configured")
-            return
+        Reschedule a post to a new time on Facebook
         
-        now = datetime.now(self.timezone)
-        scheduled = self.db.get_scheduled_posts()
-        
-        for post in scheduled:
-            scheduled_time = datetime.fromisoformat(post['scheduled_time'])
+        Args:
+            entry_id: Entry ID
+            new_time: New scheduled time
             
-            # If the scheduled time has passed, publish it
-            if scheduled_time <= now:
-                try:
-                    result = self.fb.publish_post(post['text'])
-                    self.db.mark_as_published(post['id'], result['id'])
-                    print(f"✓ Published post #{post['id']}: {result['id']}")
-                except Exception as e:
-                    print(f"✗ Failed to publish post #{post['id']}: {str(e)}")
+        Returns:
+            True if successful
+        """
+        # Get entry with Facebook post ID
+        entries = self.db.get_scheduled_entries()
+        entry = next((e for e in entries if e['id'] == entry_id), None)
+        
+        if not entry or not entry['facebook_post_id']:
+            return False
+        
+        try:
+            # Update on Facebook
+            result = self.fb.update_scheduled_post(
+                entry['facebook_post_id'],
+                new_time=new_time
+            )
+            
+            # Update in database
+            self.db.schedule_to_facebook(
+                entry_id,
+                result['id'],
+                result['scheduled_time']
+            )
+            
+            return True
+        except Exception as e:
+            print(f"Failed to reschedule: {str(e)}")
+            return False
+    
+    def unschedule_post(self, entry_id: int) -> bool:
+        """
+        Remove post from Facebook scheduler and return to pending
+        
+        Args:
+            entry_id: Entry ID
+            
+        Returns:
+            True if successful
+        """
+        # Get entry with Facebook post ID
+        entries = self.db.get_scheduled_entries()
+        entry = next((e for e in entries if e['id'] == entry_id), None)
+        
+        if not entry or not entry['facebook_post_id']:
+            return False
+        
+        try:
+            # Delete from Facebook
+            self.fb.delete_scheduled_post(entry['facebook_post_id'])
+            
+            # Update database - return to pending
+            self.db.unschedule_entry(entry_id)
+            
+            return True
+        except Exception as e:
+            print(f"Failed to unschedule: {str(e)}")
+            return False
+    
+    def reschedule_all_to_new_windows(self) -> int:
+        """
+        Reschedule all scheduled posts to match new posting windows
+        
+        Returns:
+            Number of posts rescheduled
+        """
+        # Get all scheduled entries
+        entries = self.db.get_scheduled_entries()
+        
+        if not entries:
+            return 0
+        
+        # Get current windows
+        windows = self.load_posting_windows()
+        
+        # Group entries by date
+        entries_by_date = {}
+        for entry in entries:
+            scheduled_dt = datetime.fromisoformat(entry['scheduled_time'])
+            date_key = scheduled_dt.date()
+            
+            if date_key not in entries_by_date:
+                entries_by_date[date_key] = []
+            entries_by_date[date_key].append(entry)
+        
+        rescheduled_count = 0
+        
+        # For each date, redistribute posts across windows
+        for date, date_entries in sorted(entries_by_date.items()):
+            if self.should_skip_date(date):
+                # This date should be skipped now - reschedule to next valid date
+                for entry in date_entries:
+                    new_time = self.get_next_available_slot()
+                    if self.reschedule_post(entry['id'], new_time):
+                        rescheduled_count += 1
+            else:
+                # Redistribute across windows for this date
+                for idx, entry in enumerate(date_entries):
+                    window_idx = idx % len(windows)
+                    new_time = self.timezone.localize(
+                        datetime.combine(date, windows[window_idx])
+                    )
+                    
+                    if self.reschedule_post(entry['id'], new_time):
+                        rescheduled_count += 1
+        
+        return rescheduled_count
+    
+    def sync_with_facebook(self):
+        """
+        Sync local database with Facebook's scheduler
+        Mark posts as published if they're no longer in Facebook's scheduled list
+        """
+        try:
+            # Get scheduled posts from Facebook
+            fb_posts = self.fb.get_scheduled_posts()
+            fb_post_ids = {post['id'] for post in fb_posts}
+            
+            # Get scheduled posts from database
+            db_entries = self.db.get_scheduled_entries()
+            
+            # Check which posts are no longer scheduled (were published)
+            for entry in db_entries:
+                if entry['facebook_post_id'] not in fb_post_ids:
+                    # Post was published
+                    self.db.mark_as_published(entry['id'])
+                    print(f"✓ Post #{entry['id']} marked as published")
+        except Exception as e:
+            print(f"Sync error: {str(e)}")

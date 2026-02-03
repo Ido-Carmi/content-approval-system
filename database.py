@@ -1,71 +1,56 @@
 import sqlite3
 from datetime import datetime
-import json
+from pathlib import Path
 from typing import List, Dict, Optional
+import time
 
 class Database:
-    def __init__(self, db_path: str = "content_system_new.db"):
-        self.db_path = db_path
+    def __init__(self, db_file: str = "content_system.db"):
+        """Initialize database connection"""
+        self.db_file = db_file
         self.init_database()
     
     def get_connection(self):
-        """Get a database connection with proper settings"""
-        conn = sqlite3.connect(
-            self.db_path, 
-            timeout=30,  # Increased timeout
-            isolation_level=None,  # Autocommit mode
-            check_same_thread=False
-        )
-        conn.execute('PRAGMA journal_mode=WAL')
-        conn.execute('PRAGMA busy_timeout=30000')  # 30 second busy timeout
+        """Get database connection with optimized settings"""
+        db_path = Path(self.db_file)
+        conn = sqlite3.connect(str(db_path), timeout=30, check_same_thread=False)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=30000")
+        conn.row_factory = sqlite3.Row
         return conn
     
     def init_database(self):
-        """Initialize the database with required tables"""
-        conn = sqlite3.connect(self.db_path)
+        """Create tables if they don't exist"""
+        conn = self.get_connection()
         cursor = conn.cursor()
         
-        # Create entries table
+        # Entries table - stores all submitted content
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS entries (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                sheet_timestamp TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
                 text TEXT NOT NULL,
-                edited_text TEXT,
                 status TEXT DEFAULT 'pending',
                 approved_by TEXT,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(sheet_timestamp, text)
-            )
-        ''')
-        
-        # Create scheduled_posts table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS scheduled_posts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                entry_id INTEGER,
-                text TEXT NOT NULL,
-                scheduled_time TEXT NOT NULL,
-                published BOOLEAN DEFAULT 0,
+                approved_at TEXT,
                 facebook_post_id TEXT,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (entry_id) REFERENCES entries(id)
+                scheduled_time TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         
-        # Create post_counter table
+        # Post numbering table
         cursor.execute('''
-            CREATE TABLE IF NOT EXISTS post_counter (
+            CREATE TABLE IF NOT EXISTS post_numbers (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 current_number INTEGER DEFAULT 1
             )
         ''')
         
-        # Initialize counter if not exists
-        cursor.execute('INSERT OR IGNORE INTO post_counter (id, current_number) VALUES (1, 1)')
+        # Initialize post number if not exists
+        cursor.execute('INSERT OR IGNORE INTO post_numbers (id, current_number) VALUES (1, 1)')
         
-        # Create processed_timestamps table to track what we've already read
+        # Processed timestamps to avoid duplicates
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS processed_timestamps (
                 timestamp TEXT PRIMARY KEY,
@@ -77,16 +62,29 @@ class Database:
         conn.close()
     
     def add_entry(self, timestamp: str, text: str) -> bool:
-        """Add a new entry from Google Sheets"""
+        """
+        Add a new entry if timestamp hasn't been processed
+        
+        Returns:
+            True if added, False if duplicate
+        """
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
         try:
-            conn = self.get_connection()
-            cursor = conn.cursor()
+            # Check if already processed
+            cursor.execute('SELECT 1 FROM processed_timestamps WHERE timestamp = ?', (timestamp,))
+            if cursor.fetchone():
+                conn.close()
+                return False
             
+            # Add entry
             cursor.execute('''
-                INSERT INTO entries (sheet_timestamp, text, status)
+                INSERT INTO entries (timestamp, text, status)
                 VALUES (?, ?, 'pending')
             ''', (timestamp, text))
             
+            # Mark timestamp as processed
             cursor.execute('''
                 INSERT INTO processed_timestamps (timestamp)
                 VALUES (?)
@@ -96,53 +94,127 @@ class Database:
             conn.close()
             return True
         except sqlite3.IntegrityError:
-            # Entry already exists
+            conn.close()
             return False
     
     def get_pending_entries(self) -> List[Dict]:
-        """Get all entries pending review"""
+        """Get all pending entries"""
         conn = self.get_connection()
-        conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
         cursor.execute('''
-            SELECT id, sheet_timestamp as timestamp, text, created_at
+            SELECT id, timestamp, text
             FROM entries
             WHERE status = 'pending'
-            ORDER BY created_at ASC
+            ORDER BY timestamp ASC
         ''')
         
-        entries = [dict(row) for row in cursor.fetchall()]
+        rows = cursor.fetchall()
         conn.close()
-        return entries
+        
+        return [dict(row) for row in rows]
     
     def approve_entry(self, entry_id: int, edited_text: str, approved_by: str):
-        """Approve an entry"""
+        """Mark entry as approved"""
         conn = self.get_connection()
         cursor = conn.cursor()
         
         cursor.execute('''
             UPDATE entries
             SET status = 'approved',
-                edited_text = ?,
+                text = ?,
                 approved_by = ?,
-                updated_at = CURRENT_TIMESTAMP
+                approved_at = ?
             WHERE id = ?
-        ''', (edited_text, approved_by, entry_id))
+        ''', (edited_text, approved_by, datetime.now().isoformat(), entry_id))
+        
+        conn.commit()
+        conn.close()
+    
+    def schedule_to_facebook(self, entry_id: int, facebook_post_id: str, scheduled_time: str):
+        """
+        Mark entry as scheduled with Facebook post ID
+        
+        Args:
+            entry_id: Local entry ID
+            facebook_post_id: Facebook's post ID
+            scheduled_time: ISO format scheduled time
+        """
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            UPDATE entries
+            SET status = 'scheduled',
+                facebook_post_id = ?,
+                scheduled_time = ?
+            WHERE id = ?
+        ''', (facebook_post_id, scheduled_time, entry_id))
+        
+        conn.commit()
+        conn.close()
+    
+    def unschedule_entry(self, entry_id: int):
+        """
+        Return a scheduled entry back to pending
+        
+        Args:
+            entry_id: Entry ID to unschedule
+        """
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            UPDATE entries
+            SET status = 'pending',
+                facebook_post_id = NULL,
+                scheduled_time = NULL
+            WHERE id = ?
+        ''', (entry_id,))
+        
+        conn.commit()
+        conn.close()
+    
+    def get_scheduled_entries(self) -> List[Dict]:
+        """Get all scheduled entries with Facebook post IDs"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT id, text, facebook_post_id, scheduled_time
+            FROM entries
+            WHERE status = 'scheduled'
+            ORDER BY scheduled_time ASC
+        ''')
+        
+        rows = cursor.fetchall()
+        conn.close()
+        
+        return [dict(row) for row in rows]
+    
+    def mark_as_published(self, entry_id: int):
+        """Mark entry as published"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            UPDATE entries
+            SET status = 'published'
+            WHERE id = ?
+        ''', (entry_id,))
         
         conn.commit()
         conn.close()
     
     def deny_entry(self, entry_id: int, denied_by: str):
-        """Deny an entry"""
+        """Mark entry as denied"""
         conn = self.get_connection()
         cursor = conn.cursor()
         
         cursor.execute('''
             UPDATE entries
             SET status = 'denied',
-                approved_by = ?,
-                updated_at = CURRENT_TIMESTAMP
+                approved_by = ?
             WHERE id = ?
         ''', (denied_by, entry_id))
         
@@ -150,209 +222,68 @@ class Database:
         conn.close()
     
     def get_next_post_number(self) -> int:
-        """Get the next post number and increment counter"""
+        """Get and increment the post number"""
         conn = self.get_connection()
         cursor = conn.cursor()
         
-        cursor.execute('SELECT current_number FROM post_counter WHERE id = 1')
-        current = cursor.fetchone()[0]
+        cursor.execute('SELECT current_number FROM post_numbers WHERE id = 1')
+        current = cursor.fetchone()['current_number']
         
-        cursor.execute('UPDATE post_counter SET current_number = current_number + 1 WHERE id = 1')
+        cursor.execute('UPDATE post_numbers SET current_number = current_number + 1 WHERE id = 1')
         
         conn.commit()
         conn.close()
+        
         return current
     
     def get_current_post_number(self) -> int:
-        """Get the current post number without incrementing"""
+        """Get current post number without incrementing"""
         conn = self.get_connection()
         cursor = conn.cursor()
         
-        cursor.execute('SELECT current_number FROM post_counter WHERE id = 1')
-        current = cursor.fetchone()[0]
+        cursor.execute('SELECT current_number FROM post_numbers WHERE id = 1')
+        current = cursor.fetchone()['current_number']
         
         conn.close()
         return current
     
-    def reset_post_number(self, number: int):
-        """Reset the post counter to a specific number"""
+    def reset_post_number(self, number: int = 1):
+        """Reset post number to specified value"""
         conn = self.get_connection()
         cursor = conn.cursor()
         
-        cursor.execute('UPDATE post_counter SET current_number = ? WHERE id = 1', (number,))
-        
-        conn.commit()
-        conn.close()
-    
-    def schedule_post(self, entry_id: int, text: str, scheduled_time: str):
-        """Schedule a post for publishing"""
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            INSERT INTO scheduled_posts (entry_id, text, scheduled_time)
-            VALUES (?, ?, ?)
-        ''', (entry_id, text, scheduled_time))
-        
-        # Update entry status
-        cursor.execute('''
-            UPDATE entries
-            SET status = 'scheduled',
-                updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-        ''', (entry_id,))
-        
-        conn.commit()
-        conn.close()
-    
-    def get_scheduled_posts(self) -> List[Dict]:
-        """Get all scheduled posts that haven't been published"""
-        conn = self.get_connection()
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            SELECT id, entry_id, text, scheduled_time, created_at
-            FROM scheduled_posts
-            WHERE published = 0
-            ORDER BY scheduled_time ASC
-        ''')
-        
-        posts = [dict(row) for row in cursor.fetchall()]
-        conn.close()
-        return posts
-    
-    def get_posts_due_for_publishing(self, current_time: str) -> List[Dict]:
-        """Get posts that should be published now"""
-        conn = self.get_connection()
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            SELECT id, entry_id, text, scheduled_time
-            FROM scheduled_posts
-            WHERE published = 0 AND scheduled_time <= ?
-            ORDER BY scheduled_time ASC
-        ''', (current_time,))
-        
-        posts = [dict(row) for row in cursor.fetchall()]
-        conn.close()
-        return posts
-    
-    def mark_as_published(self, post_id: int, facebook_post_id: str):
-        """Mark a scheduled post as published"""
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            UPDATE scheduled_posts
-            SET published = 1,
-                facebook_post_id = ?
-            WHERE id = ?
-        ''', (facebook_post_id, post_id))
-        
-        # Update entry status
-        cursor.execute('''
-            UPDATE entries
-            SET status = 'published',
-                updated_at = CURRENT_TIMESTAMP
-            WHERE id = (SELECT entry_id FROM scheduled_posts WHERE id = ?)
-        ''', (post_id,))
-        
-        conn.commit()
-        conn.close()
-    
-    def reschedule_post(self, post_id: int, new_time: str):
-        """Reschedule a post to a new time"""
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            UPDATE scheduled_posts
-            SET scheduled_time = ?
-            WHERE id = ?
-        ''', (new_time, post_id))
-        
-        conn.commit()
-        conn.close()
-    
-    def cancel_scheduled_post(self, post_id: int):
-        """Cancel a scheduled post"""
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        
-        # Get entry_id before deleting
-        cursor.execute('SELECT entry_id FROM scheduled_posts WHERE id = ?', (post_id,))
-        result = cursor.fetchone()
-        
-        if result:
-            entry_id = result[0]
-            
-            # Delete the scheduled post
-            cursor.execute('DELETE FROM scheduled_posts WHERE id = ?', (post_id,))
-            
-            # Update entry status back to approved
-            cursor.execute('''
-                UPDATE entries
-                SET status = 'approved',
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-            ''', (entry_id,))
+        cursor.execute('UPDATE post_numbers SET current_number = ? WHERE id = 1', (number,))
         
         conn.commit()
         conn.close()
     
     def get_statistics(self) -> Dict:
-        """Get overall statistics"""
+        """Get statistics about entries"""
         conn = self.get_connection()
         cursor = conn.cursor()
         
-        cursor.execute('SELECT COUNT(*) FROM entries WHERE status = "pending"')
-        pending = cursor.fetchone()[0]
+        stats = {}
         
-        cursor.execute('SELECT COUNT(*) FROM entries WHERE status = "approved"')
-        approved = cursor.fetchone()[0]
-        
-        cursor.execute('SELECT COUNT(*) FROM scheduled_posts WHERE published = 0')
-        scheduled = cursor.fetchone()[0]
-        
-        cursor.execute('SELECT COUNT(*) FROM entries WHERE status = "published"')
-        published = cursor.fetchone()[0]
+        for status in ['pending', 'approved', 'scheduled', 'published', 'denied']:
+            cursor.execute('SELECT COUNT(*) as count FROM entries WHERE status = ?', (status,))
+            stats[status] = cursor.fetchone()['count']
         
         conn.close()
-        
-        return {
-            'pending': pending,
-            'approved': approved,
-            'scheduled': scheduled,
-            'published': published
-        }
+        return stats
     
     def get_recent_activity(self, limit: int = 20) -> List[Dict]:
-        """Get recent activity"""
+        """Get recent entries"""
         conn = self.get_connection()
-        conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
         cursor.execute('''
-            SELECT sheet_timestamp as timestamp, status, 
-                   COALESCE(edited_text, text) as text, updated_at
+            SELECT timestamp, status, text
             FROM entries
-            ORDER BY updated_at DESC
+            ORDER BY created_at DESC
             LIMIT ?
         ''', (limit,))
         
-        activities = [dict(row) for row in cursor.fetchall()]
+        rows = cursor.fetchall()
         conn.close()
-        return activities
-    
-    def is_timestamp_processed(self, timestamp: str) -> bool:
-        """Check if a timestamp has been processed"""
-        conn = self.get_connection()
-        cursor = conn.cursor()
         
-        cursor.execute('SELECT 1 FROM processed_timestamps WHERE timestamp = ?', (timestamp,))
-        result = cursor.fetchone()
-        
-        conn.close()
-        return result is not None
+        return [dict(row) for row in rows]
