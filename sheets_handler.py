@@ -108,13 +108,52 @@ class SheetsHandler:
             # Filter by last processed timestamp if provided
             if last_processed_Timestamp:
                 try:
-                    df['timestamp_dt'] = pd.to_datetime(df['timestamp'], errors='coerce')
-                    last_dt = pd.to_datetime(last_processed_Timestamp, errors='coerce')
+                    print(f"=" * 60)
+                    print(f"DATE FILTERING DEBUG")
+                    print(f"=" * 60)
+                    print(f"Input last_processed_Timestamp = '{last_processed_Timestamp}'")
+                    print(f"Total rows before filtering: {len(df)}")
+                    
+                    # Show first 5 raw timestamps
+                    print(f"\nFirst 5 RAW timestamps from sheet:")
+                    for i, ts in enumerate(df['timestamp'].head(5)):
+                        print(f"  [{i}] '{ts}' (type: {type(ts)})")
+                    
+                    # Parse timestamps
+                    df['timestamp_dt'] = pd.to_datetime(df['timestamp'], errors='coerce', dayfirst=True)
+                    last_dt = pd.to_datetime(last_processed_Timestamp, errors='coerce', dayfirst=True)
+                    
+                    print(f"\nParsed filter date: {last_dt}")
+                    print(f"Filter date type: {type(last_dt)}")
+                    
+                    print(f"\nFirst 5 PARSED timestamps:")
+                    for i, ts in enumerate(df['timestamp_dt'].head(5)):
+                        print(f"  [{i}] {ts}")
+                    
+                    # Show comparison
+                    print(f"\nComparison (should keep rows where timestamp > {last_dt}):")
+                    for i in range(min(5, len(df))):
+                        ts = df['timestamp_dt'].iloc[i]
+                        keep = ts > last_dt if pd.notna(ts) and pd.notna(last_dt) else False
+                        print(f"  [{i}] {ts} > {last_dt} = {keep}")
+                    
                     if pd.notna(last_dt):
+                        before_count = len(df)
                         df = df[df['timestamp_dt'] > last_dt]
+                        after_count = len(df)
+                        print(f"\nFILTERING RESULT:")
+                        print(f"  Before: {before_count} entries")
+                        print(f"  After:  {after_count} entries")
+                        print(f"  Removed: {before_count - after_count} entries")
+                    else:
+                        print(f"\nWARNING: last_dt is NaT (not a valid date), skipping filter")
+                    
                     df = df.drop('timestamp_dt', axis=1)
+                    print(f"=" * 60)
                 except Exception as e:
-                    print(f"Warning: Could not filter by timestamp: {e}")
+                    print(f"ERROR in date filtering: {e}")
+                    import traceback
+                    traceback.print_exc()
 
             # Convert to list of dictionaries
             entries = []

@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+{% block title %}הגדרות{% endblock %}
+{% block page_title %}<div class="text-center">⚙️ הגדרות</div>{% endblock %}
+{% block content %}
+<form method="POST">
+    <div class="row">
+        <div class="col-lg-6">
+            <!-- Google Sheets Settings -->
+            <div class="card mb-3">
+                <div class="card-header" data-bs-toggle="collapse" data-bs-target="#sheetsSettings" style="cursor: pointer;">
+                    <h5 class="mb-0"><i class="bi bi-table"></i> Google Sheets</h5>
+                </div>
+                <div id="sheetsSettings" class="collapse">
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <label class="form-label">Sheet ID</label>
+                            <input type="text" name="google_sheet_id" class="form-control" value="{{config.google_sheet_id or ''}}">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">קרא שורות מתאריך</label>
+                            <input type="date" name="read_from_date" class="form-control" 
+                                   value="{{config.read_from_date or ''}}">
+                            <small class="text-muted">השאר ריק כדי לקרוא הכל</small>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">מספר פוסט הבא</label>
+                            <input type="number" name="next_post_number" class="form-control" 
+                                   value="{{config.next_post_number or current_number}}"
+                                   min="1">
+                            <small class="text-muted">הפוסט הבא יהיה: #{{ current_number }}</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Facebook Settings -->
+            <div class="card mb-3">
+                <div class="card-header" data-bs-toggle="collapse" data-bs-target="#facebookSettings" style="cursor: pointer;">
+                    <h5 class="mb-0"><i class="bi bi-facebook"></i> Facebook</h5>
+                </div>
+                <div id="facebookSettings" class="collapse">
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <label class="form-label">Page ID</label>
+                            <input type="text" name="facebook_page_id" class="form-control" value="{{config.facebook_page_id or ''}}">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Access Token</label>
+                            <input type="password" name="facebook_access_token" class="form-control" value="{{config.facebook_access_token or ''}}">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Posting Schedule Settings -->
+            <div class="card mb-3">
+                <div class="card-header" data-bs-toggle="collapse" data-bs-target="#scheduleSettings" style="cursor: pointer;">
+                    <h5 class="mb-0"><i class="bi bi-clock"></i> זמני פרסום</h5>
+                </div>
+                <div id="scheduleSettings" class="collapse">
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <label class="form-label">שעות פרסום (מופרדות בפסיק)</label>
+                            <input type="text" name="posting_windows" class="form-control" 
+                                   placeholder="09:00,13:00,17:00,21:00"
+                                   value="{{','.join(config.posting_windows) if config.posting_windows else ''}}">
+                        </div>
+                        <div class="form-check mb-2">
+                            <input type="checkbox" name="skip_shabbat" class="form-check-input" id="skipShabbat" {{' checked' if config.skip_shabbat}}>
+                            <label class="form-check-label" for="skipShabbat">דלג על שבת ושישי</label>
+                        </div>
+                        <div class="form-check">
+                            <input type="checkbox" name="skip_jewish_holidays" class="form-check-input" id="skipHolidays" {{' checked' if config.skip_jewish_holidays}}>
+                            <label class="form-check-label" for="skipHolidays">דלג על חגים יהודיים</label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-6">
+            <!-- Notification Settings -->
+            <div class="card mb-3">
+                <div class="card-header" data-bs-toggle="collapse" data-bs-target="#notificationSettings" style="cursor: pointer;">
+                    <h5 class="mb-0"><i class="bi bi-bell"></i> התראות אימייל</h5>
+                </div>
+                <div id="notificationSettings" class="collapse">
+                    <div class="card-body">
+                        <div class="form-check mb-3">
+                            <input type="checkbox" name="notifications_enabled" class="form-check-input" id="notifEnabled" {{' checked' if config.notifications_enabled}}>
+                            <label class="form-check-label" for="notifEnabled">אפשר התראות</label>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Gmail Email</label>
+                            <input type="email" name="gmail_email" class="form-control" value="{{config.gmail_email or ''}}">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Gmail App Password</label>
+                            <input type="password" name="gmail_app_password" class="form-control" value="{{config.gmail_app_password or ''}}">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">כתובות אימייל (מופרדות בפסיק)</label>
+                            <input type="text" name="notification_emails" class="form-control" 
+                                   placeholder="email1@example.com,email2@example.com"
+                                   value="{{','.join(config.notification_emails) if config.notification_emails else ''}}">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">סף התראה (מספר ערכים ממתינים)</label>
+                            <input type="number" name="pending_threshold" class="form-control" value="{{config.pending_threshold or 20}}">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">כתובת האפליקציה</label>
+                            <input type="text" name="app_url" class="form-control" 
+                                   placeholder="https://idf-confessions.duckdns.org"
+                                   value="{{config.app_url or ''}}">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Advanced Settings -->
+            <div class="card mb-3">
+                <div class="card-header bg-danger text-white" data-bs-toggle="collapse" data-bs-target="#dangerSettings" style="cursor: pointer;">
+                    <h5 class="mb-0 text-white"><i class="bi bi-exclamation-triangle text-white"></i> אזור סכנה</h5>
+                </div>
+                <div id="dangerSettings" class="collapse">
+                    <div class="card-body bg-light">
+                        <div class="alert alert-warning">
+                            <strong>⚠️ אזהרה!</strong> פעולות אלה לא ניתנות לביטול
+                        </div>
+                        <div class="d-grid gap-2">
+                            <button type="button" class="btn btn-warning text-dark" onclick="if(confirm('האם למחוק את כל הערכים הממתינים?')) { document.getElementById('clearPendingForm').submit(); }">
+                                <i class="bi bi-trash"></i> מחק ערכים ממתינים
+                            </button>
+                            <button type="button" class="btn btn-danger text-white" onclick="if(confirm('האם למחוק את כל מסד הנתונים? (לא ניתן לשחזר!)')) { document.getElementById('deleteDbForm').submit(); }">
+                                <i class="bi bi-database-x"></i> מחק את כל מסד הנתונים
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-lg-6 mx-auto">
+            <button type="submit" class="btn btn-primary btn-lg w-100 mb-3">
+                <i class="bi bi-save"></i> שמור הגדרות
+            </button>
+        </div>
+    </div>
+</form>
+
+<!-- Hidden forms for dangerous actions -->
+<form id="clearPendingForm" action="{{ url_for('clear_pending') }}" method="POST" style="display: none;"></form>
+<form id="deleteDbForm" action="{{ url_for('delete_database') }}" method="POST" style="display: none;"></form>
+
+<div class="row">
+    <div class="col-lg-6 mx-auto">
+        <form action="{{ url_for('test_notification') }}" method="POST">
+            <button type="submit" class="btn btn-secondary w-100">
+                <i class="bi bi-send"></i> שלח התראת בדיקה
+            </button>
+        </form>
+    </div>
+</div>
+{% endblock %}

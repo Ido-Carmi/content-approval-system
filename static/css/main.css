@@ -1,0 +1,352 @@
+/* Sidebar Styles - Vibrant Blue */
+#wrapper {
+    overflow-x: hidden;
+}
+
+#sidebar-wrapper {
+    min-height: 100vh;
+    margin-right: -15rem;
+    transition: margin 0.25s ease-out;
+    width: 15rem;
+    background: linear-gradient(180deg, #667eea 0%, #764ba2 100%);
+    box-shadow: 2px 0 10px rgba(0,0,0,0.1);
+}
+
+#sidebar-wrapper .sidebar-heading {
+    padding: 1rem 1.25rem;
+    font-size: 1.3rem;
+    font-weight: bold;
+    background: rgba(0,0,0,0.2);
+    color: white;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+}
+
+#page-content-wrapper {
+    min-width: 100vw;
+    background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+    min-height: 100vh;
+}
+
+#wrapper.toggled #sidebar-wrapper {
+    margin-right: 0;
+}
+
+.list-group-item {
+    border-right: none;
+    background: transparent;
+    color: rgba(255,255,255,0.95);
+    border: none;
+    transition: all 0.3s;
+    font-weight: 500;
+}
+
+.list-group-item:hover {
+    background: rgba(255,255,255,0.2);
+    color: white;
+    transform: translateX(-5px);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+}
+
+.list-group-item.active {
+    background: linear-gradient(90deg, rgba(255,255,255,0.3), rgba(255,255,255,0.15));
+    border-color: transparent;
+    color: white;
+    font-weight: bold;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+}
+
+/* Card Styles - Colorful & Vibrant */
+.card {
+    transition: all 0.3s;
+    border: none;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.card:hover, .hover-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 8px 20px rgba(0,0,0,0.2);
+}
+
+.card-header {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border-bottom: none;
+    font-weight: 600;
+    color: white !important;
+    padding: 0.75rem 1rem;
+}
+
+.card-header small, .card-header i {
+    color: white !important;
+}
+
+/* Compact Card for Scheduled Posts */
+.compact-card .card-header {
+    background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+    padding: 0.25rem 0.5rem;
+}
+
+/* Button Styles - Vibrant Gradients */
+.btn {
+    transition: all 0.2s;
+    font-weight: 600;
+    border: none;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.15);
+}
+
+.btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+}
+
+.btn-success {
+    background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+    border: none;
+    color: white;
+}
+
+.btn-success:hover {
+    background: linear-gradient(135deg, #0e8577 0%, #2ed96a 100%);
+}
+
+.btn-danger {
+    background: linear-gradient(135deg, #eb3349 0%, #f45c43 100%);
+    border: none;
+    color: white;
+}
+
+.btn-danger:hover {
+    background: linear-gradient(135deg, #d42d3f 0%, #e04a37 100%);
+}
+
+.btn-primary {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border: none;
+    color: white;
+}
+
+.btn-primary:hover {
+    background: linear-gradient(135deg, #5568d3 0%, #663d8f 100%);
+}
+
+.btn-warning {
+    background: linear-gradient(135deg, #f2994a 0%, #f2c94c 100%);
+    border: none;
+    color: #333;
+}
+
+.btn-warning:hover {
+    background: linear-gradient(135deg, #e88838 0%, #e0b739 100%);
+}
+
+.btn-secondary {
+    background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
+    border: none;
+    color: #333;
+}
+
+/* Textarea Styles - Colorful Focus */
+textarea {
+    font-family: inherit;
+    resize: vertical;
+    border: 2px solid #e9ecef;
+    transition: all 0.3s;
+    border-radius: 8px;
+}
+
+textarea:focus {
+    border-color: #667eea;
+    box-shadow: 0 0 0 0.3rem rgba(102,126,234,0.25);
+    background: linear-gradient(to bottom, #ffffff, #f8f9ff);
+}
+
+/* Alert Styles - Vibrant Colors */
+.alert {
+    border: none;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    font-weight: 500;
+}
+
+.alert-success {
+    background: linear-gradient(135deg, #d4edda 0%, #b8e7c5 100%);
+    color: #155724;
+}
+
+.alert-info {
+    background: linear-gradient(135deg, #d1ecf1 0%, #b3e0f2 100%);
+    color: #0c5460;
+}
+
+.alert-warning {
+    background: linear-gradient(135deg, #fff3cd 0%, #ffe69c 100%);
+    color: #856404;
+}
+
+.alert-danger {
+    background: linear-gradient(135deg, #f8d7da 0%, #f5c6cb 100%);
+    color: #721c24;
+}
+
+/* Page Title Styling */
+h2, .page-title {
+    color: #667eea;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    font-weight: bold;
+}
+
+/* Responsive */
+@media (min-width: 768px) {
+    #sidebar-wrapper {
+        margin-right: 0;
+    }
+
+    #page-content-wrapper {
+        min-width: 0;
+        width: 100%;
+    }
+
+    #wrapper.toggled #sidebar-wrapper {
+        margin-right: -15rem;
+    }
+}
+
+/* RTL Adjustments */
+[dir="rtl"] .list-group-item {
+    border-left: none;
+    border-right: none;
+}
+
+/* Loading Spinner */
+.htmx-request .htmx-indicator {
+    display: inline-block;
+}
+
+.htmx-indicator {
+    display: none;
+}
+
+/* Badge Styles - Colorful */
+.badge {
+    font-weight: 600;
+    padding: 0.4em 0.6em;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.15);
+}
+
+.bg-dark {
+    background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%) !important;
+}
+
+/* Form Controls - Enhanced */
+.form-control:focus {
+    border-color: #667eea;
+    box-shadow: 0 0 0 0.2rem rgba(102,126,234,0.25);
+}
+
+.form-check-input:checked {
+    background-color: #667eea;
+    border-color: #667eea;
+}
+
+/* Navbar - Box shadow only (colors set per-page in template) */
+.navbar {
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+
+/* Smooth Transitions */
+* {
+    transition: background-color 0.3s, color 0.3s;
+}
+
+/* Collapsible Card Headers - Enhanced */
+.card-header[data-bs-toggle="collapse"] {
+    cursor: pointer;
+    user-select: none;
+}
+
+.card-header[data-bs-toggle="collapse"]:hover {
+    opacity: 0.9;
+    transform: scale(1.01);
+}
+
+/* Success Animation */
+@keyframes successPulse {
+    0% { box-shadow: 0 0 0 0 rgba(56, 239, 125, 0.7); }
+    70% { box-shadow: 0 0 0 10px rgba(56, 239, 125, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(56, 239, 125, 0); }
+}
+
+.btn-success:active {
+    animation: successPulse 0.6s;
+}
+
+/* Danger Zone Special Styling */
+.bg-danger {
+    background: linear-gradient(135deg, #eb3349 0%, #f45c43 100%) !important;
+}
+
+/* Card Body Padding */
+.card-body {
+    padding: 1rem;
+    background: white;
+}
+
+/* Grid Spacing */
+.g-2 {
+    gap: 0.5rem !important;
+}
+
+.g-3 {
+    gap: 1rem !important;
+}
+
+/* Compact spacing for scheduled posts */
+.mb-1 {
+    margin-bottom: 0.25rem !important;
+}
+
+.mb-0 {
+    margin-bottom: 0 !important;
+}
+
+/* Text colors */
+.text-white {
+    color: white !important;
+}
+
+.text-dark {
+    color: #333 !important;
+}
+
+/* Ultra compact cards for scheduled posts */
+.compact-card {
+    margin-bottom: 2px !important;
+}
+
+.compact-card .card-header {
+    padding: 2px 4px !important;
+    min-height: 28px !important;
+}
+
+.compact-card .card-body {
+    padding: 4px !important;
+}
+
+/* Make textareas more compact */
+textarea.form-control-sm {
+    font-size: 0.75rem;
+    line-height: 1.2;
+    padding: 0.25rem;
+}
+
+/* Compact buttons */
+.btn-sm {
+    font-size: 0.65rem;
+    padding: 0.1rem 0.3rem;
+}
+
+/* Remove default card spacing */
+.card + .card {
+    margin-top: 0;
+}

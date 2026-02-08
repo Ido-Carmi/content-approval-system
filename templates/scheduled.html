@@ -1,0 +1,654 @@
+{% extends "base.html" %}
+
+{% block title %}פוסטים מתוזמנים{% endblock %}
+{% block page_title %}<div class="text-center">📅 פוסטים מתוזמנים</div>{% endblock %}
+
+{% block content %}
+<style>
+/* Single column design - fit content width */
+#scheduled-list {
+    max-width: 100%;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.scheduled-card {
+    margin-bottom: 0.4rem;
+    width: 100%;
+    max-width: 900px;
+    min-width: 700px;
+}
+
+.scheduled-card .card {
+    width: 100%;
+}
+
+.scheduled-card .btn {
+    font-size: 0.85rem;
+    padding: 0.3rem 0.6rem;
+    font-weight: 600;
+}
+
+.scheduled-card textarea {
+    font-size: 0.95rem;
+    resize: none;
+    overflow-y: hidden;
+    margin-bottom: 0.3rem !important;
+    padding: 0.4rem !important;
+    line-height: 1.4 !important;
+    width: 100%;
+}
+
+.scheduled-card textarea[readonly] {
+    background-color: #f8f9fa;
+    cursor: not-allowed;
+}
+
+.scheduled-card textarea:not([readonly]) {
+    background-color: #fff;
+    border-color: #0d6efd;
+    box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.25);
+}
+
+/* Reorder buttons styling */
+.reorder-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+
+.reorder-buttons .btn {
+    padding: 0.2rem 0.4rem;
+    font-size: 0.8rem;
+}
+
+/* Time display */
+.time-display {
+    font-size: 0.95rem;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+}
+
+.day-display {
+    font-size: 0.85rem;
+    margin-right: 0.4rem;
+}
+
+/* Card body and header */
+.scheduled-card .card-body {
+    padding: 0.5rem !important;
+}
+
+.scheduled-card .card-header {
+    padding: 0.4rem 0.6rem !important;
+}
+
+.scheduled-card .gap-2 {
+    gap: 0.4rem !important;
+}
+</style>
+
+<!-- Mobile-responsive styles -->
+<style>
+@media (max-width: 768px) {
+    /* Remove min-width constraint on mobile */
+    .scheduled-card {
+        min-width: auto !important;
+        width: 100% !important;
+        max-width: 100% !important;
+        margin-bottom: 0.5rem;
+    }
+    
+    /* Header adjustments for mobile */
+    .d-flex.justify-content-center > div {
+        min-width: auto !important;
+        max-width: 100% !important;
+        font-size: 0.95rem !important;
+        padding: 0.5rem 1rem !important;
+    }
+    
+    /* Card adjustments */
+    .scheduled-card .card-header {
+        padding: 0.5rem !important;
+        font-size: 0.85rem;
+    }
+    
+    .scheduled-card .card-body {
+        padding: 0.5rem !important;
+    }
+    
+    /* Button adjustments for mobile */
+    .scheduled-card .btn {
+        font-size: 0.75rem !important;
+        padding: 0.4rem 0.5rem !important;
+        white-space: nowrap;
+    }
+    
+    /* Time display adjustments */
+    .time-display {
+        font-size: 0.8rem !important;
+    }
+    
+    .day-display {
+        font-size: 0.75rem !important;
+    }
+    
+    /* Post number badge */
+    .badge {
+        font-size: 0.8rem !important;
+    }
+    
+    /* Textarea adjustments */
+    .scheduled-card textarea {
+        font-size: 0.85rem !important;
+        padding: 0.5rem !important;
+    }
+    
+    /* Action buttons container */
+    .d-flex.gap-2 {
+        gap: 0.3rem !important;
+        flex-wrap: wrap;
+    }
+    
+    /* Make reorder buttons more compact */
+    .reorder-buttons .btn {
+        padding: 0.3rem 0.4rem !important;
+        font-size: 0.7rem !important;
+    }
+}
+
+/* Extra small devices (phones, less than 576px) */
+@media (max-width: 576px) {
+    .scheduled-card .card-header {
+        flex-direction: column !important;
+        align-items: flex-start !important;
+    }
+    
+    .scheduled-card .card-header > div {
+        width: 100%;
+        margin-bottom: 0.3rem;
+    }
+    
+    .scheduled-card .btn {
+        font-size: 0.7rem !important;
+        padding: 0.35rem 0.45rem !important;
+    }
+    
+    .time-display {
+        font-size: 0.75rem !important;
+    }
+    
+    .day-display {
+        font-size: 0.7rem !important;
+    }
+    
+    /* Stack action buttons vertically on very small screens */
+    .flex-grow-1.d-flex {
+        flex-direction: column !important;
+        width: 100%;
+    }
+    
+    .flex-grow-1.d-flex .btn {
+        width: 100% !important;
+        margin-bottom: 0.25rem;
+    }
+}
+</style>
+
+<!-- Header with post count - matches card width -->
+<div class="d-flex justify-content-center">
+    <div class="alert alert-primary mb-3 py-2 px-3" style="width: 100%; max-width: 900px; min-width: 700px; text-align: center; font-size: 1.1rem;">
+        <i class="bi bi-calendar-check"></i>
+        <strong>{{ posts|length if posts else 0 }}</strong> פוסטים מתוזמנים בפייסבוק
+    </div>
+</div>
+
+{% if not posts %}
+<div class="alert alert-info text-center py-5">
+    <h4>אין פוסטים מתוזמנים</h4>
+    <p class="mb-0">אשר ערכים חדשים כדי לתזמן פוסטים</p>
+</div>
+{% else %}
+<div id="scheduled-list">
+    {% for item in posts %}
+    <div class="scheduled-card" id="sched-{{ item.entry.id }}">
+        <div class="card">
+            <div class="card-header bg-primary text-white">
+                <div class="d-flex justify-content-between align-items-center flex-wrap">
+                    <div class="d-flex align-items-center gap-2">
+                        <i class="bi bi-calendar-event"></i>
+                        <span class="time-display">{{ item.display_time }}</span>
+                        <span class="day-display">{{ item.weekday }}</span>
+                    </div>
+                    <span class="badge bg-light text-dark">#{{ item.entry.post_number }}</span>
+                </div>
+            </div>
+            <div class="card-body">
+                <textarea id="text-{{ item.entry.id }}" 
+                          class="form-control mb-2"
+                          readonly
+                          style="height: {{ item.height }}px; overflow-y: hidden; resize: none;">{{ item.fb_post.message }}</textarea>
+                
+                <div class="d-flex gap-2 align-items-start">
+                    <!-- Reorder Buttons (Up/Down) -->
+                    <div class="reorder-buttons">
+                        {% if not loop.first %}
+                        <button type="button" 
+                                class="btn btn-sm btn-secondary swap-up-btn"
+                                data-entry-id="{{ item.entry.id }}"
+                                title="העבר למעלה">
+                            <i class="bi bi-arrow-up"></i>
+                        </button>
+                        {% endif %}
+                        {% if not loop.last %}
+                        <button type="button" 
+                                class="btn btn-sm btn-secondary swap-down-btn"
+                                data-entry-id="{{ item.entry.id }}"
+                                title="העבר למטה">
+                            <i class="bi bi-arrow-down"></i>
+                        </button>
+                        {% endif %}
+                    </div>
+                    
+                    <!-- Action Buttons -->
+                    <div class="flex-grow-1 d-flex gap-2">
+                        <!-- Edit Button -->
+                        <button type="button" 
+                                class="btn btn-info flex-fill edit-btn"
+                                id="edit-{{ item.entry.id }}"
+                                data-entry-id="{{ item.entry.id }}">
+                            <i class="bi bi-pencil"></i> ערוך
+                        </button>
+                        
+                        <!-- Save Button (hidden initially) -->
+                        <button type="button" 
+                                class="btn btn-success flex-fill save-btn"
+                                id="save-{{ item.entry.id }}"
+                                style="display: none;"
+                                data-entry-id="{{ item.entry.id }}">
+                            <i class="bi bi-check-lg"></i> שמור
+                        </button>
+                        
+                        <!-- Return to Pending Button -->
+                        <button type="button" 
+                                class="btn btn-warning flex-fill unschedule-btn"
+                                data-entry-id="{{ item.entry.id }}">
+                            <i class="bi bi-arrow-counterclockwise"></i> החזר
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<!-- Loading Overlay - Center of screen -->
+<div id="loading-overlay" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 9999; display: none; align-items: center; justify-content: center;">
+    <div id="loading-indicator" style="background: #0d6efd; color: white; padding: 40px 60px; border-radius: 16px; box-shadow: 0 8px 32px rgba(0,0,0,0.5); text-align: center; min-width: 400px;">
+        <div style="font-size: 3rem; margin-bottom: 20px;">
+            <i class="bi bi-arrow-clockwise spin"></i>
+        </div>
+        <div id="loading-text" style="font-size: 1.5rem; font-weight: 600; margin-bottom: 10px;">מעדכן פוסטים...</div>
+        <div id="loading-subtext" style="font-size: 1rem; opacity: 0.9;"></div>
+    </div>
+</div>
+
+<style>
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+.spin {
+    display: inline-block;
+    animation: spin 1s linear infinite;
+}
+.pulse {
+    animation: pulse 0.6s ease-in-out;
+}
+@keyframes pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.05); }
+}
+</style>
+
+<!-- 🔴 DEBUG MARKER: If you can see this text in page source, template renders here -->
+<div style="display: none;" id="template-rendered-marker">TEMPLATE RENDERED SUCCESSFULLY</div>
+
+<script>
+// Show loading indicator
+const loadingOverlay = document.getElementById('loading-overlay');
+const loadingIndicator = document.getElementById('loading-indicator');
+const loadingText = document.getElementById('loading-text');
+const loadingSubtext = document.getElementById('loading-subtext');
+loadingOverlay.style.display = 'flex';
+
+console.log('========================================');
+console.log('SCHEDULED PAGE SCRIPT LOADING...');
+console.log('========================================');
+
+// Use event delegation for all buttons
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('DOM Content Loaded - Setting up event listeners');
+    
+    // Setup edit buttons
+    document.querySelectorAll('.edit-btn').forEach(function(btn) {
+        console.log('Setting up edit button:', btn.id);
+        btn.addEventListener('click', function() {
+            const id = this.getAttribute('data-entry-id');
+            console.log('Edit button clicked, ID:', id);
+            enableEdit(id);
+        });
+    });
+    
+    // Setup save buttons
+    document.querySelectorAll('.save-btn').forEach(function(btn) {
+        console.log('Setting up save button:', btn.id);
+        btn.addEventListener('click', function() {
+            const id = this.getAttribute('data-entry-id');
+            console.log('Save button clicked, ID:', id);
+            saveEdit(id);
+        });
+    });
+    
+    // Setup unschedule buttons
+    document.querySelectorAll('.unschedule-btn').forEach(function(btn) {
+        console.log('Setting up unschedule button');
+        btn.addEventListener('click', function() {
+            const id = this.getAttribute('data-entry-id');
+            console.log('Unschedule button clicked, ID:', id);
+            unschedulePost(id);
+        });
+    });
+    
+    // Setup swap up buttons
+    document.querySelectorAll('.swap-up-btn').forEach(function(btn) {
+        console.log('Setting up swap-up button');
+        btn.addEventListener('click', function() {
+            const id = this.getAttribute('data-entry-id');
+            console.log('Swap-up button clicked, ID:', id);
+            swapPost(id, 'up');
+        });
+    });
+    
+    // Setup swap down buttons
+    document.querySelectorAll('.swap-down-btn').forEach(function(btn) {
+        console.log('Setting up swap-down button');
+        btn.addEventListener('click', function() {
+            const id = this.getAttribute('data-entry-id');
+            console.log('Swap-down button clicked, ID:', id);
+            swapPost(id, 'down');
+        });
+    });
+    
+    console.log('✅ All event listeners set up successfully');
+});
+
+// Enable editing for a specific post
+function enableEdit(id) {
+    console.log('=== ENABLE EDIT ===');
+    console.log('Entry ID:', id);
+    
+    const textarea = document.getElementById('text-' + id);
+    const editBtn = document.getElementById('edit-' + id);
+    const saveBtn = document.getElementById('save-' + id);
+    
+    console.log('Textarea found:', !!textarea);
+    console.log('Edit button found:', !!editBtn);
+    console.log('Save button found:', !!saveBtn);
+    
+    if (saveBtn) {
+        console.log('Save button onclick:', saveBtn.onclick);
+        console.log('Save button getAttribute onclick:', saveBtn.getAttribute('onclick'));
+    }
+    
+    if (textarea && editBtn && saveBtn) {
+        // Make textarea editable
+        textarea.removeAttribute('readonly');
+        textarea.style.backgroundColor = '#fff';
+        textarea.style.borderColor = '#0d6efd';
+        textarea.focus();
+        
+        // Hide edit button, show save button
+        editBtn.style.display = 'none';
+        saveBtn.style.display = 'block';
+        
+        console.log('✓ Edit mode enabled');
+        console.log('Save button now visible, onclick should work');
+        
+        // Test save button directly
+        console.log('Testing save button click handler...');
+        const onclickAttr = saveBtn.getAttribute('onclick');
+        console.log('onclick attribute value:', onclickAttr);
+    } else {
+        console.error('✗ Missing elements!');
+        if (!textarea) console.error('  - Textarea missing');
+        if (!editBtn) console.error('  - Edit button missing');
+        if (!saveBtn) console.error('  - Save button missing');
+    }
+}
+
+// Save edited post
+function saveEdit(id) {
+    console.log('=== SAVE EDIT ===');
+    console.log('Entry ID:', id);
+    console.log('Function called successfully!');
+    
+    showLoading('מעדכן פוסטים...', 'שומר שינויים');
+    
+    const textarea = document.getElementById('text-' + id);
+    if (!textarea) {
+        console.error('✗ Textarea not found for ID:', id);
+        alert('שגיאה: לא נמצא טקסט - ID: ' + id);
+        return;
+    }
+    
+    console.log('Textarea found:', textarea);
+    
+    const newText = textarea.value;
+    console.log('New text length:', newText.length);
+    console.log('New text preview:', newText.substring(0, 50) + '...');
+    
+    if (!newText || newText.trim() === '') {
+        console.error('✗ Empty text!');
+        alert('שגיאה: טקסט ריק');
+        return;
+    }
+    
+    // Save scroll position
+    try {
+        const scrollPos = window.pageYOffset;
+        sessionStorage.setItem('scrollPos', scrollPos);
+        console.log('Saved scroll position:', scrollPos);
+    } catch (e) {
+        console.log('Could not save scroll position (sessionStorage blocked)');
+    }
+    
+    // Send to server
+    console.log('Sending POST to /edit_scheduled/' + id);
+    console.log('Request URL:', window.location.origin + '/edit_scheduled/' + id);
+    
+    fetch('/edit_scheduled/' + id, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ text: newText })
+    })
+    .then(response => {
+        console.log('Response received');
+        console.log('Response status:', response.status);
+        console.log('Response OK:', response.ok);
+        console.log('Response statusText:', response.statusText);
+        
+        if (response.ok) {
+            console.log('✓ Save successful, reloading...');
+            showSuccess('הפוסטים עודכנו!', 'השינויים נשמרו', true);
+        } else {
+            console.error('✗ Save failed with status:', response.status);
+            return response.text().then(text => {
+                console.error('Response body:', text);
+                alert('שגיאה בשמירה (status: ' + response.status + ')\n' + text);
+            });
+        }
+    })
+    .catch(error => {
+        console.error('✗ Fetch error:', error);
+        console.error('Error details:', error.message);
+        console.error('Error stack:', error.stack);
+        alert('שגיאה בשמירה: ' + error.message);
+    });
+}
+
+// Swap post order
+function swapPost(id, direction) {
+    console.log('=== SWAP POST ===');
+    console.log('Entry ID:', id);
+    console.log('Direction:', direction);
+    
+    showLoading('מעדכן פוסטים...', 'מחליף סדר');
+    
+    // Save scroll position
+    try {
+        const scrollPos = window.pageYOffset;
+        sessionStorage.setItem('scrollPos', scrollPos);
+        console.log('Saved scroll position:', scrollPos);
+    } catch (e) {
+        console.log('Could not save scroll position (sessionStorage blocked)');
+    }
+    
+    console.log('Sending POST to /swap_posts/' + id + '/' + direction);
+    fetch('/swap_posts/' + id + '/' + direction, {
+        method: 'POST'
+    })
+    .then(response => {
+        console.log('Response status:', response.status);
+        console.log('Response OK:', response.ok);
+        
+        if (response.ok) {
+            console.log('✓ Swap successful, reloading...');
+            showSuccess('הפוסטים עודכנו!', 'הסדר הוחלף', true);
+        } else {
+            console.error('✗ Swap failed with status:', response.status);
+            response.text().then(text => console.error('Response body:', text));
+            alert('שגיאה בהחלפה (status: ' + response.status + ')');
+        }
+    })
+    .catch(error => {
+        console.error('✗ Fetch error:', error);
+        alert('שגיאה בהחלפה: ' + error.message);
+    });
+}
+
+// Unschedule post (NO POPUP)
+function unschedulePost(id) {
+    console.log('=== UNSCHEDULE POST ===');
+    console.log('Entry ID:', id);
+    
+    showLoading('מעדכן פוסטים...', 'מחזיר להמתנה');
+    
+    // Save scroll position
+    try {
+        const scrollPos = window.pageYOffset;
+        sessionStorage.setItem('scrollPos', scrollPos);
+        console.log('Saved scroll position:', scrollPos);
+    } catch (e) {
+        console.log('Could not save scroll position (sessionStorage blocked)');
+    }
+    
+    console.log('Sending POST to /unschedule/' + id);
+    fetch('/unschedule/' + id, {
+        method: 'POST'
+    })
+    .then(response => {
+        console.log('Response status:', response.status);
+        console.log('Response OK:', response.ok);
+        
+        if (response.ok) {
+            console.log('✓ Unschedule successful, reloading...');
+            showSuccess('הפוסטים עודכנו!', 'הפוסט הוחזר להמתנה', true);
+        } else {
+            console.error('✗ Unschedule failed with status:', response.status);
+            response.text().then(text => console.error('Response body:', text));
+            alert('שגיאה בהחזרה (status: ' + response.status + ')');
+        }
+    })
+    .catch(error => {
+        console.error('✗ Fetch error:', error);
+        alert('שגיאה בהחזרה: ' + error.message);
+    });
+}
+
+// Restore scroll position on page load
+window.addEventListener('load', function() {
+    console.log('=== PAGE LOAD ===');
+    
+    try {
+        const scrollPos = sessionStorage.getItem('scrollPos');
+        console.log('Stored scroll position:', scrollPos);
+        
+        if (scrollPos) {
+            console.log('Restoring scroll to:', scrollPos);
+            window.scrollTo(0, parseInt(scrollPos));
+            sessionStorage.removeItem('scrollPos');
+            console.log('✓ Scroll restored');
+        } else {
+            console.log('No scroll position to restore');
+        }
+    } catch (e) {
+        console.log('Could not access scroll position (sessionStorage blocked)');
+    }
+});
+
+console.log('=== SCHEDULED PAGE LOADED ===');
+console.log('All functions initialized');
+
+// Helper functions for loading indicator
+function showLoading(message, subtext = '') {
+    loadingOverlay.style.display = 'flex';
+    loadingIndicator.style.background = '#0d6efd';
+    loadingText.textContent = message;
+    loadingSubtext.textContent = subtext;
+    const icon = document.querySelector('#loading-indicator i');
+    icon.className = 'bi bi-arrow-clockwise spin';
+}
+
+function showSuccess(message, subtext = '', autoRefresh = true) {
+    loadingText.textContent = message;
+    loadingSubtext.textContent = subtext;
+    loadingIndicator.style.background = '#198754';
+    loadingIndicator.classList.add('pulse');
+    const icon = document.querySelector('#loading-indicator i');
+    icon.className = 'bi bi-check-circle-fill';
+    
+    if (autoRefresh) {
+        setTimeout(() => {
+            window.location.reload();
+        }, 1500);
+    }
+}
+
+function hideLoading() {
+    setTimeout(function() {
+        loadingOverlay.style.opacity = '0';
+        setTimeout(function() {
+            loadingOverlay.style.display = 'none';
+            loadingOverlay.style.opacity = '1';
+            loadingIndicator.classList.remove('pulse');
+        }, 300);
+    }, 1500);
+}
+
+// Check if orphans were detected
+{% if had_orphans %}
+console.log('⚠️  Orphaned posts detected - showing update notification');
+showSuccess('הפוסטים עודכנו!', 'פוסטים שנמחקו בפייסבוק הוסרו והפוסטים הבאים עודכנו', true);
+{% else %}
+// No changes detected, hide indicator
+hideLoading();
+{% endif %}
+</script>
+{% endblock %}

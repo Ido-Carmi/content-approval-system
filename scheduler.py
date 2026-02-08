@@ -3,8 +3,12 @@ import pytz
 from typing import List, Dict, Optional
 import json
 from pathlib import Path
+import threading
 
 class Scheduler:
+    # Class-level lock for thread-safe scheduling
+    _schedule_lock = threading.Lock()
+    
     def __init__(self, database, facebook_handler):
         """
         Initialize the scheduler
@@ -16,6 +20,8 @@ class Scheduler:
         self.db = database
         self.fb = facebook_handler
         self.timezone = pytz.timezone('Asia/Jerusalem')
+        self.scheduled_times_cache = None  # Cache for scheduled times
+        self.cache_timestamp = None  # When cache was last updated
         
         # Jewish holidays (non-work days only) - dates for 2024-2027
         self.jewish_holidays = {
@@ -135,7 +141,7 @@ class Scheduler:
         if not self.should_skip_date(current_date):
             for window_time in windows:
                 slot = self.timezone.localize(datetime.combine(current_date, window_time))
-                slot_key = (slot.date(), slot.time())
+                slot_key = (slot.date(), slot.time().replace(second=0, microsecond=0))
                 
                 if slot > now and slot_key not in scheduled_slots:
                     return slot
@@ -153,7 +159,7 @@ class Scheduler:
             
             for window_time in windows:
                 slot = self.timezone.localize(datetime.combine(check_date, window_time))
-                slot_key = (slot.date(), slot.time())
+                slot_key = (slot.date(), slot.time().replace(second=0, microsecond=0))
                 
                 if slot_key not in scheduled_slots:
                     return slot
@@ -170,7 +176,7 @@ class Scheduler:
     
     def schedule_post_to_facebook(self, entry_id: int, text: str) -> Dict:
         """
-        Schedule a post to Facebook's native scheduler
+        Schedule a post to Facebook's native scheduler with race condition protection
         
         Args:
             entry_id: Entry ID
@@ -179,17 +185,46 @@ class Scheduler:
         Returns:
             Dict with scheduled_time and facebook_post_id
         """
-        scheduled_time = self.get_next_available_slot()
-        
-        # Schedule to Facebook
-        result = self.fb.schedule_post(text, scheduled_time)
-        
-        # Save to database
-        self.db.schedule_to_facebook(
-            entry_id,
-            result['id'],
-            result['scheduled_time']
-        )
+        # Use class-level lock to prevent race conditions from concurrent approvals
+        with self._schedule_lock:
+            print(f"[LOCK ACQUIRED] Scheduling entry {entry_id}")
+            
+            # Clear cache to force fresh data from Facebook
+            self.scheduled_times_cache = None
+            self.cache_timestamp = None
+            
+            # Get next available slot with fresh data
+            scheduled_time = self.get_next_available_slot()
+            
+            # Double-check the slot is still empty (in case of race condition)
+            current_scheduled = self.get_scheduled_times_from_facebook()
+            slot_key = (scheduled_time.date(), scheduled_time.time().replace(second=0, microsecond=0))
+            occupied_slots = {(t.date(), t.time().replace(second=0, microsecond=0)) for t in current_scheduled}
+            
+            if slot_key in occupied_slots:
+                print(f"[WARNING] Slot {scheduled_time} was taken! Finding next one...")
+                # Slot was taken between check and schedule - get next one
+                self.scheduled_times_cache = None  # Clear cache again
+                scheduled_time = self.get_next_available_slot()
+            
+            print(f"[SCHEDULING] Entry {entry_id} to {scheduled_time}")
+            
+            # Schedule to Facebook
+            result = self.fb.schedule_post(text, scheduled_time)
+            
+            # Save to database
+            self.db.schedule_to_facebook(
+                entry_id,
+                result['id'],
+                result['scheduled_time']
+            )
+            
+            print(f"[LOCK RELEASED] Entry {entry_id} scheduled successfully")
+            
+            return {
+                'scheduled_time': scheduled_time.strftime("%d/%m/%Y %H:%M"),
+                'facebook_post_id': result['id']
+            }
         
         return {
             'scheduled_time': scheduled_time.strftime("%d/%m/%Y %H:%M"),

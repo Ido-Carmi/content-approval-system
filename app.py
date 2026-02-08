@@ -1,1048 +1,1446 @@
-import streamlit as st
-import pandas as pd
-from datetime import datetime, time, timedelta
-import sqlite3
-import json
+from flask import Flask, render_template, request, redirect, url_for, jsonify, flash
 from pathlib import Path
+import json
+from datetime import datetime, timedelta
 import pytz
 
-# Import our custom modules
-from sheets_handler import SheetsHandler
-from facebook_handler import FacebookHandler
+# Import your existing handlers
 from database import Database
 from scheduler import Scheduler
+from facebook_handler import FacebookHandler
+from sheets_handler import SheetsHandler
 from notifications import NotificationHandler
 
-import locale
-try:
-    locale.setlocale(locale.LC_TIME, 'en_GB.UTF-8')
-except:
-    pass
+app = Flask(__name__)
+app.secret_key = 'your-secret-key-change-this-in-production'
 
-# Page configuration
-st.set_page_config(
-    page_title="IDF Confessions",
-    page_icon="✅",
-    layout="wide"
-)
+# Initialize handlers
+db = Database()
+scheduler = None
+facebook_handler = None
+sheets_handler = None
+notifications = NotificationHandler()
 
-# Initialize session state
-if 'db' not in st.session_state:
-    st.session_state.db = Database()
+def load_config():
+    """Load configuration from file"""
+    config_file = Path("config.json")
+    if config_file.exists():
+        with open(config_file, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return {}
 
-if 'sheets_handler' not in st.session_state:
-    st.session_state.sheets_handler = None
+def save_config(config):
+    """Save configuration to file"""
+    config_file = Path("config.json")
+    with open(config_file, 'w', encoding='utf-8') as f:
+        json.dump(config, f, indent=2, ensure_ascii=False)
 
-if 'facebook_handler' not in st.session_state:
-    st.session_state.facebook_handler = None
+def init_handlers():
+    """Initialize handlers from config"""
+    global scheduler, facebook_handler, sheets_handler
+    
+    config = load_config()
+    
+    # Facebook handler
+    if config.get('facebook_page_id') and config.get('facebook_access_token'):
+        try:
+            facebook_handler = FacebookHandler(
+                config['facebook_page_id'],
+                config['facebook_access_token']
+            )
+            scheduler = Scheduler(db, facebook_handler)
+        except Exception as e:
+            print(f"Failed to init Facebook: {e}")
+    
+    # Sheets handler
+    if config.get('google_sheet_id'):
+        try:
+            sheets_handler = SheetsHandler(
+                config['google_sheet_id'],
+                config.get('google_credentials_file', 'credentials.json')
+            )
+        except Exception as e:
+            print(f"Failed to init Sheets: {e}")
 
-if 'scheduler' not in st.session_state:
-    st.session_state.scheduler = None
+# Initialize on startup
+init_handlers()
 
 def calculate_textarea_height(text: str) -> int:
-    """
-    Calculate optimal height for textarea based on text length
-    Works better with Hebrew text and long lines
-    
-    Args:
-        text: The text content
-        
-    Returns:
-        Height in pixels
-    """
+    """Calculate optimal height for textarea based on actual content"""
     if not text:
-        return 100
+        return 80
     
-    # Count actual line breaks
+    # With 700px+ width cards, we fit ~90-100 chars per line
+    # Account for Hebrew text which may wrap differently
+    chars_per_line = 85
+    
     lines = text.count('\n') + 1
-    
-    # For each line, calculate how many display lines it will take
-    # Assuming ~50 characters per line (works better for Hebrew)
     wrapped_lines = 0
     for line in text.split('\n'):
         if len(line) == 0:
             wrapped_lines += 1
         else:
-            # Each line wraps at approximately 50 chars
-            wrapped_lines += max(1, (len(line) + 49) // 50)
+            # Calculate how many visual lines this text line will take
+            wrapped_lines += max(1, (len(line) + chars_per_line - 1) // chars_per_line)
     
-    # Use the larger of actual lines or wrapped lines
     total_lines = max(lines, wrapped_lines)
     
-    # Calculate height: 24px per line + 50px padding
-    # This gives more space per line for better readability
-    height = int(total_lines * 24) + 50
+    # Line height: 1.4em × 0.95rem ≈ 21px per line
+    # Add padding: 0.4rem top + 0.4rem bottom ≈ 13px
+    height = int(total_lines * 21) + 15
     
-    # Clamp between min 120px and max 500px
-    return max(120, min(500, height))
+    return max(80, min(400, height))
 
-def init_handlers():
-    """Initialize handlers with credentials"""
-    config_file = Path("config.json")
-    
-    if config_file.exists():
-        with open(config_file, 'r', encoding='utf-8') as f:
-            config = json.load(f)
-            
-        if st.session_state.sheets_handler is None:
-            try:
-                st.session_state.sheets_handler = SheetsHandler(
-                    config.get('google_sheet_id'),
-                    config.get('google_credentials_file', 'credentials.json')
-                )
-            except Exception as e:
-                st.error(f"Failed to initialize Google Sheets: {str(e)}")
-        
-        if st.session_state.facebook_handler is None:
-            try:
-                st.session_state.facebook_handler = FacebookHandler(
-                    config.get('facebook_page_id'),
-                    config.get('facebook_access_token')
-                )
-            except Exception as e:
-                st.error(f"Failed to initialize Facebook: {str(e)}")
-        
-        if st.session_state.scheduler is None:
-            st.session_state.scheduler = Scheduler(
-                st.session_state.db,
-                st.session_state.facebook_handler
-            )
+def get_hebrew_weekday(date_str: str) -> str:
+    """Get Hebrew weekday name from ISO datetime string"""
+    try:
+        dt = datetime.fromisoformat(date_str)
+        weekdays = ['שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת', 'ראשון']
+        return weekdays[dt.weekday()]
+    except:
+        return ''
 
-def check_for_empty_windows(scheduler):
-    """Check if there are empty windows in the next 24 hours"""
-    if not scheduler:
-        return None
-    
-    israel_tz = pytz.timezone('Asia/Jerusalem')
-    now = datetime.now(israel_tz)
-    tomorrow = now + timedelta(hours=24)
-    
-    windows = scheduler.load_posting_windows()
-    scheduled_times = scheduler.get_scheduled_times_from_facebook()
-    scheduled_slots = set()
-    
-    for st_dt in scheduled_times:
-        scheduled_slots.add((st_dt.date(), st_dt.time().replace(second=0, microsecond=0)))
-    
-    current_date = now.date()
-    for days_ahead in range(2):
-        check_date = current_date + timedelta(days=days_ahead)
-        
-        for window_time in windows:
-            window_dt = israel_tz.localize(datetime.combine(check_date, window_time))
-            
-            if now < window_dt <= tomorrow:
-                window_key = (check_date, window_time)
-                
-                if window_key not in scheduled_slots:
-                    return window_dt.strftime('%d/%m/%Y %H:%M')
-    
-    return None
+# ============================================================================
+# ROUTES - Review Page
+# ============================================================================
 
-def main():
-    st.title("📝 מערכת אישור ופרסום תוכן")
-    
-    if 'current_page' not in st.session_state:
-        st.session_state.current_page = "review"
-    
-    query_params = st.query_params
-    if 'page' in query_params:
-        new_page = query_params['page']
-        if new_page != st.session_state.current_page:
-            st.session_state.current_page = new_page
-            st.rerun()
-    
-    st.sidebar.markdown("### ניווט")
-    
-    st.sidebar.markdown("""
-    <style>
-    .nav-item {
-        display: block;
-        padding: 14px 16px;
-        margin: 10px 0;
-        border-radius: 8px;
-        text-align: center;
-        font-size: 16px;
-        font-weight: 500;
-        text-decoration: none;
-        cursor: pointer;
-        transition: all 0.3s ease;
-        border: 2px solid transparent;
-        min-height: 50px;
-        line-height: 22px;
-    }
-    .nav-item-active {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-    }
-    .nav-item-inactive {
-        background-color: #f0f2f6;
-        color: #31333F;
-        border: 2px solid #e0e0e0;
-    }
-    .nav-item-inactive:hover {
-        background-color: #e8eaf0;
-        border-color: #667eea;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-    
-    pages = [
-        ("review", "📥 וידויים ממתינים לאישור"),
-        ("scheduled", "📅 פוסטים מתוזמנים"),
-        ("denied", "🗑️ וידויים שנדחו"),
-        ("stats", "📊 סטטיסטיקה"),
-        ("settings", "⚙️ הגדרות")
-    ]
-    
-    nav_html = ""
-    for page_key, page_label in pages:
-        is_active = st.session_state.current_page == page_key
-        nav_class = "nav-item-active" if is_active else "nav-item-inactive"
-        
-        if is_active:
-            nav_html += f'<div class="nav-item {nav_class}">{page_label}</div>'
-        else:
-            nav_html += f'<a href="?page={page_key}" target="_self" style="text-decoration: none;"><div class="nav-item {nav_class}">{page_label}</div></a>'
-    
-    st.sidebar.markdown(nav_html, unsafe_allow_html=True)
-    
-    page_map = {
-        "review": "📥 וידויים ממתינים לאישור",
-        "scheduled": "📅 פוסטים מתוזמנים",
-        "denied": "🗑️ וידויים שנדחו",
-        "stats": "📊 סטטיסטיקה",
-        "settings": "⚙️ הגדרות"
-    }
-    
-    page = page_map.get(st.session_state.current_page, "📥 וידויים ממתינים לאישור")
-    
-    init_handlers()
-    
-    if page == "⚙️ הגדרות":
-        show_settings_page()
-    elif page == "📥 וידויים ממתינים לאישור":
-        show_review_page()
-    elif page == "📅 פוסטים מתוזמנים":
-        show_scheduled_posts_page()
-    elif page == "🗑️ וידויים שנדחו":
-        show_denied_page()
-    elif page == "📊 סטטיסטיקה":
-        show_statistics_page()
-
-def show_review_page():
-    st.header("📥 וידויים ממתינים לאישור")
-    
-    # Cleanup old denied entries
-    st.session_state.db.cleanup_old_denied()
-    
-    # Add sync button at the top
-    col1, col2, col3 = st.columns([2, 1, 1])
-    with col3:
-        if st.button("🔄 סנכרן עכשיו"):
-            if st.session_state.sheets_handler:
-                with st.spinner("מסנכרן..."):
-                    try:
-                        config_file = Path("config.json")
-                        config = {}
-                        if config_file.exists():
-                            with open(config_file, 'r', encoding='utf-8') as f:
-                                config = json.load(f)
-                        
-                        start_date_str = config.get('sync_start_date')
-                        new_entries = st.session_state.sheets_handler.fetch_new_entries()
-                        added_count = 0
-                        
-                        for entry in new_entries:
-                            if start_date_str:
-                                try:
-                                    entry_date = pd.to_datetime(entry['timestamp'], dayfirst=True).date()
-                                    filter_date = datetime.fromisoformat(start_date_str).date()
-                                    if entry_date < filter_date:
-                                        continue
-                                except:
-                                    pass
-                            
-                            if st.session_state.db.add_entry(entry['timestamp'], entry['text']):
-                                added_count += 1
-                        
-                        config['last_sync'] = datetime.now(pytz.timezone('Asia/Jerusalem')).strftime("%Y-%m-%d %H:%M:%S")
-                        with open(config_file, 'w', encoding='utf-8') as f:
-                            json.dump(config, f, indent=2, ensure_ascii=False)
-                        
-                        st.success(f"✅ נוספו {added_count} וידויים חדשים!")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"הסנכרון נכשל: {str(e)}")
-            else:
-                st.warning("נא להגדיר תחילה את הגדרות Google Sheets")
-    
-    st.markdown("""
-    <style>
-        .content-box {
-            background-color: #f0f2f6;
-            padding: 20px;
-            border-radius: 10px;
-            margin-bottom: 20px;
-        }
-        .entry-card {
-            margin-bottom: 30px;
-        }
-        /* Green approve button */
-        button[kind="primary"] p {
-            color: white !important;
-        }
-        button[kind="primary"] {
-            background-color: #28a745 !important;
-            border-color: #28a745 !important;
-        }
-        button[kind="primary"]:hover {
-            background-color: #218838 !important;
-            border-color: #1e7e34 !important;
-        }
-        /* Red deny button */
-        button[kind="secondary"] p {
-            color: white !important;
-        }
-        button[kind="secondary"] {
-            background-color: #dc3545 !important;
-            border-color: #dc3545 !important;
-        }
-        button[kind="secondary"]:hover {
-            background-color: #c82333 !important;
-            border-color: #bd2130 !important;
-        }
-        /* Remove gap between button columns */
-        div[data-testid="column"] {
-            gap: 0 !important;
-            padding-left: 2px !important;
-            padding-right: 2px !important;
-        }
-        /* Responsive grid */
-        @media (min-width: 1400px) {
-            /* 4 columns on very wide screens */
-            .stColumn {
-                width: 25% !important;
-            }
-        }
-        @media (min-width: 1024px) and (max-width: 1399px) {
-            /* 3 columns on wide screens */
-            .stColumn {
-                width: 33.33% !important;
-            }
-        }
-        @media (min-width: 768px) and (max-width: 1023px) {
-            /* 2 columns on medium screens */
-            .stColumn {
-                width: 50% !important;
-            }
-        }
-        @media (max-width: 767px) {
-            /* 1 column on mobile */
-            .stColumn {
-                width: 100% !important;
-            }
-        }
-    </style>
-    """, unsafe_allow_html=True)
-    
-    pending_entries = st.session_state.db.get_pending_entries()
-    
-    if not pending_entries:
-        st.info("אין וידויים ממתינים לבדיקה")
-        return
-    
-    st.success(f"**{len(pending_entries)} וידויים** ממתינים לבדיקה")
-    
-    # Create 4 columns for responsive layout
-    num_columns = 4
-    cols = st.columns(num_columns)
-    
-    for idx, entry in enumerate(pending_entries):
-        col_idx = idx % num_columns
-        
-        with cols[col_idx]:
-            with st.container():
-                st.markdown('<div class="entry-card">', unsafe_allow_html=True)
-                
-                st.markdown(f"### 📅 {entry['timestamp']}")
-                
-                st.markdown('<div class="content-box">', unsafe_allow_html=True)
-                st.markdown(f"**תוכן:**")
-                
-                edited_text = st.text_area(
-                    "ערוך כאן:",
-                    value=entry['text'],
-                    height=calculate_textarea_height(entry['text']),
-                    key=f"text_{entry['id']}",
-                    label_visibility="collapsed"
-                )
-                st.markdown('</div>', unsafe_allow_html=True)
-                
-                # Buttons side by side
-                btn_col1, btn_col2 = st.columns(2)
-                
-                with btn_col1:
-                    if st.button("אשר", key=f"approve_{entry['id']}", type="primary", use_container_width=True):
-                        # Approve and assign post number (stored separately in database)
-                        st.session_state.db.approve_entry(entry['id'], edited_text, "admin")
-                        
-                        # Get the assigned post number
-                        conn = st.session_state.db.get_connection()
-                        cursor = conn.cursor()
-                        cursor.execute('SELECT post_number FROM entries WHERE id = ?', (entry['id'],))
-                        result = cursor.fetchone()
-                        post_number = result['post_number'] if result else 1
-                        conn.close()
-                        
-                        # Format text with number for Facebook only
-                        formatted_text = f"#{post_number} {edited_text}"
-                        
-                        try:
-                            result = st.session_state.scheduler.schedule_post_to_facebook(
-                                entry['id'],
-                                formatted_text
-                            )
-                            st.success(f"✅ תוזמן ל-{result['scheduled_time']}")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"נכשל בתזמון: {str(e)}")
-                
-                with btn_col2:
-                    if st.button("דחה", key=f"deny_{entry['id']}", type="secondary", use_container_width=True):
-                        st.session_state.db.deny_entry(entry['id'], "admin")
-                        st.success("הערך נדחה (יישמר ל-24 שעות)")
-                        st.rerun()
-                
-                st.markdown('</div>', unsafe_allow_html=True)
-
-def show_denied_page():
-    st.header("🗑️ וידויים שנדחו")
-    
-    st.info("וידויים נדחים נשמרים ל-24 שעות. לאחר מכן הם נמחקים אוטומטית.")
-    
-    # Cleanup old entries
-    st.session_state.db.cleanup_old_denied()
-    
-    denied_entries = st.session_state.db.get_denied_entries()
-    
-    if not denied_entries:
-        st.info("אין וידויים שנדחו ב-24 השעות האחרונות")
-        return
-    
-    st.warning(f"**{len(denied_entries)} וידויים** נדחו ב-24 השעות האחרונות")
-    
-    # Use same responsive columns as review page
-    num_columns = 4
-    cols = st.columns(num_columns)
-    
-    for idx, entry in enumerate(denied_entries):
-        col_idx = idx % num_columns
-        
-        with cols[col_idx]:
-            with st.container():
-                denied_at = datetime.fromisoformat(entry['denied_at'])
-                hours_ago = (datetime.now() - denied_at).total_seconds() / 3600
-                hours_remaining = max(0, 24 - hours_ago)
-                
-                st.markdown(f"### 📅 {entry['timestamp']}")
-                st.caption(f"נדחה לפני {hours_ago:.1f} שעות • יימחק בעוד {hours_remaining:.1f} שעות")
-                
-                st.markdown('<div class="content-box">', unsafe_allow_html=True)
-                st.markdown(f"**תוכן:**")
-                
-                st.text_area(
-                    "תוכן:",
-                    value=entry['text'],
-                    height=calculate_textarea_height(entry['text']),
-                    key=f"denied_text_{entry['id']}",
-                    disabled=True,
-                    label_visibility="collapsed"
-                )
-                st.markdown('</div>', unsafe_allow_html=True)
-                
-                if st.button("↩️ החזר להמתנה", key=f"restore_{entry['id']}", use_container_width=True):
-                    st.session_state.db.return_denied_to_pending(entry['id'])
-                    st.success("הערך הוחזר להמתנה!")
-                    st.rerun()
-
-def show_scheduled_posts_page():
-    st.header("📅 פוסטים מתוזמנים")
-    
-    st.markdown("""
-    הפוסטים מתוזמנים ישירות ל-Facebook ויפורסמו אוטומטית.
-    תוכל לצפות בהם גם ב-[Facebook Creator Studio](https://business.facebook.com/creatorstudio)!
-    """)
-    
-    if not st.session_state.facebook_handler or not st.session_state.scheduler:
-        st.warning("נא להגדיר תחילה את הגדרות Facebook")
-        return
-    
-    col1, col2 = st.columns([3, 1])
-    with col2:
-        if st.button("🔄 סנכרן עם Facebook"):
-            with st.spinner("מסנכרן..."):
-                st.session_state.scheduler.sync_with_facebook()
-                st.success("סונכרן!")
-                st.rerun()
+@app.route('/')
+@app.route('/review')
+def review_page():
+    """Review pending entries"""
+    print("=" * 50)
+    print("REVIEW PAGE - DEBUG START")
+    print("=" * 50)
     
     try:
-        fb_posts = st.session_state.facebook_handler.get_scheduled_posts()
-        db_entries = st.session_state.db.get_scheduled_entries()
-        
-        entry_map = {entry['facebook_post_id']: entry for entry in db_entries}
-        
-        if not fb_posts:
-            st.info("אין פוסטים מתוזמנים כרגע ב-Facebook")
-            return
-        
-        st.success(f"**{len(fb_posts)} פוסטים** מתוזמנים ב-Facebook")
-        
-        # Sort ALL posts by scheduled time (not grouped by date)
-        all_sorted_posts = sorted(fb_posts, key=lambda x: x['scheduled_time'])
-        
-        # Group by date for display
-        posts_by_date = {}
-        for post in all_sorted_posts:
-            scheduled_dt = datetime.fromisoformat(post['scheduled_time'])
-            date_key = scheduled_dt.strftime('%A, %d/%m/%Y')
-            
-            if date_key not in posts_by_date:
-                posts_by_date[date_key] = []
-            posts_by_date[date_key].append(post)
-        
-        # Display by date
-        for date_str, posts in sorted(posts_by_date.items()):
-            st.subheader(date_str)
-            
-            for post in posts:
-                # Find post's index in ALL posts (not just this date)
-                post_idx = next(i for i, p in enumerate(all_sorted_posts) if p['id'] == post['id'])
-                
-                scheduled_dt = datetime.fromisoformat(post['scheduled_time'])
-                time_str = scheduled_dt.strftime('%H:%M')
-                
-                entry = entry_map.get(post['id'])
-                entry_id = entry['id'] if entry else None
-                
-                with st.container():
-                    st.markdown(f"### ⏰ {time_str}")
-                    
-                    # Check if in edit mode
-                    edit_key = f"edit_mode_{post['id']}"
-                    if edit_key not in st.session_state:
-                        st.session_state[edit_key] = False
-                    
-                    if st.session_state[edit_key]:
-                        # Edit mode - show content without number
-                        # Extract content without the #number prefix
-                        message = post['message']
-                        if message.startswith('#') and ' ' in message:
-                            # Split on first space after number
-                            content_only = message.split(' ', 1)[1]
-                        else:
-                            content_only = message
-                        
-                        # Get post number from database entry
-                        db_post_number = entry.get('post_number') if entry else None
-                        
-                        new_content = st.text_area(
-                            "ערוך תוכן:",
-                            value=content_only,
-                            height=calculate_textarea_height(content_only),
-                            key=f"edit_text_{post['id']}"
-                        )
-                        
-                        col1, col2 = st.columns(2)
-                        
-                        with col1:
-                            if st.button("💾 שמור", key=f"save_{post['id']}", type="primary", use_container_width=True):
-                                if entry_id and db_post_number:
-                                    # Reconstruct full text with post number from database
-                                    full_text = f"#{db_post_number} {new_content}"
-                                    
-                                    # Also update the text in database (without number)
-                                    st.session_state.db.update_scheduled_post_text(entry_id, new_content)
-                                    
-                                    with st.spinner("מעדכן ב-Facebook..."):
-                                        if st.session_state.scheduler.update_scheduled_post_content(entry_id, full_text):
-                                            st.success("✅ הפוסט עודכן!")
-                                            st.session_state[edit_key] = False
-                                            st.rerun()
-                                        else:
-                                            st.error("העדכון נכשל")
-                        
-                        with col2:
-                            if st.button("✖️ ביטול", key=f"cancel_{post['id']}", use_container_width=True):
-                                st.session_state[edit_key] = False
-                                st.rerun()
-                    else:
-                        # View mode
-                        st.text_area(
-                            "תוכן הפוסט:",
-                            value=post['message'],
-                            height=calculate_textarea_height(post['message']),
-                            key=f"post_{post['id']}",
-                            disabled=True
-                        )
-                        
-                        col1, col2, col3, col4 = st.columns(4)
-                        
-                        with col1:
-                            if st.button("✏️ ערוך", key=f"edit_{post['id']}"):
-                                st.session_state[edit_key] = True
-                                st.rerun()
-                        
-                        with col2:
-                            if st.button("🔙 החזר להמתנה", key=f"unschedule_{post['id']}"):
-                                if entry_id:
-                                    with st.spinner("מבטל תזמון..."):
-                                        if st.session_state.scheduler.unschedule_post(entry_id):
-                                            st.success("✅ הוחזר להמתנה!")
-                                            st.rerun()
-                                        else:
-                                            st.error("ביטול התזמון נכשל")
-                        
-                        with col3:
-                            # Move up button (disabled for first post in ALL posts)
-                            if post_idx > 0:
-                                prev_post = all_sorted_posts[post_idx - 1]
-                                prev_entry = entry_map.get(prev_post['id'])
-                                if st.button("⬆️", key=f"up_{post['id']}"):
-                                    if entry_id and prev_entry:
-                                        with st.spinner("מחליף זמנים..."):
-                                            if st.session_state.scheduler.swap_post_times(entry_id, prev_entry['id']):
-                                                st.success("✅ הזמנים הוחלפו!")
-                                                st.rerun()
-                                            else:
-                                                st.error("ההחלפה נכשלה")
-                            else:
-                                # Disabled button placeholder
-                                st.button("⬆️", key=f"up_{post['id']}", disabled=True)
-                        
-                        with col4:
-                            # Move down button (disabled for last post in ALL posts)
-                            if post_idx < len(all_sorted_posts) - 1:
-                                next_post = all_sorted_posts[post_idx + 1]
-                                next_entry = entry_map.get(next_post['id'])
-                                if st.button("⬇️", key=f"down_{post['id']}"):
-                                    if entry_id and next_entry:
-                                        with st.spinner("מחליף זמנים..."):
-                                            if st.session_state.scheduler.swap_post_times(entry_id, next_entry['id']):
-                                                st.success("✅ הזמנים הוחלפו!")
-                                                st.rerun()
-                                            else:
-                                                st.error("ההחלפה נכשלה")
-                            else:
-                                # Disabled button placeholder
-                                st.button("⬇️", key=f"down_{post['id']}", disabled=True)
-                    
-                    st.divider()
-        
+        print("Step 1: Cleaning up old denied entries...")
+        db.cleanup_old_denied()
+        print("✓ Cleanup complete")
     except Exception as e:
-        st.error(f"שגיאה בטעינת הפוסטים המתוזמנים: {str(e)}")
-        st.info("וודא שלטוקן של Facebook יש הרשאה 'pages_manage_posts'")
+        print(f"✗ Cleanup failed: {e}")
+    
+    try:
+        print("Step 2: Getting pending entries...")
+        entries = db.get_pending_entries()
+        print(f"✓ Got {len(entries) if entries else 0} entries")
+        if entries:
+            print(f"  First entry: {entries[0]}")
+    except Exception as e:
+        print(f"✗ Getting entries failed: {e}")
+        entries = []
+    
+    try:
+        print("Step 3: Calculating heights...")
+        for i, entry in enumerate(entries):
+            entry['height'] = calculate_textarea_height(entry['text'])
+            if i < 3:  # Print first 3
+                print(f"  Entry {entry['id']}: height={entry['height']}px, text_length={len(entry['text'])}")
+        print(f"✓ Heights calculated for {len(entries)} entries")
+    except Exception as e:
+        print(f"✗ Height calculation failed: {e}")
+    
+    try:
+        print("Step 4: Loading config...")
+        config = load_config()
+        print(f"✓ Config loaded: {list(config.keys()) if config else 'None'}")
+        if config:
+            print(f"  Last sync: {config.get('last_sync', 'Never')}")
+    except Exception as e:
+        print(f"✗ Config loading failed: {e}")
+        config = {}
+    
+    print("Step 5: Rendering template...")
+    print(f"  entries={len(entries) if entries else 0}")
+    print(f"  config={'loaded' if config else 'empty'}")
+    print("=" * 50)
+    print("REVIEW PAGE - DEBUG END")
+    print("=" * 50)
+    
+    try:
+        return render_template('review.html', 
+                             entries=entries,
+                             config=config)
+    except Exception as e:
+        print(f"✗ Template rendering failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return f"Error rendering template: {e}", 500
 
-def show_statistics_page():
-    st.header("📊 סטטיסטיקה")
+@app.route('/approve/<int:entry_id>', methods=['POST'])
+def approve_entry(entry_id):
+    """Approve an entry and schedule to Facebook"""
+    edited_text = request.form.get('text', '') or request.get_json().get('text', '')
     
-    stats = st.session_state.db.get_statistics()
+    # Approve and assign number
+    db.approve_entry(entry_id, edited_text, 'admin')
     
-    col1, col2, col3, col4 = st.columns(4)
+    # Get assigned number
+    conn = db.get_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT post_number FROM entries WHERE id = ?', (entry_id,))
+    result = cursor.fetchone()
+    post_number = result['post_number'] if result else 1
+    conn.close()
     
-    with col1:
-        st.metric("ממתינים", stats['pending'])
+    # Format with number
+    formatted_text = f"#{post_number} {edited_text}"
     
-    with col2:
-        st.metric("מתוזמנים", stats['scheduled'])
-    
-    with col3:
-        st.metric("פורסמו", stats['published'])
-    
-    with col4:
-        st.metric("נדחו", stats['denied'])
-    
-    st.divider()
-    
-    st.subheader("פעילות אחרונה")
-    recent = st.session_state.db.get_recent_activity(20)
-    
-    if recent:
-        df = pd.DataFrame(recent)
-        st.dataframe(df, use_container_width=True, hide_index=True)
-    else:
-        st.info("אין פעילות עדיין")
-
-def show_settings_page():
-    st.header("⚙️ הגדרות")
-    
-    config_file = Path("config.json")
-    config = {}
-    if config_file.exists():
-        with open(config_file, 'r', encoding='utf-8') as f:
-            config = json.load(f)
-    
-    with st.expander("📊 הגדרות Google Sheets", expanded=False):
-        sheet_id = st.text_input(
-            "מזהה גיליון",
-            value=config.get('google_sheet_id', ''),
-            help="המזהה מכתובת ה-URL של הגיליון",
-            key="sheet_id"
-        )
-        
-        credentials_file = st.text_input(
-            "קובץ אישורים",
-            value=config.get('google_credentials_file', 'credentials.json'),
-            help="נתיב לקובץ האישורים של Google API",
-            key="creds_file"
-        )
-        
-        st.info("💡 וודא שהאישורים מוגדרים ב-Streamlit Secrets")
-    
-    with st.expander("📘 הגדרות Facebook", expanded=False):
-        fb_page_id = st.text_input(
-            "מזהה עמוד",
-            value=config.get('facebook_page_id', ''),
-            help="מזהה עמוד הפייסבוק שלך",
-            key="fb_page"
-        )
-        
-        fb_token = st.text_input(
-            "טוקן גישה",
-            value=config.get('facebook_access_token', ''),
-            type="password",
-            help="טוקן הגישה לעמוד הפייסבוק",
-            key="fb_token"
-        )
-    
-    with st.expander("⏰ הגדרות תזמון", expanded=False):
-        st.markdown("### חלונות פרסום")
-        st.write("הגדר את השעות בהן הפוסטים יפורסמו (שעון ישראל)")
-        
-        windows = config.get('posting_windows', ['09:00', '14:00', '19:00'])
-        
-        num_windows = st.number_input("מספר חלונות פרסום ביום", min_value=1, max_value=10, value=len(windows), key="num_windows")
-        
-        new_windows = []
-        cols = st.columns(min(num_windows, 3))
-        for i in range(num_windows):
-            with cols[i % 3]:
-                default_time = time(9, 0) if i >= len(windows) else datetime.strptime(windows[i], "%H:%M").time()
-                window_time = st.time_input(f"חלון {i+1}", value=default_time, key=f"window_{i}")
-                new_windows.append(window_time.strftime("%H:%M"))
-        
-        st.divider()
-        
-        st.markdown("### ימים לדילוג")
-        skip_shabbat = st.checkbox(
-            "דלג על ימי שישי ושבת",
-            value=config.get('skip_shabbat', True),
-            help="אל תתזמן פוסטים בשבת",
-            key="skip_shabbat"
-        )
-        
-        skip_jewish_holidays = st.checkbox(
-            "דלג על חגים יהודיים (ימי חג)",
-            value=config.get('skip_jewish_holidays', True),
-            help="אל תתזמן פוסטים בחגים מרכזיים",
-            key="skip_holidays"
-        )
-        
-        if skip_jewish_holidays:
-            st.info("📅 חגים שידולגו: ראש השנה, יום כיפור, סוכות, שמחת תורה, פסח, שבועות")
-        
-        st.divider()
-        
-        st.markdown("### החל שינויים על פוסטים קיימים")
-        st.write("אם שינית את חלונות הפרסום למעלה, לחץ כאן כדי לתזמן מחדש את כל הפוסטים הקיימים:")
-        
-        if st.button("📅 החל על לוח זמנים קיים", key="apply_windows"):
-            if st.session_state.scheduler:
-                with st.spinner("מתזמן מחדש את כל הפוסטים ב-Facebook..."):
-                    try:
-                        count = st.session_state.scheduler.reschedule_all_to_new_windows()
-                        st.success(f"✅ תוזמנו מחדש {count} פוסטים!")
-                    except Exception as e:
-                        st.error(f"שגיאה: {str(e)}")
-            else:
-                st.warning("המתזמן לא מופעל")
-    
-    with st.expander("🔢 מספור פוסטים", expanded=False):
-        starting_number = st.number_input(
-            "מספר התחלתי",
-            min_value=1,
-            value=config.get('starting_number', 1),
-            help="המספר ממנו יתחיל מספור הפוסטים",
-            key="start_num"
-        )
-        
-        current_number = st.session_state.db.get_current_post_number()
-        st.info(f"מספר פוסט נוכחי: **#{current_number}**")
-        
-        if st.button("איפוס מספור", key="reset_num"):
-            st.session_state.db.reset_post_number(starting_number)
-            st.success(f"המספור אופס ל-{starting_number}")
-            st.rerun()
-    
-    with st.expander("🗓️ הגדרות סנכרון", expanded=False):
-        default_start_date = datetime.now(pytz.timezone('Asia/Jerusalem')).date()
-        if 'sync_start_date' in config and config['sync_start_date']:
+    # Schedule to Facebook in background thread
+    def schedule_in_background():
+        if scheduler:
             try:
-                default_start_date = datetime.fromisoformat(config['sync_start_date']).date()
-            except:
-                pass
-
-        start_date = st.date_input(
-            "התחל לקרוא מתאריך",
-            value=default_start_date,
-            help="רק וידויים מתאריך זה ואילך יסונכרנו",
-            format="DD/MM/YYYY",
-            key="start_date"
-        )
-
-        if st.button("הגדר תאריך", key="set_date"):
-            config['sync_start_date'] = start_date.isoformat()
-            with open(config_file, 'w', encoding='utf-8') as f:
-                json.dump(config, f, indent=2, ensure_ascii=False)
-            st.success(f"✅ התאריך הוגדר ל-{start_date}")
-        
-        st.divider()
-        
-        last_sync = config.get('last_sync', 'אף פעם')
-        st.info(f"סנכרון אחרון: **{last_sync}**")
-        
-        if st.button("🔄 סנכרן עכשיו", key="sync_now"):
-            if st.session_state.sheets_handler:
-                with st.spinner("מסנכרן עם Google Sheets..."):
-                    try:
-                        start_date_str = config.get('sync_start_date')
-                        
-                        new_entries = st.session_state.sheets_handler.fetch_new_entries()
-                        added_count = 0
-                        skipped_count = 0
-                        
-                        for entry in new_entries:
-                            if start_date_str:
-                                try:
-                                    entry_date = pd.to_datetime(entry['timestamp'], dayfirst=True).date()
-                                    filter_date = datetime.fromisoformat(start_date_str).date()
-                                    if entry_date < filter_date:
-                                        skipped_count += 1
-                                        continue
-                                except:
-                                    pass
-                            
-                            if st.session_state.db.add_entry(entry['timestamp'], entry['text']):
-                                added_count += 1
-                        
-                        config['last_sync'] = datetime.now(pytz.timezone('Asia/Jerusalem')).strftime("%Y-%m-%d %H:%M:%S")
-                        with open(config_file, 'w', encoding='utf-8') as f:
-                            json.dump(config, f, indent=2, ensure_ascii=False)
-                        
-                        msg = f"✅ סונכרן בהצלחה! נוספו {added_count} וידויים חדשים."
-                        if skipped_count > 0:
-                            msg += f" דולגו {skipped_count} וידויים לפני {start_date_str}."
-                        st.success(msg)
-                        
-                        if config.get('notifications_enabled', False):
-                            pending_count = st.session_state.db.get_statistics()['pending']
-                            threshold = config.get('pending_threshold', 20)
-                            
-                            if pending_count > threshold:
-                                notif = NotificationHandler()
-                                next_empty = check_for_empty_windows(st.session_state.scheduler)
-                                notif.send_pending_threshold_alert(pending_count, next_empty)
-                                st.info(f"📧 התראה נשלחה - {pending_count} וידויים ממתינים חורגים מהסף של {threshold}")
-                    except Exception as e:
-                        st.error(f"הסנכרון נכשל: {str(e)}")
-            else:
-                st.warning("נא להגדיר תחילה את הגדרות Google Sheets")
+                scheduler.schedule_post_to_facebook(entry_id, formatted_text)
+            except Exception as e:
+                print(f"Background scheduling error: {e}")
     
-    with st.expander("📧 הגדרות התראות", expanded=False):
-        notifications_enabled = st.checkbox(
-            "הפעל התראות",
-            value=config.get('notifications_enabled', False),
-            help="הפעל התראות אימייל עבור וידויים ממתינים וחלונות ריקים",
-            key="notif_enabled"
-        )
+    # Start background thread
+    import threading
+    thread = threading.Thread(target=schedule_in_background, daemon=True)
+    thread.start()
+    
+    # If HTMX request, return empty immediately (doesn't wait for Facebook)
+    if request.headers.get('HX-Request'):
+        return '', 200
+    
+    return redirect(url_for('review_page'))
+
+@app.route('/deny/<int:entry_id>', methods=['POST'])
+def deny_entry(entry_id):
+    """Deny an entry"""
+    db.deny_entry(entry_id, 'admin')
+    flash('❌ נדחה', 'info')
+    
+    # If HTMX request, return empty (removes the card)
+    if request.headers.get('HX-Request'):
+        return '', 200
+    
+    return redirect(url_for('review_page'))
+
+@app.route('/sync', methods=['POST'])
+def sync_now():
+    """Manually sync with Google Sheets"""
+    if not sheets_handler:
+        flash('❌ Google Sheets לא מחובר', 'error')
+        return redirect(url_for('review_page'))
+    
+    try:
+        config = load_config()
+        read_from_date = config.get('read_from_date', '').strip()
         
-        app_url = st.text_input(
-            "כתובת האפליקציה",
-            value=config.get('app_url', 'http://localhost:8501'),
-            help="כתובת ה-URL של האפליקציה",
-            key="app_url"
-        )
-        
-        st.markdown("### הגדרות Gmail")
-        st.info("💡 השתמש בכתובת Gmail שלך וב-App Password (לא הסיסמה הרגילה)")
-        
-        gmail_email = st.text_input(
-            "כתובת Gmail",
-            value=config.get('gmail_email', ''),
-            placeholder="your-email@gmail.com",
-            help="כתובת ה-Gmail ממנה יישלחו ההתראות",
-            key="gmail_addr"
-        )
-        
-        gmail_app_password = st.text_input(
-            "App Password של Gmail",
-            value=config.get('gmail_app_password', ''),
-            type="password",
-            help="צור זאת מהגדרות חשבון Google",
-            key="gmail_pass"
-        )
-        
-        st.markdown("""
-        <details>
-        <summary>📖 איך לקבל Gmail App Password</summary>
-        <ol>
-        <li>עבור להגדרות חשבון Google</li>
-        <li>לחץ על אבטחה → אימות דו-שלבי</li>
-        <li>גלול למטה ל-App passwords</li>
-        <li>לחץ על App passwords</li>
-        <li>בחר Mail ו-Other (Custom name)</li>
-        <li>תן לזה שם "Content Approval System"</li>
-        <li>לחץ על Generate</li>
-        <li>העתק את הסיסמה בת 16 התווים</li>
-        <li>הדבק אותה למעלה</li>
-        </ol>
-        </details>
-        """, unsafe_allow_html=True)
-        
-        pending_threshold = st.number_input(
-            "סף וידויים ממתינים",
-            min_value=1,
-            max_value=1000,
-            value=config.get('pending_threshold', 20),
-            help="שלח התראה כשהוידויים הממתינים עוברים את המספר הזה",
-            key="pending_thresh"
-        )
-        
-        st.markdown("### נמעני התראות")
-        
-        existing_emails = config.get('notification_emails', [])
-        
-        new_email = st.text_input("הוסף כתובת אימייל", placeholder="email@example.com", key="new_email")
-        
-        col1, col2 = st.columns([1, 5])
-        with col1:
-            if st.button("➕ הוסף", key="add_email"):
-                if new_email and new_email not in existing_emails:
-                    existing_emails.append(new_email)
-                    config['notification_emails'] = existing_emails
-                    with open(config_file, 'w', encoding='utf-8') as f:
-                        json.dump(config, f, indent=2, ensure_ascii=False)
-                    st.success(f"נוסף {new_email}")
-                    st.rerun()
-                elif new_email in existing_emails:
-                    st.warning("האימייל כבר קיים")
-                else:
-                    st.warning("נא להזין כתובת אימייל")
-        
-        if existing_emails:
-            st.write(f"**אימיילים מוגדרים ({len(existing_emails)}):**")
-            for idx, email in enumerate(existing_emails):
-                col1, col2 = st.columns([5, 1])
-                with col1:
-                    st.text(email)
-                with col2:
-                    if st.button("🗑️", key=f"delete_email_{idx}"):
-                        existing_emails.remove(email)
-                        config['notification_emails'] = existing_emails
-                        with open(config_file, 'w', encoding='utf-8') as f:
-                            json.dump(config, f, indent=2, ensure_ascii=False)
-                        st.success(f"הוסר {email}")
-                        st.rerun()
+        # Convert date picker format (YYYY-MM-DD) to DD/MM/YYYY 00:00:00
+        # ONLY if user actually set a date
+        last_timestamp = None
+        if read_from_date:
+            try:
+                # Date picker returns YYYY-MM-DD
+                dt = datetime.strptime(read_from_date, '%Y-%m-%d')
+                # Convert to DD/MM/YYYY 00:00:00 for sheets_handler
+                last_timestamp = dt.strftime('%d/%m/%Y 00:00:00')
+                print(f"DEBUG: Filtering from date: {last_timestamp}")
+            except Exception as e:
+                print(f"DEBUG: Date parse error: {e}")
+                flash(f'⚠️ פורמט תאריך שגוי', 'warning')
         else:
-            st.info("לא הוגדרו כתובות אימייל עדיין")
+            print("DEBUG: No date filter - fetching ALL entries")
         
-        st.divider()
-        if st.button("📧 שלח התראת בדיקה", key="test_notif"):
-            if not notifications_enabled:
-                st.warning("ההתראות מבוטלות. הפעל אותן תחילה!")
-            elif not gmail_email or not gmail_app_password:
-                st.warning("פרטי Gmail לא הוגדרו!")
-            elif not existing_emails:
-                st.warning("לא הוגדרו כתובות אימייל!")
-            else:
-                try:
-                    test_config = config.copy()
-                    test_config['notifications_enabled'] = notifications_enabled
-                    test_config['gmail_email'] = gmail_email
-                    test_config['gmail_app_password'] = gmail_app_password
-                    test_config['notification_emails'] = existing_emails
-                    test_config['pending_threshold'] = pending_threshold
-                    test_config['app_url'] = app_url
-                    
-                    with open(config_file, 'w', encoding='utf-8') as f:
-                        json.dump(test_config, f, indent=2, ensure_ascii=False)
-                    
-                    notif = NotificationHandler()
-                    if notif.send_test_notification():
-                        st.success("✅ התראת בדיקה נשלחה בהצלחה! בדוק את האימייל שלך.")
-                    else:
-                        st.error("❌ שליחת התראת הבדיקה נכשלה. בדוק את פרטי Gmail.")
-                except Exception as e:
-                    st.error(f"שגיאה בשליחת התראת בדיקה: {str(e)}")
+        new_entries = sheets_handler.fetch_new_entries(last_timestamp)
+        print(f"DEBUG: Fetched {len(new_entries)} entries from sheets")
+        added_count = 0
+        
+        for entry in new_entries:
+            if db.add_entry(entry['timestamp'], entry['text']):
+                added_count += 1
+                print(f"DEBUG: Added entry: {entry['timestamp']}")
+        
+        print(f"DEBUG: Added {added_count} new entries to database")
+        
+        # Update last sync
+        israel_tz = pytz.timezone('Asia/Jerusalem')
+        config['last_sync'] = datetime.now(israel_tz).strftime("%Y-%m-%d %H:%M:%S")
+        save_config(config)
+        
+        flash(f'✅ סונכרן! נוספו {added_count} ערכים חדשים', 'success')
+    except Exception as e:
+        print(f"DEBUG: Sync error: {e}")
+        import traceback
+        traceback.print_exc()
+        flash(f'❌ סנכרון נכשל: {str(e)}', 'error')
     
-    with st.expander("🗑️ ניהול מסד נתונים", expanded=False):
-        st.warning("⚠️ פעולות אלה לא ניתנות לביטול!")
+    return redirect(url_for('review_page'))
+
+# ============================================================================
+# ROUTES - Scheduled Posts
+# ============================================================================
+
+@app.route('/scheduled')
+def scheduled_page():
+    """View scheduled posts - ALWAYS syncs with Facebook"""
+    print("=" * 80)
+    print("SCHEDULED PAGE - SYNCING WITH FACEBOOK")
+    print("=" * 80)
+    
+    if not facebook_handler:
+        print("ERROR: Facebook handler is None")
+        flash('❌ Facebook לא מחובר', 'error')
+        return redirect(url_for('review_page'))
+    
+    try:
+        # Track if we made changes
+        posts_deleted = False
+        holes_filled = False
         
-        col1, col2 = st.columns(2)
-
-        with col1:
-            if st.button("🗑️ מחק את כל הוידויים הממתינים", type="secondary", key="del_pending"):
-                conn = st.session_state.db.get_connection()
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM entries WHERE status = 'pending'")
-                cursor.execute("DELETE FROM processed_timestamps")
-                conn.commit()
-                conn.close()
-                st.success("✅ כל הוידויים הממתינים נמחקו!")
-                st.rerun()
-
-        with col2:
-            if st.button("⚠️ נקה את כל מסד הנתונים", type="secondary", key="clear_db"):
-                if st.checkbox("אני בטוח שאני רוצה למחוק הכל", key="confirm_clear"):
-                    conn = st.session_state.db.get_connection()
+        print("\n1. Fetching scheduled posts from Facebook...")
+        fb_posts = facebook_handler.get_scheduled_posts()
+        print(f"   Got {len(fb_posts)} posts from Facebook")
+        
+        print("\n2. Fetching scheduled entries from database...")
+        db_entries = db.get_scheduled_entries()
+        print(f"   Got {len(db_entries)} entries from database")
+        
+        # Create lookup of Facebook post IDs
+        fb_post_ids = set(fb_post['id'] for fb_post in fb_posts)
+        
+        print("\n3. Syncing database with Facebook...")
+        # Match DB entries with Facebook posts by POST NUMBER, not facebook_post_id
+        # This prevents "orphaned entries" when Facebook changes post IDs
+        
+        fb_posts_by_number = {}
+        for fb_post in fb_posts:
+            message = fb_post.get('message', '')
+            if message.startswith('#'):
+                try:
+                    num_str = message.split()[0][1:]
+                    post_number = int(num_str)
+                    fb_posts_by_number[post_number] = fb_post
+                except:
+                    pass
+        
+        print(f"   Found {len(fb_posts_by_number)} Facebook posts with post numbers")
+        
+        # Find truly orphaned entries (post number not on Facebook)
+        entries_to_remove = []
+        for entry in db_entries:
+            post_num = entry.get('post_number')
+            if post_num and post_num not in fb_posts_by_number:
+                entries_to_remove.append(entry)
+        
+        had_orphans = len(entries_to_remove) > 0
+        
+        if entries_to_remove:
+            print(f"   Found {len(entries_to_remove)} truly orphaned entries (deleted on Facebook)")
+            
+            # Sort by post number
+            entries_to_remove.sort(key=lambda x: x.get('post_number', 999))
+            
+            conn = db.get_connection()
+            cursor = conn.cursor()
+            
+            # Collect all deleted post numbers
+            deleted_numbers = [entry['post_number'] for entry in entries_to_remove]
+            print(f"   Deleted post numbers: {deleted_numbers}")
+            
+            # Delete all orphaned entries from DB
+            for entry in entries_to_remove:
+                print(f"     Deleting entry {entry['id']} (post #{entry['post_number']})")
+                cursor.execute('DELETE FROM entries WHERE id = ?', (entry['id'],))
+            
+            # Decrement counter by number of deletions
+            cursor.execute(f'UPDATE post_numbers SET current_number = current_number - {len(entries_to_remove)} WHERE id = 1')
+            print(f"   ✓ Decremented counter by {len(entries_to_remove)}")
+            
+            conn.commit()
+            conn.close()
+            
+            # Refresh db_entries
+            db_entries = db.get_scheduled_entries()
+            
+            print(f"   ✓ Deleted {len(entries_to_remove)} orphaned entries")
+            print(f"   ✓ {len(db_entries)} entries remain in DB")
+            print(f"   ⚠️  Will rebuild post numbers from Facebook...")
+        else:
+            print("   ✓ No orphaned entries found")
+        
+        print("\n4. Matching and syncing Facebook posts with database entries...")
+        posts_data = []
+        
+        # Sort Facebook posts by scheduled time to get correct sequence
+        fb_posts_sorted = sorted(fb_posts, key=lambda p: p['scheduled_time'])
+        
+        # If we had orphans, renumber remaining posts to fill gaps
+        if had_orphans and len(fb_posts_sorted) > 0:
+            print("   Renumbering remaining posts to fill gaps...")
+            
+            conn = db.get_connection()
+            cursor = conn.cursor()
+            
+            # Get the lowest post number that's still on Facebook
+            fb_post_numbers = []
+            for fb_post in fb_posts_sorted:
+                message = fb_post.get('message', '')
+                if message.startswith('#'):
+                    try:
+                        num = int(message.split()[0][1:])
+                        fb_post_numbers.append(num)
+                    except:
+                        pass
+            
+            if fb_post_numbers:
+                fb_post_numbers.sort()
+                lowest_fb_number = fb_post_numbers[0]
+                print(f"   Lowest post number on Facebook: #{lowest_fb_number}")
+                
+                # Renumber all posts sequentially starting from lowest
+                for i, (fb_post, expected_number) in enumerate(zip(fb_posts_sorted, range(lowest_fb_number, lowest_fb_number + len(fb_posts_sorted)))):
+                    message = fb_post.get('message', '')
+                    current_number = None
+                    clean_message = message
+                    
+                    if message.startswith('#'):
+                        try:
+                            num_str = message.split()[0][1:]
+                            current_number = int(num_str)
+                            clean_message = message.split(' ', 1)[1] if ' ' in message else message
+                        except:
+                            pass
+                    
+                    if current_number and current_number != expected_number:
+                        print(f"   Renumbering post #{current_number} → #{expected_number}")
+                        
+                        # Update Facebook with new number
+                        new_text = f"#{expected_number} {clean_message}"
+                        try:
+                            facebook_handler.update_scheduled_post(
+                                fb_post['id'],
+                                new_text
+                            )
+                            print(f"     ✓ Updated Facebook")
+                            
+                            # Update message in fb_post for later matching
+                            fb_post['message'] = new_text
+                        except Exception as e:
+                            print(f"     ✗ Error updating Facebook: {e}")
+            
+            conn.commit()
+            conn.close()
+            
+            # Re-fetch to get updated post numbers
+            print("   Re-fetching from Facebook...")
+            fb_posts = facebook_handler.get_scheduled_posts()
+            fb_posts_sorted = sorted(fb_posts, key=lambda p: p['scheduled_time'])
+        
+        # Now match/sync entries with updated Facebook posts
+        for idx, fb_post in enumerate(fb_posts_sorted):
+            # Extract post number from Facebook message
+            message = fb_post.get('message', '')
+            fb_post_number = None
+            clean_message = message
+            
+            if message.startswith('#'):
+                try:
+                    num_str = message.split()[0][1:]
+                    fb_post_number = int(num_str)
+                    clean_message = message.split(' ', 1)[1] if ' ' in message else message
+                except:
+                    pass
+            
+            # Match DB entry by POST NUMBER (not facebook_post_id!)
+            entry = None
+            if fb_post_number:
+                entry = next((e for e in db_entries if e.get('post_number') == fb_post_number), None)
+            
+            # If entry found, UPDATE its facebook_post_id from Facebook
+            if entry:
+                old_fb_id = entry.get('facebook_post_id')
+                new_fb_id = fb_post['id']
+                
+                if old_fb_id != new_fb_id:
+                    print(f"   Syncing entry {entry['id']}: FB post ID changed")
+                    print(f"     Old: {old_fb_id}")
+                    print(f"     New: {new_fb_id}")
+                    
+                    conn = db.get_connection()
                     cursor = conn.cursor()
-                    cursor.execute("DELETE FROM entries")
-                    cursor.execute("DELETE FROM processed_timestamps")
+                    cursor.execute('''
+                        UPDATE entries 
+                        SET facebook_post_id = ?, scheduled_time = ?, text = ?
+                        WHERE id = ?
+                    ''', (new_fb_id, fb_post['scheduled_time'], clean_message, entry['id']))
                     conn.commit()
                     conn.close()
-                    st.success("✅ מסד הנתונים נוקה!")
-                    st.rerun()
+                    
+                    entry['facebook_post_id'] = new_fb_id
+                    entry['scheduled_time'] = fb_post['scheduled_time']
+                    entry['text'] = clean_message
+            
+            # If no DB entry exists, create one
+            elif fb_post_number:
+                print(f"   Creating entry for Facebook post #{fb_post_number}")
+                conn = db.get_connection()
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO entries (text, status, post_number, facebook_post_id, scheduled_time, timestamp)
+                    VALUES (?, 'scheduled', ?, ?, ?, datetime('now'))
+                ''', (clean_message, fb_post_number, fb_post['id'], fb_post['scheduled_time']))
+                new_entry_id = cursor.lastrowid
+                conn.commit()
+                conn.close()
+                
+                entry = {
+                    'id': new_entry_id,
+                    'text': clean_message,
+                    'post_number': fb_post_number,
+                    'facebook_post_id': fb_post['id'],
+                    'scheduled_time': fb_post['scheduled_time']
+                }
+            
+            # Format display time
+            weekday = get_hebrew_weekday(fb_post['scheduled_time'])
+            scheduled_time_str = fb_post['scheduled_time']
+            if '+' in scheduled_time_str:
+                scheduled_time_str = scheduled_time_str.split('+')[0]
+            if 'T' in scheduled_time_str:
+                from datetime import datetime
+                try:
+                    dt = datetime.fromisoformat(scheduled_time_str.split('+')[0])
+                    display_time = dt.strftime('%H:%M %d/%m/%Y')
+                except:
+                    display_time = scheduled_time_str
+            else:
+                display_time = scheduled_time_str
+            
+            posts_data.append({
+                'fb_post': fb_post,
+                'entry': entry,
+                'weekday': weekday,
+                'display_time': display_time,
+                'height': calculate_textarea_height(fb_post['message']) if fb_post.get('message') else 80
+            })
+        
+        # Fill holes: move posts to earliest available slots
+        print("\n5. Checking for holes in schedule...")
+        if scheduler and len(fb_posts) > 0:
+            from datetime import datetime, timedelta
+            import pytz
+            
+            # Get all scheduled times
+            scheduled_times = sorted([
+                datetime.fromisoformat(p['scheduled_time'].replace('+02:00', '').replace('+03:00', ''))
+                for p in fb_posts
+            ])
+            
+            if scheduled_times:
+                # Generate all valid slots from now until last scheduled post
+                windows = scheduler.load_posting_windows()
+                now = datetime.now(scheduler.timezone)
+                last_scheduled = max(scheduled_times)
+                
+                valid_slots = []
+                current_date = now.date()
+                
+                while True:
+                    if not scheduler.should_skip_date(current_date):
+                        for window_time in windows:
+                            slot = scheduler.timezone.localize(datetime.combine(current_date, window_time))
+                            if slot > now:
+                                valid_slots.append(slot)
+                                if len(valid_slots) >= len(scheduled_times):
+                                    break
+                        if len(valid_slots) >= len(scheduled_times):
+                            break
+                    current_date += timedelta(days=1)
+                    if (current_date - now.date()).days > 365:
+                        break
+                
+                # Take only the slots we need
+                valid_slots = valid_slots[:len(scheduled_times)]
+                
+                # Check if posts need to be moved to fill holes
+                posts_moved = False
+                posts_to_update = []
+                
+                for i, (fb_post, target_slot) in enumerate(zip(sorted(fb_posts, key=lambda p: p['scheduled_time']), valid_slots)):
+                    current_time = datetime.fromisoformat(fb_post['scheduled_time'].replace('+02:00', '').replace('+03:00', ''))
+                    
+                    # If post is not at the right slot, mark for update
+                    if abs((scheduler.timezone.localize(current_time) - target_slot).total_seconds()) > 60:
+                        posts_to_update.append((fb_post, target_slot))
+                        posts_moved = True
+                
+                if posts_moved:
+                    print(f"   Found holes! Moving {len(posts_to_update)} posts to fill gaps...")
+                    
+                    conn = db.get_connection()
+                    cursor = conn.cursor()
+                    
+                    for fb_post, new_slot in posts_to_update:
+                        old_time_str = fb_post['scheduled_time']
+                        new_time_str = new_slot.isoformat()
+                        
+                        # Extract post number
+                        message = fb_post.get('message', '')
+                        post_number = None
+                        if message.startswith('#'):
+                            try:
+                                post_number = int(message.split()[0][1:])
+                            except:
+                                pass
+                        
+                        if post_number:
+                            print(f"     Post #{post_number}: {old_time_str} → {new_time_str}")
+                            
+                            # Update database
+                            cursor.execute('''
+                                UPDATE entries 
+                                SET scheduled_time = ? 
+                                WHERE post_number = ?
+                            ''', (new_time_str, post_number))
+                            
+                            # Update Facebook
+                            try:
+                                facebook_handler.update_scheduled_post(
+                                    fb_post['id'],
+                                    fb_post['message'],
+                                    new_slot
+                                )
+                                print(f"       ✓ Updated")
+                            except Exception as e:
+                                print(f"       ✗ Error: {e}")
+                    
+                    conn.commit()
+                    conn.close()
+                    
+                    print(f"   ✓ Holes filled, re-fetching from Facebook...")
+                    
+                    # Re-fetch to get updated times
+                    fb_posts = facebook_handler.get_scheduled_posts()
+                    
+                    # Rebuild posts_data with new times
+                    posts_data = []
+                    for fb_post in fb_posts:
+                        message = fb_post.get('message', '')
+                        post_number = None
+                        if message.startswith('#'):
+                            try:
+                                post_number = int(message.split()[0][1:])
+                            except:
+                                pass
+                        
+                        if post_number:
+                            entry = next((e for e in db_entries if e.get('post_number') == post_number), None)
+                            if entry:
+                                weekday = get_hebrew_weekday(fb_post['scheduled_time'])
+                                scheduled_time_str = fb_post['scheduled_time'].split('+')[0] if '+' in fb_post['scheduled_time'] else fb_post['scheduled_time']
+                                if 'T' in scheduled_time_str:
+                                    try:
+                                        dt = datetime.fromisoformat(scheduled_time_str)
+                                        display_time = dt.strftime('%H:%M %d/%m/%Y')
+                                    except:
+                                        display_time = scheduled_time_str
+                                else:
+                                    display_time = scheduled_time_str
+                                
+                                posts_data.append({
+                                    'fb_post': fb_post,
+                                    'entry': entry,
+                                    'weekday': weekday,
+                                    'display_time': display_time,
+                                    'height': calculate_textarea_height(fb_post['message']) if fb_post.get('message') else 80
+                                })
+                else:
+                    print("   ✓ No holes found")
+        
+        # Sort by scheduled time
+        posts_data.sort(key=lambda x: x['fb_post']['scheduled_time'])
+        
+        print(f"\n6. Rendering template with {len(posts_data)} posts")
+        if had_orphans:
+            print("   ⚠️  Orphaned entries were found and deleted")
+        print("=" * 80)
+        
+        return render_template('scheduled.html', 
+                             posts=posts_data, 
+                             had_orphans=had_orphans)
+        
+    except Exception as e:
+        print(f"\nERROR in scheduled_page: {e}")
+        import traceback
+        traceback.print_exc()
+        print("=" * 80)
+        flash(f'❌ שגיאה: {str(e)}', 'error')
+        return redirect(url_for('review_page'))
+
+@app.route('/test-js')
+def test_js_page():
+    """JavaScript test page for debugging"""
+    return render_template('test_js.html')
+
+@app.route('/unschedule/<int:entry_id>', methods=['POST'])
+def unschedule_entry(entry_id):
+    """Unschedule a post and return to pending, shift all following posts up"""
+    print("=" * 80)
+    print("UNSCHEDULE ENTRY - START")
+    print(f"Entry ID: {entry_id}")
+    print("=" * 80)
     
-    st.divider()
-    if st.button("💾 שמור את כל ההגדרות", type="primary", use_container_width=True):
+    try:
+        # Get the entry being unscheduled
+        entries = db.get_scheduled_entries()
+        print(f"Total scheduled entries in DB: {len(entries)}")
+        
+        unscheduled_entry = next((e for e in entries if e['id'] == entry_id), None)
+        
+        if not unscheduled_entry:
+            print(f"ERROR: Entry {entry_id} not found in database")
+            flash('❌ Entry not found', 'error')
+            return redirect(url_for('scheduled_page'))
+        
+        print(f"Found entry: #{unscheduled_entry['post_number']} - {unscheduled_entry['text'][:50]}...")
+        
+        unscheduled_number = unscheduled_entry['post_number']
+        unscheduled_time = unscheduled_entry['scheduled_time']
+        print(f"Post number: {unscheduled_number}")
+        print(f"Scheduled time: {unscheduled_time}")
+        
+        # Delete from Facebook
+        print("Deleting from Facebook...")
+        if facebook_handler and unscheduled_entry.get('facebook_post_id'):
+            try:
+                fb_post_id = unscheduled_entry['facebook_post_id']
+                print(f"Facebook post ID: {fb_post_id}")
+                facebook_handler.delete_scheduled_post(fb_post_id)
+                print("✓ Deleted from Facebook")
+            except Exception as e:
+                print(f"ERROR deleting from Facebook: {e}")
+                import traceback
+                traceback.print_exc()
+        else:
+            print("No Facebook post ID, skipping deletion")
+        
+        # Update database - set to pending
+        print("Setting entry to pending in database...")
+        conn = db.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            UPDATE entries 
+            SET status = 'pending', post_number = NULL, facebook_post_id = NULL, scheduled_time = NULL
+            WHERE id = ?
+        ''', (entry_id,))
+        conn.commit()
+        conn.close()
+        print("✓ Entry set to pending")
+        
+        # Get all posts scheduled AFTER this one (by post number)
+        following_entries = [e for e in entries if e.get('post_number', 999) > unscheduled_number]
+        following_entries.sort(key=lambda x: x['post_number'])
+        print(f"Found {len(following_entries)} posts scheduled after #{unscheduled_number}")
+        
+        if following_entries:
+            print("Shifting following posts...")
+            
+            # CASCADE LOGIC:
+            # Each post takes the previous post's time slot
+            # First post takes the unscheduled post's time slot
+            
+            # Start with the freed time slot
+            previous_time_str = unscheduled_time
+            
+            for i, entry in enumerate(following_entries):
+                old_number = entry['post_number']
+                new_number = old_number - 1
+                current_time_str = entry['scheduled_time']
+                new_time_str = previous_time_str  # Take previous post's slot
+                
+                print(f"\nShifting post #{old_number} → #{new_number}")
+                print(f"  Entry ID: {entry['id']}")
+                print(f"  Text: {entry['text'][:50]}...")
+                print(f"  Current time: {current_time_str}")
+                print(f"  New time: {new_time_str}")
+                
+                try:
+                    # Parse to datetime
+                    from datetime import datetime
+                    import pytz
+                    timezone = pytz.timezone('Asia/Jerusalem')
+                    
+                    new_time_dt = datetime.fromisoformat(new_time_str.replace('+02:00', '').replace('+03:00', ''))
+                    new_time_dt = timezone.localize(new_time_dt)
+                    
+                    # Update Facebook FIRST (before updating DB)
+                    new_text = f"#{new_number} {entry['text']}"
+                    print(f"  Updating Facebook with: {new_text[:50]}...")
+                    facebook_handler.update_scheduled_post(
+                        entry['facebook_post_id'],
+                        new_text,
+                        new_time_dt
+                    )
+                    print(f"  ✓ Facebook updated")
+                    
+                    # Update database (keep same facebook_post_id)
+                    conn = db.get_connection()
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                        UPDATE entries 
+                        SET post_number = ?, scheduled_time = ?
+                        WHERE id = ?
+                    ''', (new_number, new_time_str, entry['id']))
+                    conn.commit()
+                    conn.close()
+                    print(f"  ✓ Database updated")
+                    
+                    # Next post will take this post's current time
+                    previous_time_str = current_time_str
+                    
+                except Exception as e:
+                    print(f"  ✗ Error shifting post {entry['id']}: {e}")
+                    import traceback
+                    traceback.print_exc()
+        
+        # Decrement global counter
+        print("\nDecrementing global post counter...")
+        db.decrement_post_counter()
+        print("✓ Counter decremented")
+        
+        print("\n⚠️  IMPORTANT: The page will re-sync with Facebook to refresh IDs")
+        
+        flash('✅ הוחזר להמתנה והפוסטים הבאים הוזזו', 'success')
+        print("=" * 80)
+        print("UNSCHEDULE ENTRY - SUCCESS")
+        print("=" * 80)
+        
+    except Exception as e:
+        print("=" * 80)
+        print("UNSCHEDULE ENTRY - ERROR")
+        print(f"ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        print("=" * 80)
+        flash(f'❌ שגיאה: {str(e)}', 'error')
+    
+    return redirect(url_for('scheduled_page'))
+
+@app.route('/edit_scheduled/<int:entry_id>', methods=['POST'])
+def edit_scheduled_post(entry_id):
+    """Edit a scheduled post - HTMX compatible"""
+    print("=" * 80)
+    print("EDIT SCHEDULED POST - START")
+    print(f"Entry ID: {entry_id}")
+    print(f"Request method: {request.method}")
+    print(f"Content-Type: {request.content_type}")
+    print(f"Is JSON: {request.is_json}")
+    print("=" * 80)
+    
+    # Get new text from request
+    new_text = request.json.get('text', '') if request.is_json else request.form.get('text', '')
+    print(f"Received text length: {len(new_text)}")
+    print(f"Text preview: {new_text[:100]}..." if len(new_text) > 100 else f"Text: {new_text}")
+    
+    if not new_text:
+        print("ERROR: Empty text received")
+        if request.headers.get('HX-Request'):
+            return '', 400
+        flash('❌ טקסט ריק', 'error')
+        return redirect(url_for('scheduled_page'))
+    
+    # Get entry from database
+    print("Fetching entry from database...")
+    entries = db.get_scheduled_entries()
+    print(f"Total scheduled entries: {len(entries)}")
+    entry = next((e for e in entries if e['id'] == entry_id), None)
+    
+    if not entry:
+        print(f"ERROR: Entry {entry_id} not found")
+        if request.headers.get('HX-Request'):
+            return '', 404
+        flash('❌ לא נמצא', 'error')
+        return redirect(url_for('scheduled_page'))
+    
+    print(f"Found entry: #{entry['post_number']} - {entry['text'][:50]}...")
+    print(f"Facebook post ID: {entry.get('facebook_post_id')}")
+    
+    # Update database
+    try:
+        # Strip post number from new_text if it exists
+        clean_text = new_text
+        if clean_text.startswith('#'):
+            print("Text starts with #, stripping post number...")
+            parts = clean_text.split(' ', 1)
+            if len(parts) > 1:
+                clean_text = parts[1]
+                print(f"Stripped number, clean text: {clean_text[:50]}...")
+        
+        # Update text in database (without number)
+        print("Updating database...")
+        conn = db.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('UPDATE entries SET text = ? WHERE id = ?', (clean_text, entry_id))
+        conn.commit()
+        conn.close()
+        print("✓ Database updated")
+        
+        # Update on Facebook with post number
+        if scheduler and facebook_handler and entry.get('facebook_post_id'):
+            full_text = f"#{entry['post_number']} {clean_text}"
+            print(f"Updating Facebook...")
+            print(f"Facebook post ID: {entry['facebook_post_id']}")
+            print(f"Full text: {full_text[:100]}..." if len(full_text) > 100 else f"Full text: {full_text}")
+            
+            facebook_handler.update_scheduled_post(entry['facebook_post_id'], full_text)
+            print("✓ Facebook updated")
+        else:
+            print("Skipping Facebook update (scheduler/handler not available or no post ID)")
+        
+        flash('✅ הפוסט עודכן בהצלחה!', 'success')
+        print("=" * 80)
+        print("EDIT SCHEDULED POST - SUCCESS")
+        print("=" * 80)
+        
+    except Exception as e:
+        print("=" * 80)
+        print("EDIT SCHEDULED POST - ERROR")
+        print(f"ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        print("=" * 80)
+        
+        if request.headers.get('HX-Request'):
+            return '', 500
+        flash(f'❌ שגיאה: {str(e)}', 'error')
+    
+    # For HTMX, reload the whole card
+    if request.headers.get('HX-Request'):
+        return redirect(url_for('scheduled_page'))
+    
+    return redirect(url_for('scheduled_page'))
+
+@app.route('/swap_posts/<int:entry_id>/<direction>', methods=['POST'])
+def swap_posts(entry_id, direction):
+    """Swap post with previous (up) or next (down) post"""
+    print("=" * 80)
+    print("SWAP POSTS - START")
+    print(f"Entry ID: {entry_id}")
+    print(f"Direction: {direction}")
+    print("=" * 80)
+    
+    if not scheduler or not facebook_handler:
+        print("ERROR: Scheduler or Facebook handler not available")
+        if request.headers.get('HX-Request'):
+            return '', 500
+        flash('❌ Scheduler not available', 'error')
+        return redirect(url_for('scheduled_page'))
+    
+    try:
+        # Get all scheduled entries
+        print("Fetching scheduled entries...")
+        entries = db.get_scheduled_entries()
+        print(f"Total scheduled entries: {len(entries)}")
+        
+        # Sort by post_number
+        entries.sort(key=lambda x: x.get('post_number', 999))
+        print(f"Sorted entries by post_number")
+        
+        # Find current entry index
+        current_idx = next((i for i, e in enumerate(entries) if e['id'] == entry_id), None)
+        
+        if current_idx is None:
+            print(f"ERROR: Entry {entry_id} not found")
+            flash('❌ Entry not found', 'error')
+            return redirect(url_for('scheduled_page'))
+        
+        print(f"Found entry at index {current_idx}")
+        
+        # Determine swap target
+        if direction == 'up' and current_idx > 0:
+            target_idx = current_idx - 1
+            print(f"Moving up: swapping with index {target_idx}")
+        elif direction == 'down' and current_idx < len(entries) - 1:
+            target_idx = current_idx + 1
+            print(f"Moving down: swapping with index {target_idx}")
+        else:
+            print(f"Cannot move {direction} (at boundary)")
+            return redirect(url_for('scheduled_page'))
+        
+        current_entry = entries[current_idx]
+        target_entry = entries[target_idx]
+        
+        print(f"\nCurrent entry:")
+        print(f"  ID: {current_entry['id']}")
+        print(f"  Number: #{current_entry['post_number']}")
+        print(f"  Text: {current_entry['text'][:50]}...")
+        print(f"  Time: {current_entry['scheduled_time']}")
+        
+        print(f"\nTarget entry:")
+        print(f"  ID: {target_entry['id']}")
+        print(f"  Number: #{target_entry['post_number']}")
+        print(f"  Text: {target_entry['text'][:50]}...")
+        print(f"  Time: {target_entry['scheduled_time']}")
+        
+        # Swap post numbers
+        current_num = current_entry['post_number']
+        target_num = target_entry['post_number']
+        print(f"\nSwapping numbers: {current_num} ↔ {target_num}")
+        
+        # Swap scheduled times (stored as strings in DB)
+        current_time_str = current_entry['scheduled_time']
+        target_time_str = target_entry['scheduled_time']
+        print(f"Swapping times: {current_time_str} ↔ {target_time_str}")
+        
+        # Convert strings to datetime objects for Facebook API
+        from datetime import datetime
+        import pytz
+        timezone = pytz.timezone('Asia/Jerusalem')
+        
+        try:
+            print("Parsing times to datetime objects...")
+            # Parse ISO format: 2026-02-12T13:00:00+02:00
+            if 'T' in current_time_str:
+                current_time_dt = datetime.fromisoformat(current_time_str.replace('+02:00', ''))
+                current_time_dt = timezone.localize(current_time_dt)
+                target_time_dt = datetime.fromisoformat(target_time_str.replace('+02:00', ''))
+                target_time_dt = timezone.localize(target_time_dt)
+            else:
+                # Parse database format: YYYY-MM-DD HH:MM:SS
+                current_time_dt = datetime.strptime(current_time_str, '%Y-%m-%d %H:%M:%S')
+                current_time_dt = timezone.localize(current_time_dt)
+                target_time_dt = datetime.strptime(target_time_str, '%Y-%m-%d %H:%M:%S')
+                target_time_dt = timezone.localize(target_time_dt)
+            print("✓ Times parsed successfully")
+        except Exception as e:
+            print(f"ERROR parsing times: {e}")
+            import traceback
+            traceback.print_exc()
+            flash(f'❌ שגיאת פורמט זמן: {str(e)}', 'error')
+            return redirect(url_for('scheduled_page'))
+        
+        # Update database with string times
+        print("\nUpdating database...")
+        conn = db.get_connection()
+        cursor = conn.cursor()
+        
+        # Update current entry
+        cursor.execute('''
+            UPDATE entries 
+            SET post_number = ?, scheduled_time = ?
+            WHERE id = ?
+        ''', (target_num, target_time_str, current_entry['id']))
+        print(f"  Updated entry {current_entry['id']}: #{current_num}→#{target_num}")
+        
+        # Update target entry
+        cursor.execute('''
+            UPDATE entries 
+            SET post_number = ?, scheduled_time = ?
+            WHERE id = ?
+        ''', (current_num, current_time_str, target_entry['id']))
+        print(f"  Updated entry {target_entry['id']}: #{target_num}→#{current_num}")
+        
+        conn.commit()
+        conn.close()
+        print("✓ Database updated")
+        
+        # Update on Facebook with datetime objects
+        print("\nUpdating Facebook...")
+        # Get current texts
+        current_text = current_entry.get('text', '')
+        target_text = target_entry.get('text', '')
+        
+        # Update Facebook posts with swapped data
+        if current_entry.get('facebook_post_id'):
+            new_text = f"#{target_num} {current_text}"
+            print(f"  Updating post {current_entry['facebook_post_id'][:10]}... with: {new_text[:50]}...")
+            facebook_handler.update_scheduled_post(
+                current_entry['facebook_post_id'], 
+                new_text,
+                target_time_dt
+            )
+            print("  ✓ Updated")
+        else:
+            print(f"  ✗ No Facebook post ID for entry {current_entry['id']}")
+        
+        if target_entry.get('facebook_post_id'):
+            new_text = f"#{current_num} {target_text}"
+            print(f"  Updating post {target_entry['facebook_post_id'][:10]}... with: {new_text[:50]}...")
+            facebook_handler.update_scheduled_post(
+                target_entry['facebook_post_id'],
+                new_text,
+                current_time_dt
+            )
+            print("  ✓ Updated")
+        else:
+            print(f"  ✗ No Facebook post ID for entry {target_entry['id']}")
+        
+        flash('✅ הפוסטים הוחלפו בהצלחה!', 'success')
+        print("=" * 80)
+        print("SWAP POSTS - SUCCESS")
+        print("=" * 80)
+        
+    except Exception as e:
+        print("=" * 80)
+        print("SWAP POSTS - ERROR")
+        print(f"ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        print("=" * 80)
+        flash(f'❌ שגיאה: {str(e)}', 'error')
+    
+    # Reload the scheduled list
+    return redirect(url_for('scheduled_page'))
+
+# ============================================================================
+# ROUTES - Denied Posts
+# ============================================================================
+
+@app.route('/denied')
+def denied_page():
+    """View denied posts (24hr recovery)"""
+    db.cleanup_old_denied()
+    entries = db.get_denied_entries()
+    
+    # Calculate time remaining for each
+    now = datetime.now()
+    for entry in entries:
+        denied_at = datetime.fromisoformat(entry['denied_at'])
+        delete_at = denied_at + timedelta(hours=24)
+        remaining = delete_at - now
+        
+        hours = int(remaining.total_seconds() // 3600)
+        minutes = int((remaining.total_seconds() % 3600) // 60)
+        
+        entry['time_remaining'] = f"{hours}:{minutes:02d}"
+        entry['height'] = calculate_textarea_height(entry['text'])
+    
+    return render_template('denied.html', entries=entries)
+
+@app.route('/restore/<int:entry_id>', methods=['POST'])
+def restore_denied(entry_id):
+    """Restore denied entry to pending"""
+    db.return_denied_to_pending(entry_id)
+    
+    # If HTMX request, return empty to remove the card
+    if request.headers.get('HX-Request'):
+        return '', 200
+    
+    flash('✅ הוחזר להמתנה', 'success')
+    return redirect(url_for('denied_page'))
+
+# ============================================================================
+# ROUTES - Statistics
+# ============================================================================
+
+@app.route('/statistics')
+def statistics_page():
+    """View statistics"""
+    stats = db.get_statistics()
+    recent = db.get_recent_activity(20)
+    current_number = db.get_current_post_number()
+    
+    return render_template('statistics.html', 
+                         stats=stats, 
+                         recent=recent,
+                         current_number=current_number)
+
+# ============================================================================
+# ROUTES - Settings
+# ============================================================================
+
+@app.route('/settings', methods=['GET', 'POST'])
+def settings_page():
+    """Settings page"""
+    if request.method == 'POST':
+        # Handle post number change
+        next_post_number = request.form.get('next_post_number', '')
+        if next_post_number:
+            try:
+                db.reset_post_number(int(next_post_number))
+            except:
+                pass
+        
+        # Handle date picker (comes as YYYY-MM-DD)
+        read_from_date_iso = request.form.get('read_from_date', '')
+        
+        # Save all settings
         config = {
-            'google_sheet_id': sheet_id,
-            'google_credentials_file': credentials_file,
-            'facebook_page_id': fb_page_id,
-            'facebook_access_token': fb_token,
-            'starting_number': starting_number,
-            'posting_windows': new_windows,
-            'skip_shabbat': skip_shabbat,
-            'skip_jewish_holidays': skip_jewish_holidays,
-            'notifications_enabled': notifications_enabled,
-            'gmail_email': gmail_email,
-            'gmail_app_password': gmail_app_password,
-            'notification_emails': existing_emails,
-            'pending_threshold': pending_threshold,
-            'app_url': app_url,
-            'last_sync': config.get('last_sync', 'אף פעם'),
-            'sync_start_date': config.get('sync_start_date'),
-            'last_empty_window_alert': config.get('last_empty_window_alert')
+            'google_sheet_id': request.form.get('google_sheet_id', ''),
+            'google_credentials_file': request.form.get('google_credentials_file', 'credentials.json'),
+            'read_from_date': read_from_date_iso,  # Store ISO format from date picker
+            'facebook_page_id': request.form.get('facebook_page_id', ''),
+            'facebook_access_token': request.form.get('facebook_access_token', ''),
+            'posting_windows': [w.strip() for w in request.form.get('posting_windows', '').split(',') if w.strip()],
+            'skip_shabbat': request.form.get('skip_shabbat') == 'on',
+            'skip_jewish_holidays': request.form.get('skip_jewish_holidays') == 'on',
+            'notifications_enabled': request.form.get('notifications_enabled') == 'on',
+            'gmail_email': request.form.get('gmail_email', ''),
+            'gmail_app_password': request.form.get('gmail_app_password', ''),
+            'notification_emails': [e.strip() for e in request.form.get('notification_emails', '').split(',') if e.strip()],
+            'pending_threshold': int(request.form.get('pending_threshold', 20)),
+            'app_url': request.form.get('app_url', ''),
+            'last_sync': load_config().get('last_sync', 'Never')
         }
         
-        with open(config_file, 'w', encoding='utf-8') as f:
-            json.dump(config, f, indent=2, ensure_ascii=False)
+        save_config(config)
+        init_handlers()  # Reinitialize with new config
         
-        st.success("✅ ההגדרות נשמרו בהצלחה!")
-        st.info("נא לרענן את הדף כדי להחיל את השינויים")
+        flash('✅ הגדרות נשמרו בהצלחה!', 'success')
+        return redirect(url_for('settings_page'))
+    
+    # GET request
+    config = load_config()
+    current_number = db.get_current_post_number()
+    
+    return render_template('settings.html', config=config, current_number=current_number)
 
+@app.route('/clear_pending', methods=['POST'])
+def clear_pending():
+    """Clear all pending entries"""
+    conn = db.get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM entries WHERE status = 'pending'")
+    count = cursor.rowcount
+    conn.commit()
+    conn.close()
+    flash(f'✅ נמחקו {count} ערכים ממתינים', 'success')
+    return redirect(url_for('settings_page'))
 
+@app.route('/delete_database', methods=['POST'])
+def delete_database():
+    """Delete entire database and recreate"""
+    global db  # Declare global FIRST
+    import os
+    
+    try:
+        # Close connections
+        db.get_connection().close()
+        
+        # Delete database file
+        if os.path.exists('content_system.db'):
+            os.remove('content_system.db')
+        
+        # Reinitialize database
+        db = Database()
+        
+        flash('✅ מסד הנתונים נמחק ונוצר מחדש', 'success')
+    except Exception as e:
+        flash(f'❌ שגיאה: {str(e)}', 'error')
+    
+    return redirect(url_for('settings_page'))
 
-if __name__ == "__main__":
-    main()
+@app.route('/test_notification', methods=['POST'])
+def test_notification():
+    """Send test notification"""
+    if notifications.send_test_notification():
+        flash('✅ התראה נשלחה!', 'success')
+    else:
+        flash('❌ שליחה נכשלה', 'error')
+    
+    return redirect(url_for('settings_page'))
+
+# ============================================================================
+# BACKGROUND TASKS - Auto-sync and Notifications
+# ============================================================================
+
+import schedule
+import threading
+import time
+from datetime import datetime
+
+def midnight_sync_job():
+    """Run at midnight: sync from sheets + cleanup + check notifications"""
+    try:
+        print("=" * 80)
+        print(f"🌙 MIDNIGHT SYNC STARTED: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print("=" * 80)
+        
+        # 1. Sync from Google Sheets
+        if sheets_handler:
+            try:
+                config = load_config()
+                last_timestamp = config.get('read_from_date', '')
+                
+                print(f"📊 Syncing from Google Sheets (from: {last_timestamp})...")
+                new_entries = sheets_handler.get_new_entries(last_timestamp)
+                
+                added = 0
+                for entry in new_entries:
+                    db.add_entry(entry['timestamp'], entry['text'])
+                    added += 1
+                
+                print(f"✅ Synced {added} new entries from Google Sheets")
+                
+                # Update last sync time
+                config['last_sync'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                save_config(config)
+                
+            except Exception as e:
+                print(f"❌ Sheets sync error: {e}")
+        else:
+            print("⚠️ Sheets handler not initialized")
+        
+        # 2. Cleanup old entries
+        try:
+            print(f"🧹 Cleaning up old database entries...")
+            deleted = db.cleanup_old_entries()
+            print(f"✅ Cleaned up {deleted} old entries")
+        except Exception as e:
+            print(f"❌ Cleanup error: {e}")
+        
+        # 3. Check and send notifications
+        try:
+            print(f"📧 Checking notifications...")
+            check_and_send_notifications()
+        except Exception as e:
+            print(f"❌ Notification error: {e}")
+        
+        print("=" * 80)
+        print(f"✅ MIDNIGHT SYNC COMPLETE: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print("=" * 80)
+        
+    except Exception as e:
+        print(f"❌ MIDNIGHT SYNC ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+
+def check_and_send_notifications():
+    """Check if notifications should be sent"""
+    config = load_config()
+    
+    # Check if notifications are enabled
+    if not config.get('notifications_enabled', False):
+        print("⚠️ Notifications disabled in settings")
+        return
+    
+    notification_emails = config.get('notification_emails', [])
+    if not notification_emails:
+        print("⚠️ No notification emails configured")
+        return
+    
+    # Check 1: Too many pending entries
+    pending_entries = db.get_pending_entries()
+    pending_count = len(pending_entries)
+    threshold = config.get('pending_threshold', 10)
+    
+    if pending_count >= threshold:
+        print(f"📧 Sending notification: {pending_count} pending entries (threshold: {threshold})")
+        subject = f"⚠️ {pending_count} ערכים ממתינים לבדיקה"
+        body = f"""
+שלום,
+
+יש כרגע {pending_count} ערכים שממתינים לאישור במערכת.
+
+סף ההתראה: {threshold} ערכים
+
+כנסו למערכת לבדיקה: {config.get('app_url', 'http://localhost:5000')}
+
+בברכה,
+מערכת ניהול התוכן
+"""
+        send_notification_email(subject, body, notification_emails)
+    else:
+        print(f"✅ Pending entries OK: {pending_count}/{threshold}")
+    
+    # Check 2: Next empty window within 24 hours
+    if scheduler:
+        try:
+            next_slot = scheduler.get_next_available_slot()
+            now = datetime.now(scheduler.timezone)
+            hours_until = (next_slot - now).total_seconds() / 3600
+            
+            if hours_until < 24:
+                print(f"📧 Sending notification: Next window in {hours_until:.1f} hours")
+                subject = "⏰ החלון הפנוי הבא בעוד פחות מ-24 שעות"
+                body = f"""
+שלום,
+
+החלון הפנוי הבא לפרסום הוא בעוד {hours_until:.1f} שעות:
+
+תאריך ושעה: {next_slot.strftime('%d/%m/%Y %H:%M')}
+
+אם יש ערכים ממתינים, כדאי לאשר אותם כדי למלא את החלון.
+
+כנסו למערכת: {config.get('app_url', 'http://localhost:5000')}
+
+בברכה,
+מערכת ניהול התוכן
+"""
+                send_notification_email(subject, body, notification_emails)
+            else:
+                print(f"✅ Next window OK: in {hours_until:.1f} hours")
+        except Exception as e:
+            print(f"❌ Error checking next window: {e}")
+    else:
+        print("⚠️ Scheduler not initialized")
+
+def send_notification_email(subject, body, recipients):
+    """Send email notification"""
+    config = load_config()
+    
+    gmail_email = config.get('gmail_email')
+    gmail_password = config.get('gmail_app_password')
+    
+    if not gmail_email or not gmail_password:
+        print("❌ Gmail credentials not configured")
+        return
+    
+    try:
+        import smtplib
+        from email.mime.text import MIMEText
+        from email.mime.multipart import MIMEMultipart
+        
+        msg = MIMEMultipart()
+        msg['From'] = gmail_email
+        msg['To'] = ', '.join(recipients)
+        msg['Subject'] = subject
+        
+        msg.attach(MIMEText(body, 'plain', 'utf-8'))
+        
+        # Connect to Gmail
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(gmail_email, gmail_password)
+        
+        # Send email
+        server.send_message(msg)
+        server.quit()
+        
+        print(f"✅ Email sent to: {', '.join(recipients)}")
+        
+    except Exception as e:
+        print(f"❌ Email send error: {e}")
+        import traceback
+        traceback.print_exc()
+
+def run_scheduler():
+    """Background thread for scheduled tasks"""
+    while True:
+        schedule.run_pending()
+        time.sleep(60)  # Check every minute
+
+# Schedule midnight sync
+schedule.every().day.at("00:00").do(midnight_sync_job)
+
+# Also run notifications check every 6 hours
+schedule.every(6).hours.do(check_and_send_notifications)
+
+# Start background scheduler thread
+scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
+scheduler_thread.start()
+
+print("✅ Background scheduler started:")
+print("   - Midnight sync at 00:00")
+print("   - Notifications check every 6 hours")
+
+# ============================================================================
+# API ENDPOINTS (for HTMX)
+# ============================================================================
+
+@app.route('/api/entry/<int:entry_id>/height')
+def get_entry_height(entry_id):
+    """Get calculated height for an entry"""
+    entries = db.get_pending_entries()
+    entry = next((e for e in entries if e['id'] == entry_id), None)
+    
+    if entry:
+        height = calculate_textarea_height(entry['text'])
+        return jsonify({'height': height})
+    
+    return jsonify({'height': 120})
+
+if __name__ == '__main__':
+    app.run(debug=True, host='0.0.0.0', port=5000)

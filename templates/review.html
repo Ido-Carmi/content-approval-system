@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+
+{% block title %}בדיקת ערכים חדשים{% endblock %}
+{% block page_title %}<div class="text-center">📥 בדיקת ערכים חדשים</div>{% endblock %}
+
+{% block content %}
+<style>
+/* Masonry layout - cards stack naturally */
+#entries-grid {
+    column-count: 4;
+    column-gap: 1rem;
+}
+
+@media (max-width: 1400px) {
+    #entries-grid { column-count: 3; }
+}
+
+@media (max-width: 992px) {
+    #entries-grid { column-count: 2; }
+}
+
+@media (max-width: 576px) {
+    #entries-grid { column-count: 1; }
+}
+
+.entry-card {
+    break-inside: avoid;
+    margin-bottom: 1rem;
+}
+
+/* Bigger buttons like denied posts */
+.entry-card .btn {
+    font-size: 1.1rem;
+    padding: 0.75rem;
+    font-weight: 600;
+}
+
+/* HTMX swap animations - fast fade, long slide! */
+.entry-card.htmx-swapping {
+    opacity: 0;
+    transform: translateY(-30px);
+    transition: opacity 200ms ease-out, transform 600ms ease-out;
+}
+
+.entry-card {
+    opacity: 1;
+    transform: translateY(0);
+    transition: opacity 200ms ease-in, transform 600ms ease-in;
+}
+</style>
+
+<div class="row mb-3">
+    <div class="col-md-8">
+        <div class="alert alert-info mb-0">
+            <strong>{{ entries|length if entries else 0 }}</strong> ערכים ממתינים לבדיקה
+        </div>
+    </div>
+    <div class="col-md-4 text-start">
+        <form action="{{ url_for('sync_now') }}" method="POST" class="d-inline">
+            <button type="submit" class="btn btn-primary">
+                <i class="bi bi-arrow-clockwise"></i> סנכרן עכשיו
+            </button>
+        </form>
+        {% if config and config.last_sync %}
+            <small class="text-muted d-block mt-1">עודכן: {{ config.last_sync }}</small>
+        {% endif %}
+    </div>
+</div>
+
+{% if not entries %}
+<div class="alert alert-success text-center py-5">
+    <h4><i class="bi bi-check-circle"></i> אין ערכים חדשים!</h4>
+    <p class="mb-0">כל הערכים נבדקו ואושרו.</p>
+</div>
+{% else %}
+<div id="entries-grid">
+    {% for entry in entries %}
+    <div class="entry-card" id="entry-{{ entry.id }}">
+        <div class="card">
+            <div class="card-header py-2 bg-info text-white">
+                <small><i class="bi bi-calendar3"></i> {{ entry.timestamp }}</small>
+            </div>
+            <div class="card-body py-2">
+                <label class="form-label fw-bold mb-1">תוכן:</label>
+                <textarea id="text-{{ entry.id }}" 
+                          class="form-control mb-2" 
+                          rows="1"
+                          oninput="this.style.height='';this.style.height=this.scrollHeight+'px'"
+                          style="overflow-y: hidden; resize: none;">{{ entry.text }}</textarea>
+                
+                <div class="d-flex gap-2">
+                    <button type="button" 
+                            class="btn btn-success flex-fill"
+                            hx-post="{{ url_for('approve_entry', entry_id=entry.id) }}"
+                            hx-vals='js:{text: document.getElementById("text-{{ entry.id }}").value}'
+                            hx-target="#entry-{{ entry.id }}"
+                            hx-swap="outerHTML swap:200ms settle:600ms">
+                        <i class="bi bi-check-lg"></i> אשר
+                    </button>
+                    <button type="button" 
+                            class="btn btn-danger flex-fill"
+                            hx-post="{{ url_for('deny_entry', entry_id=entry.id) }}"
+                            hx-target="#entry-{{ entry.id }}"
+                            hx-swap="outerHTML swap:200ms settle:600ms">
+                        <i class="bi bi-x-lg"></i> דחה
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<script>
+// Auto-resize all textareas on page load
+document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('textarea').forEach(function(textarea) {
+        textarea.style.height = '';
+        textarea.style.height = textarea.scrollHeight + 'px';
+    });
+});
+</script>
+{% endif %}
+{% endblock %}

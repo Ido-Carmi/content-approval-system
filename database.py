@@ -422,6 +422,26 @@ class Database:
         conn.commit()
         conn.close()
     
+    def increment_post_counter(self):
+        """Increment the post counter by 1"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('UPDATE post_numbers SET current_number = current_number + 1 WHERE id = 1')
+        
+        conn.commit()
+        conn.close()
+    
+    def decrement_post_counter(self):
+        """Decrement the post counter by 1"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('UPDATE post_numbers SET current_number = current_number - 1 WHERE id = 1')
+        
+        conn.commit()
+        conn.close()
+    
     def get_statistics(self) -> Dict:
         """Get statistics about entries"""
         conn = self.get_connection()
@@ -452,3 +472,58 @@ class Database:
         conn.close()
         
         return [dict(row) for row in rows]
+    
+    def cleanup_old_entries(self) -> int:
+        """
+        Remove old entries to keep database small.
+        Keep only:
+        - Pending entries (waiting for review)
+        - Denied entries < 24 hours old
+        - Scheduled entries (metadata only)
+        
+        Remove:
+        - Approved entries > 24 hours old
+        - Denied entries > 24 hours old
+        - Published entries (already on Facebook)
+        """
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        total_deleted = 0
+        
+        # Delete approved entries older than 24 hours
+        cursor.execute('''
+            DELETE FROM entries
+            WHERE status = 'approved'
+            AND updated_at < datetime('now', '-1 day')
+        ''')
+        approved_deleted = cursor.rowcount
+        total_deleted += approved_deleted
+        
+        # Delete denied entries older than 24 hours
+        cursor.execute('''
+            DELETE FROM entries
+            WHERE status = 'denied'
+            AND updated_at < datetime('now', '-1 day')
+        ''')
+        denied_deleted = cursor.rowcount
+        total_deleted += denied_deleted
+        
+        # Delete published entries (already on Facebook, no longer needed)
+        cursor.execute('''
+            DELETE FROM entries
+            WHERE status = 'published'
+        ''')
+        published_deleted = cursor.rowcount
+        total_deleted += published_deleted
+        
+        conn.commit()
+        conn.close()
+        
+        if total_deleted > 0:
+            print(f"🧹 Database cleanup: Deleted {total_deleted} old entries")
+            print(f"   - Approved (>24h): {approved_deleted}")
+            print(f"   - Denied (>24h): {denied_deleted}")
+            print(f"   - Published: {published_deleted}")
+        
+        return total_deleted
