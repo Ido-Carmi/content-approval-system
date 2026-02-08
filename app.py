@@ -1408,23 +1408,39 @@ def send_notification_email(subject, body, recipients):
 
 def run_scheduler():
     """Background thread for scheduled tasks"""
+    print("🔄 Scheduler thread started")
     while True:
-        schedule.run_pending()
-        time.sleep(60)  # Check every minute
+        try:
+            schedule.run_pending()
+            time.sleep(60)  # Check every minute
+        except Exception as e:
+            print(f"❌ Scheduler error: {e}")
+            time.sleep(60)
 
-# Schedule midnight sync
-schedule.every().day.at("00:00").do(midnight_sync_job)
+def start_scheduler():
+    """Initialize and start the scheduler"""
+    # Schedule midnight sync at 00:00 Israel time
+    schedule.every().day.at("00:00").do(midnight_sync_job)
+    
+    # Also run notifications check every 6 hours
+    schedule.every(6).hours.do(check_and_send_notifications)
+    
+    # Start background scheduler thread
+    scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
+    scheduler_thread.start()
+    
+    print("=" * 80)
+    print("✅ Background scheduler started:")
+    print("   - Midnight sync at 00:00 (Israel time)")
+    print("   - Notifications check every 6 hours")
+    print("   - Scheduler thread running in background")
+    print("=" * 80)
 
-# Also run notifications check every 6 hours
-schedule.every(6).hours.do(check_and_send_notifications)
-
-# Start background scheduler thread
-scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
-scheduler_thread.start()
-
-print("✅ Background scheduler started:")
-print("   - Midnight sync at 00:00")
-print("   - Notifications check every 6 hours")
+# Initialize scheduler at module level (runs when app starts)
+try:
+    start_scheduler()
+except Exception as e:
+    print(f"⚠️  Scheduler initialization failed: {e}")
 
 # ============================================================================
 # API ENDPOINTS (for HTMX)
@@ -1442,5 +1458,27 @@ def get_entry_height(entry_id):
     
     return jsonify({'height': 120})
 
+@app.route('/api/scheduler/status')
+def scheduler_status():
+    """Check if scheduler is running"""
+    jobs = schedule.get_jobs()
+    return jsonify({
+        'running': len(jobs) > 0,
+        'jobs': [str(job) for job in jobs],
+        'next_run': str(schedule.next_run()) if jobs else None
+    })
+
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    import os
+    # Check if running in production (via systemd) or development
+    is_production = os.environ.get('FLASK_ENV') == 'production' or not os.isatty(0)
+    
+    if is_production:
+        print("🚀 Starting in PRODUCTION mode")
+        # Production mode: no debug, scheduler will run
+        app.run(debug=False, host='0.0.0.0', port=5000, threaded=True)
+    else:
+        print("🔧 Starting in DEVELOPMENT mode")
+        # Development mode: debug enabled
+        app.run(debug=True, host='0.0.0.0', port=5000, use_reloader=False)
+
