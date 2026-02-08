@@ -18,12 +18,42 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
     
     <style>
+        /* Page-specific header colors - force with !important */
+        nav.page-review { background-color: #0dcaf0 !important; }  /* Cyan */
+        nav.page-scheduled { background-color: #0d6efd !important; }  /* Blue */
+        nav.page-denied { background-color: #ffc107 !important; }  /* Yellow */
+        nav.page-statistics { background-color: #198754 !important; }  /* Green */
+        nav.page-settings { background-color: #6c757d !important; }  /* Gray */
+        
         /* Mobile-responsive padding */
         @media (max-width: 768px) {
             .container-fluid.p-4 {
                 padding: 0.75rem !important;
             }
         }
+        
+        /* Apply page colors to card headers and sidebar */
+        {% if request.endpoint == 'review_page' %}
+            .card-header, #sidebar-wrapper { background: linear-gradient(135deg, #0dcaf0 0%, #17a2b8 100%) !important; }
+            .sidebar-heading { background: linear-gradient(135deg, #0dcaf0 0%, #17a2b8 100%) !important; }
+            .btn-primary { background: linear-gradient(135deg, #0dcaf0 0%, #17a2b8 100%) !important; }
+        {% elif request.endpoint == 'scheduled_page' %}
+            .card-header, #sidebar-wrapper { background: linear-gradient(135deg, #0d6efd 0%, #0a58ca 100%) !important; }
+            .sidebar-heading { background: linear-gradient(135deg, #0d6efd 0%, #0a58ca 100%) !important; }
+            .btn-primary { background: linear-gradient(135deg, #0d6efd 0%, #0a58ca 100%) !important; }
+        {% elif request.endpoint == 'denied_page' %}
+            .card-header, #sidebar-wrapper { background: linear-gradient(135deg, #dc3545 0%, #c82333 100%) !important; }
+            .sidebar-heading { background: linear-gradient(135deg, #dc3545 0%, #c82333 100%) !important; }
+            .btn-primary { background: linear-gradient(135deg, #dc3545 0%, #c82333 100%) !important; }
+        {% elif request.endpoint == 'statistics_page' %}
+            .card-header, #sidebar-wrapper { background: linear-gradient(135deg, #198754 0%, #20c997 100%) !important; }
+            .sidebar-heading { background: linear-gradient(135deg, #198754 0%, #20c997 100%) !important; }
+            .btn-primary { background: linear-gradient(135deg, #198754 0%, #20c997 100%) !important; }
+        {% elif request.endpoint == 'settings_page' %}
+            .card-header, #sidebar-wrapper { background: linear-gradient(135deg, #6c757d 0%, #5a6268 100%) !important; }
+            .sidebar-heading { background: linear-gradient(135deg, #6c757d 0%, #5a6268 100%) !important; }
+            .btn-primary { background: linear-gradient(135deg, #6c757d 0%, #5a6268 100%) !important; }
+        {% endif %}
     </style>
     
     {% block extra_head %}{% endblock %}
@@ -63,14 +93,21 @@
 
         <!-- Page Content -->
         <div id="page-content-wrapper" class="w-100">
-            <!-- Top Bar with green color -->
-            <nav class="navbar navbar-expand-lg navbar-light border-bottom" style="background-color: #198754 !important;">
+            <!-- Top Bar with distinct page colors -->
+            <nav class="navbar navbar-expand-lg navbar-light border-bottom" 
+                 style="background-color: 
+                 {% if request.endpoint == 'review_page' %}#0dcaf0
+                 {% elif request.endpoint == 'scheduled_page' %}#0d6efd
+                 {% elif request.endpoint == 'denied_page' %}#dc3545
+                 {% elif request.endpoint == 'statistics_page' %}#198754
+                 {% elif request.endpoint == 'settings_page' %}#6c757d
+                 {% else %}#e9ecef{% endif %} !important;">
                 <div class="container-fluid">
-                    <button class="btn btn-light" id="sidebarToggle">
+                    <button class="btn {% if request.endpoint in ['review_page', 'scheduled_page', 'statistics_page', 'settings_page'] %}btn-light{% else %}btn-primary{% endif %}" id="sidebarToggle">
                         <i class="bi bi-list"></i>
                     </button>
                     <div class="flex-grow-1 text-center">
-                        <span class="navbar-text fw-bold text-white" style="font-size: 1.2rem;">
+                        <span class="navbar-text fw-bold text-dark" style="font-size: 1.2rem;">
                             {% block page_title %}מערכת אישור ופרסום תוכן{% endblock %}
                         </span>
                     </div>

@@ -1,4 +1,4 @@
-/* Sidebar Styles - Solid Green */
+/* Sidebar Styles - Vibrant Blue */
 #wrapper {
     overflow-x: hidden;
 }
@@ -8,7 +8,7 @@
     margin-right: -15rem;
     transition: margin 0.25s ease-out;
     width: 15rem;
-    background: #198754; /* Solid green - like old version */
+    background: linear-gradient(180deg, #667eea 0%, #764ba2 100%);
     box-shadow: 2px 0 10px rgba(0,0,0,0.1);
 }
 
@@ -16,14 +16,14 @@
     padding: 1rem 1.25rem;
     font-size: 1.3rem;
     font-weight: bold;
-    background: rgba(0,0,0,0.1);
+    background: rgba(0,0,0,0.2);
     color: white;
     text-shadow: 0 2px 4px rgba(0,0,0,0.3);
 }
 
 #page-content-wrapper {
     min-width: 100vw;
-    background: #f8f9fa; /* Simple gray background */
+    background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
     min-height: 100vh;
 }
 
@@ -55,23 +55,22 @@
     box-shadow: 0 2px 8px rgba(0,0,0,0.2);
 }
 
-/* Card Styles - Simple & Clean */
+/* Card Styles - Colorful & Vibrant */
 .card {
     transition: all 0.3s;
     border: none;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    border-radius: 8px;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    border-radius: 12px;
     overflow: hidden;
-    background: white;
 }
 
 .card:hover, .hover-card:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+    transform: translateY(-5px);
+    box-shadow: 0 8px 20px rgba(0,0,0,0.2);
 }
 
 .card-header {
-    background: #198754; /* Solid green */
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     border-bottom: none;
     font-weight: 600;
     color: white !important;
@@ -84,67 +83,67 @@
 
 /* Compact Card for Scheduled Posts */
 .compact-card .card-header {
-    background: #0d6efd; /* Solid blue */
+    background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
     padding: 0.25rem 0.5rem;
 }
 
-/* Button Styles - Simple Solid Colors */
+/* Button Styles - Vibrant Gradients */
 .btn {
     transition: all 0.2s;
     font-weight: 600;
     border: none;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+    box-shadow: 0 2px 4px rgba(0,0,0,0.15);
 }
 
 .btn:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.25);
 }
 
 .btn-success {
-    background: #28a745;
+    background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
     border: none;
     color: white;
 }
 
 .btn-success:hover {
-    background: #218838;
+    background: linear-gradient(135deg, #0e8577 0%, #2ed96a 100%);
 }
 
 .btn-danger {
-    background: #dc3545;
+    background: linear-gradient(135deg, #eb3349 0%, #f45c43 100%);
     border: none;
     color: white;
 }
 
 .btn-danger:hover {
-    background: #c82333;
+    background: linear-gradient(135deg, #d42d3f 0%, #e04a37 100%);
 }
 
 .btn-primary {
-    background: #0d6efd;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     border: none;
     color: white;
 }
 
 .btn-primary:hover {
-    background: #0b5ed7;
+    background: linear-gradient(135deg, #5568d3 0%, #663d8f 100%);
 }
 
 .btn-warning {
-    background: #ffc107;
+    background: linear-gradient(135deg, #f2994a 0%, #f2c94c 100%);
     border: none;
     color: #333;
 }
 
 .btn-warning:hover {
-    background: #e0a800;
+    background: linear-gradient(135deg, #e88838 0%, #e0b739 100%);
 }
 
 .btn-secondary {
-    background: #6c757d;
+    background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
     border: none;
-    color: white;
+    color: #333;
 }
 
 /* Textarea Styles - Colorful Focus */
@@ -162,37 +161,38 @@ textarea:focus {
     background: linear-gradient(to bottom, #ffffff, #f8f9ff);
 }
 
-/* Alert Styles - Simple Colors */
+/* Alert Styles - Vibrant Colors */
 .alert {
     border: none;
-    border-radius: 6px;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
     font-weight: 500;
 }
 
 .alert-success {
-    background: #d4edda;
+    background: linear-gradient(135deg, #d4edda 0%, #b8e7c5 100%);
     color: #155724;
 }
 
 .alert-info {
-    background: #d1ecf1;
+    background: linear-gradient(135deg, #d1ecf1 0%, #b3e0f2 100%);
     color: #0c5460;
 }
 
 .alert-warning {
-    background: #fff3cd;
+    background: linear-gradient(135deg, #fff3cd 0%, #ffe69c 100%);
     color: #856404;
 }
 
 .alert-danger {
-    background: #f8d7da;
+    background: linear-gradient(135deg, #f8d7da 0%, #f5c6cb 100%);
     color: #721c24;
 }
 
 /* Page Title Styling */
 h2, .page-title {
-    color: #198754;
+    color: #667eea;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.1);
     font-weight: bold;
 }
 
@@ -231,22 +231,22 @@ h2, .page-title {
 .badge {
     font-weight: 600;
     padding: 0.4em 0.6em;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+    box-shadow: 0 2px 4px rgba(0,0,0,0.15);
 }
 
 .bg-dark {
-    background: #343a40 !important;
+    background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%) !important;
 }
 
 /* Form Controls - Enhanced */
 .form-control:focus {
-    border-color: #198754;
-    box-shadow: 0 0 0 0.2rem rgba(25,135,84,0.25);
+    border-color: #667eea;
+    box-shadow: 0 0 0 0.2rem rgba(102,126,234,0.25);
 }
 
 .form-check-input:checked {
-    background-color: #198754;
-    border-color: #198754;
+    background-color: #667eea;
+    border-color: #667eea;
 }
 
 /* Navbar - Box shadow only (colors set per-page in template) */
@@ -272,9 +272,9 @@ h2, .page-title {
 
 /* Success Animation */
 @keyframes successPulse {
-    0% { box-shadow: 0 0 0 0 rgba(40, 167, 69, 0.7); }
-    70% { box-shadow: 0 0 0 10px rgba(40, 167, 69, 0); }
-    100% { box-shadow: 0 0 0 0 rgba(40, 167, 69, 0); }
+    0% { box-shadow: 0 0 0 0 rgba(56, 239, 125, 0.7); }
+    70% { box-shadow: 0 0 0 10px rgba(56, 239, 125, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(56, 239, 125, 0); }
 }
 
 .btn-success:active {
@@ -283,7 +283,7 @@ h2, .page-title {
 
 /* Danger Zone Special Styling */
 .bg-danger {
-    background: #dc3545 !important;
+    background: linear-gradient(135deg, #eb3349 0%, #f45c43 100%) !important;
 }
 
 /* Card Body Padding */
