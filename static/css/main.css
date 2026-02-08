@@ -5,15 +5,11 @@
 
 #sidebar-wrapper {
     min-height: 100vh;
-    margin-right: -15rem; /* Hidden by default on mobile */
+    margin-right: -15rem;
     transition: margin 0.25s ease-out;
     width: 15rem;
     background: linear-gradient(180deg, #667eea 0%, #764ba2 100%);
     box-shadow: 2px 0 10px rgba(0,0,0,0.1);
-    position: fixed; /* Fixed position on mobile */
-    right: 0;
-    top: 0;
-    z-index: 1000;
 }
 
 #sidebar-wrapper .sidebar-heading {
@@ -31,25 +27,8 @@
     min-height: 100vh;
 }
 
-/* When toggled, sidebar slides in */
 #wrapper.toggled #sidebar-wrapper {
     margin-right: 0;
-}
-
-/* Overlay for mobile when sidebar is open */
-#sidebar-overlay {
-    display: none;
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0, 0, 0, 0.5);
-    z-index: 999;
-}
-
-#wrapper.toggled #sidebar-overlay {
-    display: block;
 }
 
 .list-group-item {
@@ -220,8 +199,7 @@ h2, .page-title {
 /* Responsive */
 @media (min-width: 768px) {
     #sidebar-wrapper {
-        margin-right: 0; /* Visible by default on desktop */
-        position: relative; /* Not fixed on desktop */
+        margin-right: 0;
     }
 
     #page-content-wrapper {
@@ -230,12 +208,7 @@ h2, .page-title {
     }
 
     #wrapper.toggled #sidebar-wrapper {
-        margin-right: -15rem; /* Hide when toggled on desktop */
-    }
-    
-    /* No overlay on desktop */
-    #sidebar-overlay {
-        display: none !important;
+        margin-right: -15rem;
     }
 }
 
