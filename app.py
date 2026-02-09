@@ -17,6 +17,11 @@ app.secret_key = 'your-secret-key-change-this-in-production'
 # Disable static file caching for development
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
 
+# Favicon route to prevent 404 errors in browser console
+@app.route('/favicon.ico')
+def favicon():
+    return '', 204  # No Content response
+
 # Initialize handlers
 db = Database()
 scheduler = None
@@ -1309,20 +1314,17 @@ def scan_comments_now():
             # Check if feature is enabled
             if not config.get('comments_filter_enabled', False):
                 print("⚠️  Comments filter disabled in settings")
-                flash('⚠️ סינון תגובות מושבת בהגדרות', 'warning')
                 scan_in_progress = False
                 return
             
             # Check API keys
             if not config.get('openai_api_key'):
                 print("⚠️  Missing OpenAI API key")
-                flash('⚠️ חסר מפתח OpenAI API', 'warning')
                 scan_in_progress = False
                 return
             
             if not config.get('facebook_access_token'):
                 print("⚠️  Missing Facebook access token")
-                flash('⚠️ חסר Facebook Access Token', 'warning')
                 scan_in_progress = False
                 return
             
@@ -1340,12 +1342,10 @@ def scan_comments_now():
             
         except ImportError as e:
             print(f"❌ Import error: {e}")
-            flash(f'❌ שגיאה: {str(e)}', 'error')
         except Exception as e:
             print(f"❌ Scan error: {e}")
             import traceback
             traceback.print_exc()
-            flash(f'❌ שגיאה בסריקה: {str(e)}', 'error')
         finally:
             scan_in_progress = False
     
