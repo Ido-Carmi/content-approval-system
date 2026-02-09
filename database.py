@@ -59,6 +59,93 @@ class Database:
             )
         ''')
         
+        # Hidden comments table - stores auto-hidden comments
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS hidden_comments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                comment_id TEXT UNIQUE NOT NULL,
+                post_id TEXT NOT NULL,
+                post_number INTEGER,
+                post_text TEXT,
+                comment_text TEXT NOT NULL,
+                author_name TEXT,
+                author_id TEXT,
+                created_at TEXT NOT NULL,
+                scanned_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                filter_reason TEXT,
+                ai_explanation TEXT,
+                status TEXT DEFAULT 'shown',
+                last_action_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Create indexes for hidden_comments
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_comments_status ON hidden_comments(status)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_comments_created ON hidden_comments(created_at)')
+        
+        # Comment queue for retry when hitting API limits
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS comment_queue (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                comment_id TEXT UNIQUE NOT NULL,
+                post_id TEXT NOT NULL,
+                comment_data TEXT NOT NULL,
+                retry_count INTEGER DEFAULT 0,
+                queued_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                last_retry TEXT
+            )
+        ''')
+        
+        # Post tracking for sliding window monitoring
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS post_tracking (
+                post_id TEXT PRIMARY KEY,
+                post_number INTEGER,
+                post_text TEXT,
+                published_at TEXT NOT NULL,
+                last_comment_at TEXT,
+                last_checked_at TEXT,
+                last_fetch_time TEXT,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # AI feedback table for training
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS ai_feedback (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                comment_id TEXT NOT NULL,
+                comment_text TEXT NOT NULL,
+                ai_prediction TEXT,
+                ai_reason TEXT,
+                actual_action TEXT NOT NULL,
+                correct_reason TEXT,
+                feedback_type TEXT NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                sent_to_ai BOOLEAN DEFAULT 0,
+                sent_at TEXT
+            )
+        ''')
+        
+        # AI examples table - permanent curated examples (max 5 per category)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS ai_examples (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category TEXT NOT NULL,
+                comment_text TEXT NOT NULL,
+                original_ai_prediction TEXT,
+                explanation TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(category, comment_text)
+            )
+        ''')
+        
+        # Index for fast category lookup
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_examples_category 
+            ON ai_examples(category)
+        ''')
+        
         conn.commit()
         conn.close()
     
@@ -527,3 +614,635 @@ class Database:
             print(f"   - Published: {published_deleted}")
         
         return total_deleted
+    
+    # ==================== COMMENTS FILTER METHODS ====================
+    
+    def add_comment(self, comment_data: Dict) -> bool:
+        """Add a comment that needs action (hidden or shown after filtering)"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        try:
+            # Determine initial status based on AI decision
+            initial_status = 'hidden' if comment_data.get('should_hide', False) else 'shown'
+            
+            # Get filter reason - use 'clean' if no violation
+            filter_reason = comment_data.get('filter_reason') or 'clean'
+            
+            cursor.execute('''
+                INSERT OR REPLACE INTO hidden_comments 
+                (comment_id, post_id, post_number, post_text, comment_text, 
+                 author_name, author_id, created_at, filter_reason, ai_explanation, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                comment_data['comment_id'],
+                comment_data['post_id'],
+                comment_data.get('post_number'),
+                comment_data.get('post_text', '')[:200],
+                comment_data['comment_text'],
+                comment_data.get('author_name', ''),
+                comment_data.get('author_id', ''),
+                comment_data['created_at'],
+                filter_reason,
+                comment_data.get('ai_explanation', ''),
+                initial_status
+            ))
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            print(f"Error adding comment: {e}")
+            conn.close()
+            return False
+    
+    def get_all_comments(self, filter_status: Optional[str] = None, days: int = 7) -> List[Dict]:
+        """Get all comments from last N days, optionally filtered by status"""
+        print(f"   [DB] get_all_comments called: filter={filter_status}, days={days}")
+        
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+        print(f"   [DB] Cutoff date: {cutoff}")
+        
+        # First, check if table has any data at all
+        cursor.execute('SELECT COUNT(*) as count FROM hidden_comments')
+        total = cursor.fetchone()['count']
+        print(f"   [DB] Total comments in table: {total}")
+        
+        if filter_status and filter_status != 'all':
+            print(f"   [DB] Filtering by status: {filter_status}")
+            cursor.execute('''
+                SELECT * FROM hidden_comments 
+                WHERE created_at >= ? AND status = ?
+                ORDER BY created_at DESC
+            ''', (cutoff, filter_status))
+        else:
+            print(f"   [DB] Getting all comments (no status filter)")
+            cursor.execute('''
+                SELECT * FROM hidden_comments 
+                WHERE created_at >= ?
+                ORDER BY created_at DESC
+            ''', (cutoff,))
+        
+        rows = cursor.fetchall()
+        print(f"   [DB] Query returned {len(rows)} rows")
+        
+        conn.close()
+        result = [dict(row) for row in rows]
+        
+        if result:
+            print(f"   [DB] First result: {result[0]}")
+        
+        return result
+    
+    def update_comment_status(self, comment_id: str, new_status: str) -> bool:
+        """Update comment status (shown/hidden/deleted)"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            UPDATE hidden_comments 
+            SET status = ?, last_action_at = ?
+            WHERE comment_id = ?
+        ''', (new_status, datetime.now().isoformat(), comment_id))
+        
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return success
+    
+    def get_comments_stats(self, days: int = 7) -> Dict:
+        """Get statistics about comments"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+        
+        cursor.execute('''
+            SELECT 
+                COUNT(*) as total,
+                SUM(CASE WHEN status = 'shown' THEN 1 ELSE 0 END) as shown,
+                SUM(CASE WHEN status = 'hidden' THEN 1 ELSE 0 END) as hidden,
+                SUM(CASE WHEN status = 'deleted' THEN 1 ELSE 0 END) as deleted,
+                SUM(CASE WHEN filter_reason = 'political' THEN 1 ELSE 0 END) as political,
+                SUM(CASE WHEN filter_reason = 'hate' THEN 1 ELSE 0 END) as hate,
+                SUM(CASE WHEN filter_reason IS NULL THEN 1 ELSE 0 END) as clean
+            FROM hidden_comments
+            WHERE created_at >= ?
+        ''', (cutoff,))
+        
+        row = cursor.fetchone()
+        conn.close()
+        
+        return {
+            'total': row['total'] or 0,
+            'shown': row['shown'] or 0,
+            'hidden': row['hidden'] or 0,
+            'deleted': row['deleted'] or 0,
+            'political': row['political'] or 0,
+            'hate': row['hate'] or 0,
+            'clean': row['clean'] or 0
+        }
+    
+    def cleanup_old_comments(self, days: int = 7) -> int:
+        """Remove comments older than N days (keep only statistics)"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+        
+        cursor.execute('''
+            DELETE FROM hidden_comments
+            WHERE created_at < ?
+        ''', (cutoff,))
+        
+        deleted = cursor.rowcount
+        conn.commit()
+        conn.close()
+        
+        if deleted > 0:
+            print(f"🧹 Cleaned up {deleted} comments older than {days} days")
+        
+        return deleted
+    
+    # Queue methods for retry
+    def queue_comment(self, comment_data: Dict) -> bool:
+        """Add comment to queue for retry"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        try:
+            import json
+            cursor.execute('''
+                INSERT INTO comment_queue 
+                (comment_id, post_id, comment_data)
+                VALUES (?, ?, ?)
+            ''', (
+                comment_data['comment_id'],
+                comment_data['post_id'],
+                json.dumps(comment_data)
+            ))
+            conn.commit()
+            conn.close()
+            return True
+        except sqlite3.IntegrityError:
+            conn.close()
+            return False
+    
+    def get_queued_comments(self) -> List[Dict]:
+        """Get all queued comments for retry"""
+        import json
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT * FROM comment_queue 
+            WHERE retry_count < 5
+            ORDER BY queued_at ASC
+        ''')
+        
+        rows = cursor.fetchall()
+        conn.close()
+        
+        comments = []
+        for row in rows:
+            data = json.loads(row['comment_data'])
+            data['queue_id'] = row['id']
+            comments.append(data)
+        
+        return comments
+    
+    def remove_from_queue(self, comment_id: str) -> bool:
+        """Remove comment from queue after successful processing"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('DELETE FROM comment_queue WHERE comment_id = ?', (comment_id,))
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return success
+    
+    def increment_queue_retry(self, comment_id: str) -> bool:
+        """Increment retry count for queued comment"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            UPDATE comment_queue 
+            SET retry_count = retry_count + 1, last_retry = ?
+            WHERE comment_id = ?
+        ''', (datetime.now().isoformat(), comment_id))
+        
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return success
+    
+    # Post tracking methods
+    def track_post(self, post_id: str, post_number: int, published_at: str) -> bool:
+        """Add or update post tracking"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            INSERT OR REPLACE INTO post_tracking 
+            (post_id, post_number, published_at, updated_at)
+            VALUES (?, ?, ?, ?)
+        ''', (post_id, post_number, published_at, datetime.now().isoformat()))
+        
+        conn.commit()
+        conn.close()
+        return True
+    
+    def update_post_comment_activity(self, post_id: str, comment_time: str) -> bool:
+        """Update when post last received a comment (for sliding window)"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            UPDATE post_tracking 
+            SET last_comment_at = ?, updated_at = ?
+            WHERE post_id = ?
+        ''', (comment_time, datetime.now().isoformat(), post_id))
+        
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return success
+    
+    def get_posts_to_monitor(self) -> List[Dict]:
+        """
+        Get posts that need comment monitoring:
+        1. Posts from last 2 days
+        2. Older posts with comments in last 24h (sliding window)
+        """
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        now = datetime.now()
+        two_days_ago = (now - timedelta(days=2)).isoformat()
+        one_day_ago = (now - timedelta(days=1)).isoformat()
+        
+        # Get posts from last 2 days OR older posts with recent comments
+        cursor.execute('''
+            SELECT DISTINCT * FROM post_tracking 
+            WHERE published_at >= ? 
+               OR last_comment_at >= ?
+            ORDER BY published_at DESC
+        ''', (two_days_ago, one_day_ago))
+        
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+    
+    def update_post_checked_time(self, post_id: str) -> bool:
+        """Update when post was last checked for comments"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            UPDATE post_tracking 
+            SET last_checked_at = ?, updated_at = ?
+            WHERE post_id = ?
+        ''', (datetime.now().isoformat(), datetime.now().isoformat(), post_id))
+        
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return success
+    
+    def get_last_fetch_time(self) -> Optional[str]:
+        """Get the last time we fetched comments"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT MAX(last_fetch_time) as last_fetch
+            FROM post_tracking
+            WHERE last_fetch_time IS NOT NULL
+        ''')
+        
+        row = cursor.fetchone()
+        conn.close()
+        
+        return row['last_fetch'] if row and row['last_fetch'] else None
+    
+    def update_last_fetch_time(self, post_id: str) -> bool:
+        """Update when we last fetched comments for a post"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        now = datetime.now().isoformat()
+        cursor.execute('''
+            UPDATE post_tracking 
+            SET last_fetch_time = ?, updated_at = ?
+            WHERE post_id = ?
+        ''', (now, now, post_id))
+        
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return success
+    
+    def dismiss_comment(self, comment_id: str) -> bool:
+        """Remove comment from database (dismissed by admin)"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('DELETE FROM hidden_comments WHERE comment_id = ?', (comment_id,))
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return success
+    
+    def get_comments_grouped_by_post(self, filter_status: Optional[str] = None, days: int = 7) -> Dict:
+        """Get comments grouped by post for better display"""
+        comments = self.get_all_comments(filter_status, days)
+        
+        grouped = {}
+        for comment in comments:
+            post_id = comment['post_id']
+            if post_id not in grouped:
+                grouped[post_id] = {
+                    'post_id': post_id,
+                    'post_number': comment.get('post_number'),
+                    'post_text': comment.get('post_text', 'Post text not available'),
+                    'comments': []
+                }
+            grouped[post_id]['comments'].append(comment)
+        
+        return grouped
+
+    def get_best_feedback_examples(self, limit: int = 10) -> Dict[str, List[Dict]]:
+        """
+        Get most representative feedback examples for few-shot learning
+        
+        Returns dict with:
+        - false_positives: Examples AI wrongly flagged
+        - missed: Examples AI missed
+        - correct: Examples AI got right
+        """
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        # Get false positives (AI was too aggressive)
+        cursor.execute('''
+            SELECT comment_text, ai_prediction, ai_reason, feedback_type
+            FROM ai_feedback 
+            WHERE feedback_type = 'false_positive'
+            ORDER BY created_at DESC
+            LIMIT ?
+        ''', (limit,))
+        false_positives = [dict(row) for row in cursor.fetchall()]
+        
+        # Get missed violations (AI was too lenient)
+        cursor.execute('''
+            SELECT comment_text, correct_reason, feedback_type
+            FROM ai_feedback 
+            WHERE feedback_type = 'missed'
+            ORDER BY created_at DESC
+            LIMIT ?
+        ''', (limit,))
+        missed = [dict(row) for row in cursor.fetchall()]
+        
+        # Get correct predictions (for balance)
+        cursor.execute('''
+            SELECT comment_text, ai_prediction, ai_reason, feedback_type
+            FROM ai_feedback 
+            WHERE feedback_type = 'correct_hide'
+            ORDER BY created_at DESC
+            LIMIT ?
+        ''', (limit // 2,))  # Fewer correct examples
+        correct = [dict(row) for row in cursor.fetchall()]
+        
+        conn.close()
+        
+        return {
+            'false_positives': false_positives,
+            'missed': missed,
+            'correct': correct
+        }
+
+    def log_ai_feedback(self, comment_id: str, feedback_type: str, correct_reason: str = None) -> bool:
+        """
+        Log feedback for AI training
+        
+        feedback_type:
+        - 'correct_hide' - AI correctly flagged, admin deleted
+        - 'missed' - AI missed violation, admin manually hid/deleted  
+        - 'false_positive' - AI wrongly flagged, admin unhid
+        
+        correct_reason: 'political', 'hate', 'rude' (for missed violations)
+        """
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        # Get comment details
+        cursor.execute('''
+            SELECT comment_text, filter_reason, ai_explanation 
+            FROM hidden_comments 
+            WHERE comment_id = ?
+        ''', (comment_id,))
+        
+        row = cursor.fetchone()
+        if not row:
+            conn.close()
+            return False
+        
+        cursor.execute('''
+            INSERT INTO ai_feedback 
+            (comment_id, comment_text, ai_prediction, ai_reason, actual_action, 
+             correct_reason, feedback_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            comment_id,
+            row['comment_text'],
+            row['filter_reason'],
+            row['ai_explanation'],
+            feedback_type,
+            correct_reason,
+            feedback_type
+        ))
+        
+        conn.commit()
+        conn.close()
+        print(f"📝 Logged AI feedback: {feedback_type} for comment {comment_id}")
+        return True
+    
+    def get_unsent_feedback(self) -> List[Dict]:
+        """Get all feedback that hasn't been sent to AI yet"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT * FROM ai_feedback 
+            WHERE sent_to_ai = 0
+            ORDER BY created_at ASC
+        ''')
+        
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+    
+    def mark_feedback_sent(self, feedback_ids: List[int]) -> bool:
+        """Mark feedback as sent to AI"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        placeholders = ','.join('?' * len(feedback_ids))
+        cursor.execute(f'''
+            UPDATE ai_feedback 
+            SET sent_to_ai = 1, sent_at = ?
+            WHERE id IN ({placeholders})
+        ''', [datetime.now().isoformat()] + feedback_ids)
+        
+        conn.commit()
+        conn.close()
+        return True
+
+    def get_best_feedback_examples(self, limit: int = 10) -> Dict:
+        """
+        Get curated examples from permanent ai_examples table
+        Returns all 6 categories with up to 5 examples each
+        """
+        return self.get_ai_examples_for_learning()
+    
+    def add_ai_example(self, category: str, comment_text: str, original_ai_prediction: str = None, explanation: str = None) -> bool:
+        """
+        Add example to permanent AI training set
+        Maintains max 5 examples per category using diversity-based replacement
+        
+        Categories:
+        - false_positive_political, false_positive_hate
+        - correct_political, correct_hate
+        - missed_political, missed_hate
+        """
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        try:
+            # Check if example already exists
+            cursor.execute('''
+                SELECT id FROM ai_examples 
+                WHERE category = ? AND comment_text = ?
+            ''', (category, comment_text))
+            
+            if cursor.fetchone():
+                print(f"   Example already exists in {category}")
+                conn.close()
+                return False
+            
+            # Count current examples in this category
+            cursor.execute('''
+                SELECT COUNT(*) as count FROM ai_examples 
+                WHERE category = ?
+            ''', (category,))
+            
+            count = cursor.fetchone()['count']
+            
+            # If at limit (5), find most similar and replace it
+            if count >= 5:
+                # Get all current examples
+                cursor.execute('''
+                    SELECT id, comment_text FROM ai_examples 
+                    WHERE category = ?
+                ''', (category,))
+                
+                existing = cursor.fetchall()
+                
+                # Find most similar example (simple word overlap)
+                new_words = set(comment_text.lower().split())
+                max_similarity = 0
+                most_similar_id = existing[0]['id']
+                
+                for ex in existing:
+                    ex_words = set(ex['comment_text'].lower().split())
+                    overlap = len(new_words & ex_words)
+                    total = len(new_words | ex_words)
+                    similarity = overlap / total if total > 0 else 0
+                    
+                    if similarity > max_similarity:
+                        max_similarity = similarity
+                        most_similar_id = ex['id']
+                
+                # Replace most similar
+                cursor.execute('''
+                    DELETE FROM ai_examples WHERE id = ?
+                ''', (most_similar_id,))
+                
+                print(f"   Replaced similar example in {category} (similarity: {max_similarity:.2f})")
+            
+            # Insert new example
+            cursor.execute('''
+                INSERT INTO ai_examples 
+                (category, comment_text, original_ai_prediction, explanation)
+                VALUES (?, ?, ?, ?)
+            ''', (category, comment_text, original_ai_prediction, explanation))
+            
+            conn.commit()
+            conn.close()
+            
+            print(f"✅ Added example to {category}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error adding example: {e}")
+            conn.close()
+            return False
+    
+    def get_ai_examples_for_learning(self) -> Dict:
+        """Get all curated examples for AI prompt"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('SELECT * FROM ai_examples ORDER BY category, created_at DESC')
+        rows = cursor.fetchall()
+        conn.close()
+        
+        # Group by category
+        examples = {
+            'false_positive_political': [],
+            'false_positive_hate': [],
+            'correct_political': [],
+            'correct_hate': [],
+            'missed_political': [],
+            'missed_hate': []
+        }
+        
+        for row in rows:
+            category = row['category']
+            if category in examples:
+                examples[category].append(dict(row))
+        
+        return examples
+    
+    def get_all_ai_examples_for_admin(self) -> List[Dict]:
+        """Get all examples for admin page"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT * FROM ai_examples 
+            ORDER BY category, created_at DESC
+        ''')
+        
+        rows = cursor.fetchall()
+        conn.close()
+        
+        return [dict(row) for row in rows]
+    
+    def delete_ai_example(self, example_id: int) -> bool:
+        """Delete an example from the training set"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('DELETE FROM ai_examples WHERE id = ?', (example_id,))
+        success = cursor.rowcount > 0
+        
+        conn.commit()
+        conn.close()
+        
+        return success
+

@@ -118,6 +118,52 @@
                 </div>
             </div>
 
+            <!-- Comments Filter Settings -->
+            <div class="card mb-3">
+                <div class="card-header" data-bs-toggle="collapse" data-bs-target="#commentsSettings" style="cursor: pointer;">
+                    <h5 class="mb-0"><i class="bi bi-chat-left-text"></i> סינון תגובות (Comments Filter)</h5>
+                </div>
+                <div id="commentsSettings" class="collapse">
+                    <div class="card-body">
+                        <div class="form-check mb-3">
+                            <input type="checkbox" name="comments_filter_enabled" class="form-check-input" id="commentsEnabled" {{' checked' if config.comments_filter_enabled}}>
+                            <label class="form-check-label" for="commentsEnabled">אפשר סינון אוטומטי של תגובות</label>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">OpenAI API Key</label>
+                            <input type="password" name="openai_api_key" class="form-control" 
+                                   value="{{config.openai_api_key or ''}}"
+                                   placeholder="sk-...">
+                            <small class="text-muted">נדרש לסינון AI. <a href="https://platform.openai.com/api-keys" target="_blank">קבל מפתח כאן</a></small>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">מכסת API יומית</label>
+                            <input type="number" name="daily_api_limit" class="form-control" 
+                                   value="{{config.daily_api_limit or 1000}}"
+                                   min="100">
+                            <small class="text-muted">מקסימום קריאות API ליום (למניעת עלויות יתר)</small>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">גודל אצווה</label>
+                            <input type="number" name="batch_size" class="form-control" 
+                                   value="{{config.batch_size or 50}}"
+                                   min="10" max="100">
+                            <small class="text-muted">מספר תגובות לעיבוד בכל קריאת API (50 מומלץ)</small>
+                        </div>
+                        <div class="alert alert-info">
+                            <strong>ℹ️ איך זה עובד:</strong>
+                            <ul class="mb-0">
+                                <li>הסריקה רצה אוטומטית כל שעה</li>
+                                <li>בודקת תגובות חדשות בפוסטים מ-48 השעות האחרונות</li>
+                                <li>AI מזהה תוכן פוליטי ודברי שנאה</li>
+                                <li>תגובות מסוננות מוסתרות אוטומטית (לא נמחקות)</li>
+                                <li>ניתן לבדוק ולבטל הסתרה ב"תגובות מוסתרות"</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Advanced Settings -->
             <div class="card mb-3">
                 <div class="card-header bg-danger text-white" data-bs-toggle="collapse" data-bs-target="#dangerSettings" style="cursor: pointer;">

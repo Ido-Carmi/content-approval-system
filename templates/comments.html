@@ -1,0 +1,400 @@
+{% extends "base.html" %}
+{% block title %}ניהול תגובות{% endblock %}
+{% block page_title %}<div class="text-center">🗨️ ניהול תגובות</div>{% endblock %}
+
+{% block content %}
+<style>
+.post-card {
+    margin-bottom: 2rem;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.post-header {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 1rem 1.5rem;
+}
+
+.post-context {
+    background: #f8f9fa;
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid #dee2e6;
+    font-style: italic;
+    color: #495057;
+}
+
+.comment-item {
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid #e9ecef;
+    position: relative;
+    transition: background 0.2s;
+}
+
+.comment-item:last-child {
+    border-bottom: none;
+}
+
+.comment-item:hover {
+    background: #f8f9fa;
+}
+
+.comment-item.status-shown {
+    border-right: 4px solid #28a745;
+}
+
+.comment-item.status-hidden {
+    border-right: 4px solid #dc3545;
+}
+
+.dismiss-btn {
+    position: absolute;
+    top: 0.5rem;
+    left: 0.5rem;
+    opacity: 0.6;
+    transition: opacity 0.2s;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.75rem;
+    line-height: 1;
+}
+
+.dismiss-btn:hover {
+    opacity: 1;
+}
+
+.comment-text {
+    background: white;
+    padding: 0.75rem;
+    border-radius: 6px;
+    margin: 0.5rem 0;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    border: 1px solid #e9ecef;
+}
+
+.ai-note {
+    font-size: 0.85rem;
+    color: #6c757d;
+    font-style: italic;
+    margin-top: 0.5rem;
+}
+
+.status-badge {
+    display: inline-block;
+    padding: 0.25rem 0.75rem;
+    border-radius: 20px;
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+
+.status-badge.shown {
+    background: #d1e7dd;
+    color: #0f5132;
+}
+
+.status-badge.hidden {
+    background: #f8d7da;
+    color: #842029;
+}
+
+.status-badge.political {
+    background: #cfe2ff;
+    color: #084298;
+}
+
+.status-badge.hate {
+    background: #f8d7da;
+    color: #842029;
+}
+
+.status-badge.clean {
+    background: #d1e7dd;
+    color: #0f5132;
+}
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+    .post-context {
+        font-size: 0.9rem;
+        padding: 0.75rem 1rem;
+    }
+    
+    .comment-item {
+        padding: 0.75rem 1rem;
+    }
+    
+    .dismiss-btn {
+        position: relative;
+        top: auto;
+        left: auto;
+        display: block;
+        margin-bottom: 0.5rem;
+    }
+}
+</style>
+
+<!-- Stats Cards -->
+<div class="row mb-3">
+    <div class="col-md-3 col-6 mb-2">
+        <div class="card">
+            <div class="card-body text-center">
+                <h4 class="mb-0">{{ stats.total }}</h4>
+                <small class="text-muted">סה"כ</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 col-6 mb-2">
+        <div class="card">
+            <div class="card-body text-center">
+                <h4 class="mb-0 text-success">{{ stats.shown }}</h4>
+                <small class="text-muted">מוצגות</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 col-6 mb-2">
+        <div class="card">
+            <div class="card-body text-center">
+                <h4 class="mb-0 text-danger">{{ stats.hidden }}</h4>
+                <small class="text-muted">מוסתרות</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 col-6 mb-2">
+        <div class="card">
+            <div class="card-body text-center">
+                <h4 class="mb-0 text-warning">{{ stats.political }}</h4>
+                <small class="text-muted">פוליטי</small>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Filter Tabs + Scan Button -->
+<div class="card mb-3">
+    <div class="card-body">
+        <div class="btn-group" role="group">
+            <a href="{{ url_for('comments_page', filter='all') }}" 
+               class="btn {% if filter_status == 'all' %}btn-primary{% else %}btn-outline-primary{% endif %}">
+                הכל ({{ stats.total }})
+            </a>
+            <a href="{{ url_for('comments_page', filter='shown') }}" 
+               class="btn {% if filter_status == 'shown' %}btn-primary{% else %}btn-outline-primary{% endif %}">
+                מוצגות ({{ stats.shown }})
+            </a>
+            <a href="{{ url_for('comments_page', filter='hidden') }}" 
+               class="btn {% if filter_status == 'hidden' %}btn-primary{% else %}btn-outline-primary{% endif %}">
+                מוסתרות ({{ stats.hidden }})
+            </a>
+        </div>
+        
+        <button class="btn btn-primary float-start" 
+                id="scan-btn"
+                onclick="startScan()">
+            <i class="bi bi-arrow-clockwise" id="scan-icon"></i> 
+            <span id="scan-text">סרוק תגובות חדשות</span>
+        </button>
+        <div id="scan-status-inline" class="mt-2" style="display: none;">
+            <div class="alert alert-info mb-0">
+                <div class="d-flex align-items-center">
+                    <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+                    <div>
+                        <strong id="scan-message">סורק...</strong>
+                        <br>
+                        <small class="text-muted" id="scan-detail">זה עשוי לקחת כמה שניות</small>
+                        <br>
+                        <small class="text-muted" id="scan-timer">0 שניות</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+let scanInterval;
+let scanStartTime;
+
+function startScan() {
+    // Disable button
+    const btn = document.getElementById('scan-btn');
+    btn.disabled = true;
+    btn.classList.add('disabled');
+    
+    // Show inline status
+    document.getElementById('scan-status-inline').style.display = 'block';
+    
+    // Add spinning animation to icon
+    document.getElementById('scan-icon').classList.add('fa-spin');
+    
+    // Trigger scan
+    fetch('{{ url_for("scan_comments_now") }}', {
+        method: 'POST'
+    }).then(() => {
+        scanStartTime = Date.now();
+        scanInterval = setInterval(checkScanStatus, 1000);
+    }).catch(err => {
+        console.error('Scan error:', err);
+        btn.disabled = false;
+        btn.classList.remove('disabled');
+        document.getElementById('scan-status-inline').style.display = 'none';
+    });
+}
+
+function checkScanStatus() {
+    const elapsed = Math.floor((Date.now() - scanStartTime) / 1000);
+    
+    // Update timer
+    document.getElementById('scan-timer').textContent = elapsed + ' שניות';
+    
+    // Update status messages
+    const messageEl = document.getElementById('scan-message');
+    const detailEl = document.getElementById('scan-detail');
+    
+    if (elapsed < 3) {
+        messageEl.textContent = 'מתחיל סריקה...';
+        detailEl.textContent = 'מאתר פוסטים פעילים';
+    } else if (elapsed < 8) {
+        messageEl.textContent = 'אוסף תגובות...';
+        detailEl.textContent = 'קורא תגובות חדשות מפייסבוק';
+    } else if (elapsed < 15) {
+        messageEl.textContent = 'מסנן עם AI...';
+        detailEl.textContent = 'בודק תוכן פוליטי ושנאה (לומד מטעויות קודמות)';
+    } else if (elapsed < 25) {
+        messageEl.textContent = 'מעבד תוצאות...';
+        detailEl.textContent = 'מעדכן מסד נתונים';
+    } else {
+        messageEl.textContent = 'מסיים...';
+        detailEl.textContent = 'כמעט גמרנו';
+    }
+    
+    // Poll server for completion
+    fetch('{{ url_for("scan_status") }}')
+        .then(res => res.json())
+        .then(data => {
+            if (!data.scanning) {
+                clearInterval(scanInterval);
+                messageEl.textContent = 'סיים!';
+                detailEl.textContent = 'טוען מחדש את העמוד...';
+                setTimeout(() => location.reload(), 500);
+            }
+        })
+        .catch(err => {
+            // Fallback: reload after 40 seconds
+            if (elapsed >= 40) {
+                clearInterval(scanInterval);
+                location.reload();
+            }
+        });
+}
+</script>
+
+<!-- No Comments -->
+{% if not grouped_comments %}
+<div class="alert alert-info text-center py-5">
+    <h4><i class="bi bi-info-circle"></i> אין תגובות להצגה</h4>
+    <p class="mb-0">לא נמצאו תגובות מ-7 הימים האחרונים.</p>
+</div>
+
+<!-- Comments Grouped by Post -->
+{% else %}
+{% for post_id, post_data in grouped_comments.items() %}
+<div class="post-card">
+    <!-- Post Header -->
+    <div class="post-header">
+        <strong>📌 פוסט #{{ post_data.post_number or '?' }}</strong>
+        <span class="badge bg-light text-dark float-start">{{ post_data.comments|length }} תגובות</span>
+    </div>
+    
+    <!-- Post Context (Desktop & Mobile) -->
+    <div class="post-context">
+        <strong>הקשר:</strong> {{ post_data.post_text }}
+    </div>
+    
+    <!-- Comments List -->
+    <div>
+        {% for comment in post_data.comments %}
+        <div class="comment-item status-{{ comment.status }}" id="comment-{{ comment.id }}">
+            <!-- Dismiss Button (X) -->
+            <button class="btn btn-sm btn-outline-danger dismiss-btn" 
+                    hx-post="{{ url_for('dismiss_comment', comment_id=comment.comment_id) }}"
+                    hx-target="#comment-{{ comment.id }}"
+                    hx-swap="outerHTML swap:300ms"
+                    title="הסר מהרשימה">
+                <i class="bi bi-x-lg"></i>
+            </button>
+            
+            <!-- Author & Time -->
+            <div class="mb-2">
+                <strong>💬 {{ comment.author_name if comment.author_name and comment.author_name != 'Unknown' else 'משתמש אנונימי' }}</strong>
+                <br>
+                <small class="text-muted">
+                    <i class="bi bi-clock"></i> {{ comment.created_at[:16] }}
+                </small>
+                
+                <!-- Status Badges -->
+                <div class="mt-1">
+                    <span class="status-badge {{ comment.status }}">
+                        {% if comment.status == 'shown' %}✓ מוצגת{% elif comment.status == 'hidden' %}✗ מוסתרת{% endif %}
+                    </span>
+                    
+                    {% if comment.filter_reason %}
+                    <span class="status-badge {{ comment.filter_reason }}">
+                        {% if comment.filter_reason == 'political' %}
+                            🏛️ פוליטי
+                        {% elif comment.filter_reason == 'hate' %}
+                            ⚠️ שנאה
+                        {% elif comment.filter_reason == 'clean' %}
+                            ✓ תקין
+                        {% endif %}
+                    </span>
+                    {% endif %}
+                </div>
+            </div>
+            
+            <!-- Comment Text -->
+            <div class="comment-text">
+                {{ comment.comment_text }}
+            </div>
+            
+            <!-- AI Explanation -->
+            {% if comment.ai_explanation %}
+            <div class="ai-note">
+                <i class="bi bi-robot"></i> <strong>AI חשב:</strong> {{ comment.filter_reason or 'clean' }} - {{ comment.ai_explanation }}
+            </div>
+            {% endif %}
+            
+            <!-- 3-Button Action System -->
+            <div class="mt-3">
+                <div class="btn-group" role="group">
+                    <button class="btn btn-danger" 
+                            hx-post="{{ url_for('mark_comment_political', comment_id=comment.comment_id) }}"
+                            hx-target="#comment-{{ comment.id }}"
+                            hx-swap="outerHTML swap:300ms"
+                            title="מחיקה מפייסבוק + הוספה לדוגמאות פוליטי">
+                        🏛️ פוליטי
+                    </button>
+                    <button class="btn btn-danger" 
+                            hx-post="{{ url_for('mark_comment_hate', comment_id=comment.comment_id) }}"
+                            hx-target="#comment-{{ comment.id }}"
+                            hx-swap="outerHTML swap:300ms"
+                            title="מחיקה מפייסבוק + הוספה לדוגמאות שנאה">
+                        ⚠️ שנאה
+                    </button>
+                    <button class="btn btn-success" 
+                            hx-post="{{ url_for('mark_comment_ok', comment_id=comment.comment_id) }}"
+                            hx-target="#comment-{{ comment.id }}"
+                            hx-swap="outerHTML swap:300ms"
+                            title="הצגה בפייסבוק + הוספה לדוגמאות תקין">
+                        ✓ תקין
+                    </button>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endfor %}
+{% endif %}
+
+{% endblock %}

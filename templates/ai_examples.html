@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block title %}דוגמאות AI{% endblock %}
+{% block page_title %}<div class="text-center">🎓 דוגמאות למידה ל-AI</div>{% endblock %}
+
+{% block content %}
+<style>
+.category-card {
+    margin-bottom: 2rem;
+    border: 2px solid #dee2e6;
+    border-radius: 8px;
+}
+
+.category-header {
+    padding: 1rem;
+    font-weight: bold;
+    color: white;
+}
+
+.category-header.false-positive-political { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+.category-header.false-positive-hate { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); }
+.category-header.correct-political { background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); }
+.category-header.correct-hate { background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%); }
+.category-header.missed-political { background: linear-gradient(135deg, #fa709a 0%, #fee140 100%); }
+.category-header.missed-hate { background: linear-gradient(135deg, #30cfd0 0%, #330867 100%); }
+
+.example-item {
+    padding: 1rem;
+    border-bottom: 1px solid #e9ecef;
+    background: white;
+}
+
+.example-item:last-child {
+    border-bottom: none;
+}
+
+.example-text {
+    font-size: 1.1rem;
+    margin-bottom: 0.5rem;
+    padding: 0.75rem;
+    background: #f8f9fa;
+    border-radius: 6px;
+    border-right: 4px solid #007bff;
+}
+
+.example-meta {
+    font-size: 0.85rem;
+    color: #6c757d;
+}
+
+.empty-category {
+    padding: 2rem;
+    text-align: center;
+    color: #6c757d;
+    background: #f8f9fa;
+}
+</style>
+
+<div class="alert alert-info">
+    <strong>💡 איך זה עובד:</strong> האפליקציה שומרת עד 5 דוגמאות בכל קטגוריה. הדוגמאות האלה נשלחות ל-AI בכל סריקה כדי ללמד אותו מה לסנן ומה לא.
+</div>
+
+<div class="row mb-3">
+    <div class="col-md-12">
+        <div class="card">
+            <div class="card-body">
+                <h5>📊 סטטיסטיקות</h5>
+                <div class="row text-center">
+                    <div class="col-md-2">
+                        <strong>{{ stats.total }}</strong><br>
+                        <small>סה"כ דוגמאות</small>
+                    </div>
+                    <div class="col-md-2">
+                        <strong>{{ stats.false_positives }}</strong><br>
+                        <small>False Positives</small>
+                    </div>
+                    <div class="col-md-2">
+                        <strong>{{ stats.correct }}</strong><br>
+                        <small>Correct</small>
+                    </div>
+                    <div class="col-md-2">
+                        <strong>{{ stats.missed }}</strong><br>
+                        <small>Missed</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Categories -->
+{% for category, info in categories.items() %}
+<div class="category-card">
+    <div class="category-header {{ category }}">
+        {{ info.icon }} {{ info.title_he }} 
+        <span class="badge bg-light text-dark float-start">{{ info.examples|length }}/5</span>
+    </div>
+    
+    {% if info.examples %}
+        {% for example in info.examples %}
+        <div class="example-item">
+            <div class="example-text">
+                {{ example.comment_text }}
+            </div>
+            <div class="example-meta">
+                <i class="bi bi-calendar"></i> {{ example.created_at[:10] }}
+                {% if example.original_ai_prediction %}
+                | <i class="bi bi-robot"></i> AI חשב: {{ example.original_ai_prediction }}
+                {% endif %}
+                {% if example.explanation %}
+                | 💬 {{ example.explanation }}
+                {% endif %}
+            </div>
+            <button class="btn btn-sm btn-outline-danger mt-2" 
+                    hx-post="{{ url_for('delete_ai_example', example_id=example.id) }}"
+                    hx-confirm="למחוק דוגמה זו?"
+                    hx-target="#example-{{ example.id }}"
+                    hx-swap="outerHTML">
+                <i class="bi bi-trash"></i> מחק
+            </button>
+        </div>
+        {% endfor %}
+    {% else %}
+        <div class="empty-category">
+            אין דוגמאות בקטגוריה זו עדיין
+        </div>
+    {% endif %}
+</div>
+{% endfor %}
+
+{% endblock %}
