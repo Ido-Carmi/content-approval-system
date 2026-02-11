@@ -75,10 +75,17 @@ class Database:
                 filter_reason TEXT,
                 ai_explanation TEXT,
                 status TEXT DEFAULT 'shown',
-                last_action_at TEXT DEFAULT CURRENT_TIMESTAMP
+                last_action_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                dismissed_at TEXT
             )
         ''')
         
+        # Add dismissed_at column if it doesn't exist (for existing databases)
+        try:
+            cursor.execute('ALTER TABLE hidden_comments ADD COLUMN dismissed_at TEXT')
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass  # Column already exists        
         # Create indexes for hidden_comments
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_comments_status ON hidden_comments(status)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_comments_created ON hidden_comments(created_at)')
@@ -530,15 +537,40 @@ class Database:
         conn.close()
     
     def get_statistics(self) -> Dict:
-        """Get statistics about entries"""
+        """Get statistics about entries and comments"""
         conn = self.get_connection()
         cursor = conn.cursor()
         
         stats = {}
         
-        for status in ['pending', 'approved', 'scheduled', 'published', 'denied']:
+        # Entry statistics
+        for status in ['pending', 'approved', 'scheduled', 'denied']:
             cursor.execute('SELECT COUNT(*) as count FROM entries WHERE status = ?', (status,))
             stats[status] = cursor.fetchone()['count']
+        
+        # Published count - just count entries with status='published'
+        cursor.execute('SELECT COUNT(*) as count FROM entries WHERE status = ?', ('published',))
+        stats['published'] = cursor.fetchone()['count']
+        
+        # Comment statistics
+        cursor.execute('SELECT COUNT(*) as count FROM hidden_comments')
+        stats['comments_total'] = cursor.fetchone()['count']
+        
+        cursor.execute('SELECT COUNT(*) as count FROM hidden_comments WHERE status = ?', ('hidden',))
+        stats['comments_hidden'] = cursor.fetchone()['count']
+        
+        cursor.execute('SELECT COUNT(*) as count FROM hidden_comments WHERE filter_reason = ?', ('political',))
+        stats['comments_political'] = cursor.fetchone()['count']
+        
+        cursor.execute('SELECT COUNT(*) as count FROM hidden_comments WHERE filter_reason = ?', ('hate',))
+        stats['comments_hate'] = cursor.fetchone()['count']
+        
+        cursor.execute('SELECT COUNT(*) as count FROM hidden_comments WHERE filter_reason = ?', ('spam',))
+        stats['comments_spam'] = cursor.fetchone()['count']
+        
+        # AI Examples statistics
+        cursor.execute('SELECT COUNT(*) as count FROM ai_examples')
+        stats['ai_examples'] = cursor.fetchone()['count']
         
         conn.close()
         return stats
@@ -618,19 +650,40 @@ class Database:
     # ==================== COMMENTS FILTER METHODS ====================
     
     def add_comment(self, comment_data: Dict) -> bool:
-        """Add a comment that needs action (hidden or shown after filtering)"""
+        """Add a comment that needs action (only if not already in DB)"""
         conn = self.get_connection()
         cursor = conn.cursor()
         
         try:
+            comment_id = comment_data['comment_id']
+            
+            # Check if comment already exists (dismissed or not)
+            cursor.execute('SELECT dismissed_at, status FROM hidden_comments WHERE comment_id = ?', 
+                          (comment_id,))
+            existing = cursor.fetchone()
+            
+            if existing:
+                dismissed = existing['dismissed_at']
+                status = existing['status']
+                # Comment exists - don't overwrite it
+                # This preserves dismissed_at and prevents re-showing dismissed comments
+                if dismissed:
+                    print(f"   [DB] Skipping {comment_id[:30]}... (already dismissed)")
+                else:
+                    print(f"   [DB] Skipping {comment_id[:30]}... (already in DB, status={status})")
+                conn.close()
+                return False
+            
             # Determine initial status based on AI decision
             initial_status = 'hidden' if comment_data.get('should_hide', False) else 'shown'
             
             # Get filter reason - use 'clean' if no violation
             filter_reason = comment_data.get('filter_reason') or 'clean'
             
+            print(f"   [DB] Adding new comment {comment_id[:30]}... (status={initial_status})")
+            
             cursor.execute('''
-                INSERT OR REPLACE INTO hidden_comments 
+                INSERT INTO hidden_comments 
                 (comment_id, post_id, post_number, post_text, comment_text, 
                  author_name, author_id, created_at, filter_reason, ai_explanation, status)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -647,6 +700,14 @@ class Database:
                 comment_data.get('ai_explanation', ''),
                 initial_status
             ))
+            
+            # Update last_comment_at for sliding window (same transaction)
+            cursor.execute('''
+                UPDATE post_tracking 
+                SET last_comment_at = ?, updated_at = ?
+                WHERE post_id = ?
+            ''', (comment_data['created_at'], datetime.now().isoformat(), comment_data['post_id']))
+            
             conn.commit()
             conn.close()
             return True
@@ -656,7 +717,7 @@ class Database:
             return False
     
     def get_all_comments(self, filter_status: Optional[str] = None, days: int = 7) -> List[Dict]:
-        """Get all comments from last N days, optionally filtered by status"""
+        """Get all comments from last N days, optionally filtered by status, excluding dismissed"""
         print(f"   [DB] get_all_comments called: filter={filter_status}, days={days}")
         
         conn = self.get_connection()
@@ -670,18 +731,27 @@ class Database:
         total = cursor.fetchone()['count']
         print(f"   [DB] Total comments in table: {total}")
         
+        # Count dismissed comments
+        cursor.execute('SELECT COUNT(*) as count FROM hidden_comments WHERE dismissed_at IS NOT NULL')
+        dismissed_count = cursor.fetchone()['count']
+        if dismissed_count > 0:
+            print(f"   [DB] Dismissed comments (hidden from view): {dismissed_count}")
+        
         if filter_status and filter_status != 'all':
             print(f"   [DB] Filtering by status: {filter_status}")
             cursor.execute('''
                 SELECT * FROM hidden_comments 
-                WHERE created_at >= ? AND status = ?
+                WHERE created_at >= ? 
+                  AND status = ?
+                  AND dismissed_at IS NULL
                 ORDER BY created_at DESC
             ''', (cutoff, filter_status))
         else:
-            print(f"   [DB] Getting all comments (no status filter)")
+            print(f"   [DB] Getting all comments (no status filter, excluding dismissed)")
             cursor.execute('''
                 SELECT * FROM hidden_comments 
                 WHERE created_at >= ?
+                  AND dismissed_at IS NULL
                 ORDER BY created_at DESC
             ''', (cutoff,))
         
@@ -713,12 +783,13 @@ class Database:
         return success
     
     def get_comments_stats(self, days: int = 7) -> Dict:
-        """Get statistics about comments"""
+        """Get statistics about comments (excluding dismissed)"""
         conn = self.get_connection()
         cursor = conn.cursor()
         
         cutoff = (datetime.now() - timedelta(days=days)).isoformat()
         
+        # Exclude dismissed comments from stats
         cursor.execute('''
             SELECT 
                 COUNT(*) as total,
@@ -730,6 +801,7 @@ class Database:
                 SUM(CASE WHEN filter_reason IS NULL THEN 1 ELSE 0 END) as clean
             FROM hidden_comments
             WHERE created_at >= ?
+              AND dismissed_at IS NULL
         ''', (cutoff,))
         
         row = cursor.fetchone()
@@ -745,16 +817,39 @@ class Database:
             'clean': row['clean'] or 0
         }
     
+    def clear_all_comments(self) -> int:
+        """Delete ALL comments from database (but preserve AI examples)"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('SELECT COUNT(*) as count FROM hidden_comments')
+        total = cursor.fetchone()['count']
+        
+        cursor.execute('DELETE FROM hidden_comments')
+        deleted = cursor.rowcount
+        
+        conn.commit()
+        conn.close()
+        
+        print(f"🗑️ Cleared {deleted} comments from database (AI examples preserved)")
+        return deleted
+    
     def cleanup_old_comments(self, days: int = 7) -> int:
-        """Remove comments older than N days (keep only statistics)"""
+        """Remove comments older than N days (except those in AI examples table)"""
         conn = self.get_connection()
         cursor = conn.cursor()
         
         cutoff = (datetime.now() - timedelta(days=days)).isoformat()
         
+        # Get comment IDs that are in AI examples (preserve these)
+        cursor.execute('SELECT DISTINCT comment_text FROM ai_examples')
+        example_texts = {row['comment_text'] for row in cursor.fetchall()}
+        
+        # Delete old comments NOT in examples
         cursor.execute('''
             DELETE FROM hidden_comments
             WHERE created_at < ?
+              AND comment_text NOT IN (SELECT comment_text FROM ai_examples)
         ''', (cutoff,))
         
         deleted = cursor.rowcount
@@ -762,7 +857,7 @@ class Database:
         conn.close()
         
         if deleted > 0:
-            print(f"🧹 Cleaned up {deleted} comments older than {days} days")
+            print(f"🧹 Cleaned up {deleted} comments older than {days} days (preserved AI examples)")
         
         return deleted
     
@@ -842,12 +937,13 @@ class Database:
     
     # Post tracking methods
     def track_post(self, post_id: str, post_number: int, published_at: str) -> bool:
-        """Add or update post tracking"""
+        """Add post tracking (only if not exists - preserves last_fetch_time)"""
         conn = self.get_connection()
         cursor = conn.cursor()
         
+        # Use INSERT OR IGNORE to only add new posts, not overwrite existing
         cursor.execute('''
-            INSERT OR REPLACE INTO post_tracking 
+            INSERT OR IGNORE INTO post_tracking 
             (post_id, post_number, published_at, updated_at)
             VALUES (?, ?, ?, ?)
         ''', (post_id, post_number, published_at, datetime.now().isoformat()))
@@ -918,6 +1014,17 @@ class Database:
         conn = self.get_connection()
         cursor = conn.cursor()
         
+        # Debug: Check what's in the table
+        cursor.execute('SELECT COUNT(*) as count FROM post_tracking')
+        count = cursor.fetchone()['count']
+        print(f"   [DEBUG] post_tracking has {count} posts")
+        
+        cursor.execute('SELECT post_id, last_fetch_time FROM post_tracking ORDER BY last_fetch_time DESC LIMIT 3')
+        sample = cursor.fetchall()
+        for row in sample:
+            fetch_time = row['last_fetch_time'] if row['last_fetch_time'] else 'NULL'
+            print(f"   [DEBUG] Post {row['post_id'][:20]}...: last_fetch={fetch_time}")
+        
         cursor.execute('''
             SELECT MAX(last_fetch_time) as last_fetch
             FROM post_tracking
@@ -927,7 +1034,9 @@ class Database:
         row = cursor.fetchone()
         conn.close()
         
-        return row['last_fetch'] if row and row['last_fetch'] else None
+        last_fetch = row['last_fetch'] if row and row['last_fetch'] else None
+        print(f"   [DEBUG] Returning last_fetch_time: {last_fetch}")
+        return last_fetch
     
     def update_last_fetch_time(self, post_id: str) -> bool:
         """Update when we last fetched comments for a post"""
@@ -944,18 +1053,54 @@ class Database:
         success = cursor.rowcount > 0
         conn.commit()
         conn.close()
+        
+        if not success:
+            print(f"   ⚠️  Failed to update last_fetch_time for {post_id} - post not in tracking table")
+        
         return success
     
     def dismiss_comment(self, comment_id: str) -> bool:
-        """Remove comment from database (dismissed by admin)"""
+        """Mark comment as dismissed (keep for 2 hours to prevent re-fetching)"""
         conn = self.get_connection()
         cursor = conn.cursor()
         
-        cursor.execute('DELETE FROM hidden_comments WHERE comment_id = ?', (comment_id,))
+        cursor.execute('''
+            UPDATE hidden_comments 
+            SET dismissed_at = ?, last_action_at = ?
+            WHERE comment_id = ?
+        ''', (datetime.now().isoformat(), datetime.now().isoformat(), comment_id))
+        
         success = cursor.rowcount > 0
+        
         conn.commit()
         conn.close()
+        
+        if success:
+            print(f"✅ Marked comment as dismissed: {comment_id}")
+        
         return success
+    
+    def cleanup_old_dismissed_comments(self) -> int:
+        """Remove dismissed comments older than 2 hours"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        two_hours_ago = (datetime.now() - timedelta(hours=2)).isoformat()
+        
+        cursor.execute('''
+            DELETE FROM hidden_comments 
+            WHERE dismissed_at IS NOT NULL 
+            AND dismissed_at < ?
+        ''', (two_hours_ago,))
+        
+        deleted = cursor.rowcount
+        conn.commit()
+        conn.close()
+        
+        if deleted > 0:
+            print(f"🗑️  Cleaned up {deleted} dismissed comments older than 2 hours")
+        
+        return deleted
     
     def get_comments_grouped_by_post(self, filter_status: Optional[str] = None, days: int = 7) -> Dict:
         """Get comments grouped by post for better display"""
@@ -1201,14 +1346,17 @@ class Database:
         rows = cursor.fetchall()
         conn.close()
         
-        # Group by category
+        # Group by category (9 categories now - added spam)
         examples = {
             'false_positive_political': [],
             'false_positive_hate': [],
+            'false_positive_spam': [],
             'correct_political': [],
             'correct_hate': [],
+            'correct_spam': [],
             'missed_political': [],
-            'missed_hate': []
+            'missed_hate': [],
+            'missed_spam': []
         }
         
         for row in rows:

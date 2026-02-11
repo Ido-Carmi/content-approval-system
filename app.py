@@ -1212,6 +1212,13 @@ def clear_pending():
     flash(f'✅ נמחקו {count} ערכים ממתינים', 'success')
     return redirect(url_for('settings_page'))
 
+@app.route('/clear_comments', methods=['POST'])
+def clear_comments():
+    """Clear all comments from database (preserve AI examples)"""
+    count = db.clear_all_comments()
+    flash(f'✅ נמחקו {count} תגובות ממסד הנתונים (דוגמאות AI נשמרו)', 'success')
+    return redirect(url_for('settings_page'))
+
 @app.route('/delete_database', methods=['POST'])
 def delete_database():
     """Delete entire database and recreate"""
@@ -1395,28 +1402,31 @@ def mark_comment_political(comment_id):
             # Delete from Facebook
             success = fb.delete_comment(comment_id)
             
+            # Determine category based on AI prediction
+            ai_said = comment['filter_reason']
+            
+            if ai_said == 'political':
+                category = 'correct_political'
+            elif ai_said == 'clean':
+                category = 'missed_political'
+            else:
+                category = 'missed_political'
+            
+            # Add to examples (even if delete failed)
+            db.add_ai_example(
+                category=category,
+                comment_text=comment['comment_text'],
+                original_ai_prediction=ai_said,
+                explanation=f"Political content - admin marked for deletion"
+            )
+            
+            # Always dismiss to prevent reappearance
+            db.dismiss_comment(comment_id)
+            
             if success:
-                # Determine category based on AI prediction
-                ai_said = comment['filter_reason']
-                
-                if ai_said == 'political':
-                    category = 'correct_political'
-                elif ai_said == 'clean':
-                    category = 'missed_political'
-                else:
-                    category = 'missed_political'
-                
-                # Add to examples
-                db.add_ai_example(
-                    category=category,
-                    comment_text=comment['comment_text'],
-                    original_ai_prediction=ai_said,
-                    explanation=f"Political content - deleted by admin"
-                )
-                
-                # Remove from database
-                db.dismiss_comment(comment_id)
                 print(f"✅ Marked as political and deleted: {comment_id} → {category}")
+            else:
+                print(f"⚠️  Marked as political but Facebook delete failed: {comment_id} → {category}")
             
         except Exception as e:
             print(f"❌ Error marking political: {e}")
@@ -1458,28 +1468,36 @@ def mark_comment_hate(comment_id):
             # Delete from Facebook
             success = fb.delete_comment(comment_id)
             
+            # Determine category based on AI prediction
+            ai_said = comment['filter_reason']
+            
+            if ai_said == 'hate':
+                category = 'correct_hate'
+            elif ai_said == 'clean':
+                category = 'missed_hate'
+            else:
+                category = 'missed_hate'
+            
+            # Add to examples (even if delete failed - we still learn from it)
+            db.add_ai_example(
+                category=category,
+                comment_text=comment['comment_text'],
+                original_ai_prediction=ai_said,
+                explanation=f"Hate speech - admin marked for deletion"
+            )
+            
+            # Only dismiss from our database if:
+            # 1. Delete succeeded, OR
+            # 2. Delete failed but we want to hide it from UI anyway
+            # For 400 errors, the comment might already be gone from Facebook
             if success:
-                # Determine category based on AI prediction
-                ai_said = comment['filter_reason']
-                
-                if ai_said == 'hate':
-                    category = 'correct_hate'
-                elif ai_said == 'clean':
-                    category = 'missed_hate'
-                else:
-                    category = 'missed_hate'
-                
-                # Add to examples
-                db.add_ai_example(
-                    category=category,
-                    comment_text=comment['comment_text'],
-                    original_ai_prediction=ai_said,
-                    explanation=f"Hate speech - deleted by admin"
-                )
-                
-                # Remove from database
                 db.dismiss_comment(comment_id)
                 print(f"✅ Marked as hate and deleted: {comment_id} → {category}")
+            else:
+                # Delete failed - still dismiss to avoid seeing it again
+                # But log that Facebook deletion failed
+                db.dismiss_comment(comment_id)
+                print(f"⚠️  Marked as hate but Facebook delete failed: {comment_id} → {category}")
             
         except Exception as e:
             print(f"❌ Error marking hate: {e}")
@@ -1532,6 +1550,8 @@ def mark_comment_ok(comment_id):
                     category = 'false_positive_political'
                 elif ai_said == 'hate':
                     category = 'false_positive_hate'
+                elif ai_said == 'spam':
+                    category = 'false_positive_spam'
                 else:
                     # AI said clean and it is clean - just remove from view
                     db.dismiss_comment(comment_id)
@@ -1559,14 +1579,81 @@ def mark_comment_ok(comment_id):
     # Return empty - comment will disappear
     return '', 200
 
+@app.route('/comment/<comment_id>/mark-spam', methods=['POST'])
+def mark_comment_spam(comment_id):
+    """Mark comment as spam - deletes from Facebook + adds to examples"""
+    import threading
+    
+    def async_action():
+        try:
+            from facebook_comments_handler import FacebookCommentsHandler
+            config = load_config()
+            
+            if not config.get('facebook_access_token') or not config.get('facebook_page_id'):
+                return
+            
+            fb = FacebookCommentsHandler(
+                access_token=config['facebook_access_token'],
+                page_id=config['facebook_page_id']
+            )
+            
+            # Get comment details
+            conn = db.get_connection()
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM hidden_comments WHERE comment_id = ?', (comment_id,))
+            comment = cursor.fetchone()
+            conn.close()
+            
+            if not comment:
+                return
+            
+            # Delete from Facebook
+            success = fb.delete_comment(comment_id)
+            
+            # Determine category based on AI prediction
+            ai_said = comment['filter_reason']
+            
+            if ai_said == 'spam':
+                category = 'correct_spam'
+            elif ai_said == 'clean':
+                category = 'missed_spam'
+            else:
+                category = 'missed_spam'
+            
+            # Add to examples (even if delete failed)
+            db.add_ai_example(
+                category=category,
+                comment_text=comment['comment_text'],
+                original_ai_prediction=ai_said,
+                explanation=f"Spam - admin marked for deletion"
+            )
+            
+            # Always dismiss to prevent reappearance
+            db.dismiss_comment(comment_id)
+            
+            if success:
+                print(f"✅ Marked as spam and deleted: {comment_id} → {category}")
+            else:
+                print(f"⚠️  Marked as spam but Facebook delete failed: {comment_id} → {category}")
+            
+        except Exception as e:
+            print(f"❌ Error marking spam: {e}")
+    
+    thread = threading.Thread(target=async_action, daemon=True)
+    thread.start()
+    
+    # Return empty - comment will disappear
+    return '', 200
+
 @app.route('/comment/<comment_id>/dismiss', methods=['POST'])
 def dismiss_comment(comment_id):
-    """Dismiss a comment (remove from database)"""
+    """Dismiss a comment (remove from UI, mark as dismissed)"""
     try:
         success = db.dismiss_comment(comment_id)
         
         if success:
-            return '<div class="alert alert-success">✅ תגובה נמחקה מהרשימה</div>', 200
+            # Return empty div - HTMX will swap and trigger live update
+            return '', 200
         else:
             return '<div class="alert alert-danger">❌ תגובה לא נמצאה</div>', 404
             
@@ -1771,6 +1858,12 @@ def ai_examples_page():
             'description': 'תגובות שה-AI סימן בטעות כשנאה',
             'examples': []
         },
+        'false_positive_spam': {
+            'title_he': 'False Positive - ספאם',
+            'icon': '❌🚫',
+            'description': 'תגובות שה-AI סימן בטעות כספאם',
+            'examples': []
+        },
         'correct_political': {
             'title_he': 'נכון - פוליטי',
             'icon': '✓🏛️',
@@ -1783,6 +1876,12 @@ def ai_examples_page():
             'description': 'תגובות שנאה שה-AI זיהה נכון',
             'examples': []
         },
+        'correct_spam': {
+            'title_he': 'נכון - ספאם',
+            'icon': '✓🚫',
+            'description': 'ספאם שה-AI זיהה נכון',
+            'examples': []
+        },
         'missed_political': {
             'title_he': 'פספס - פוליטי',
             'icon': '⚠️🏛️',
@@ -1793,6 +1892,12 @@ def ai_examples_page():
             'title_he': 'פספס - שנאה',
             'icon': '⚠️⚠️',
             'description': 'תגובות שנאה שה-AI פספס',
+            'examples': []
+        },
+        'missed_spam': {
+            'title_he': 'פספס - ספאם',
+            'icon': '⚠️🚫',
+            'description': 'ספאם שה-AI פספס',
             'examples': []
         }
     }
@@ -1836,9 +1941,13 @@ from datetime import datetime
 def midnight_sync_job():
     """Run at midnight: sync from sheets + cleanup + check notifications"""
     try:
-        print("=" * 80)
+        print("\n" + "=" * 80)
         print(f"🌙 MIDNIGHT SYNC STARTED: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print("=" * 80)
+        
+        # Log to file for debugging
+        with open('logs/midnight_sync.log', 'a') as f:
+            f.write(f"\n{datetime.now().isoformat()} - Midnight sync triggered\n")
         
         # 1. Sync from Google Sheets
         if sheets_handler:
@@ -2069,16 +2178,47 @@ def run_scheduler():
     print("🔄 Scheduler thread started")
     while True:
         try:
+            # Log pending jobs every hour for debugging
+            pending = schedule.get_jobs()
+            if datetime.now().minute == 0:  # Log on the hour
+                print(f"\n⏰ [{datetime.now().strftime('%H:%M')}] Scheduler status: {len(pending)} jobs pending")
+                for job in pending:
+                    print(f"   - {job}")
+            
             schedule.run_pending()
             time.sleep(60)  # Check every minute
         except Exception as e:
             print(f"❌ Scheduler error: {e}")
+            import traceback
+            traceback.print_exc()
             time.sleep(60)
 
 def start_scheduler():
-    """Initialize and start the scheduler"""
+    """Initialize and start the scheduler with Israel timezone"""
+    import pytz
+    
+    # Get current server timezone offset to Israel
+    israel_tz = pytz.timezone('Asia/Jerusalem')
+    now_utc = datetime.now(pytz.utc)
+    now_israel = now_utc.astimezone(israel_tz)
+    server_now = datetime.now()
+    
+    # Calculate offset (hours difference between server and Israel)
+    offset = (now_israel.hour - server_now.hour) % 24
+    
+    print(f"🕐 Timezone info:")
+    print(f"   Server time: {server_now.strftime('%H:%M')}")
+    print(f"   Israel time: {now_israel.strftime('%H:%M')}")
+    print(f"   Offset: {offset} hours")
+    
     # Schedule midnight sync at 00:00 Israel time
-    schedule.every().day.at("00:00").do(midnight_sync_job)
+    # Convert to server local time
+    midnight_local = (24 - offset) % 24
+    schedule.every().day.at(f"{midnight_local:02d}:00").do(midnight_sync_job)
+    
+    # Cleanup at 02:00 Israel time
+    cleanup_local = (2 + 24 - offset) % 24
+    schedule.every().day.at(f"{cleanup_local:02d}:00").do(cleanup_old_comments_job)
     
     # Also run notifications check every 6 hours
     schedule.every(6).hours.do(check_and_send_notifications)
@@ -2086,20 +2226,17 @@ def start_scheduler():
     # Comments scanner - run every hour
     schedule.every().hour.do(comments_scan_job)
     
-    # Cleanup old comments - run daily at 02:00
-    schedule.every().day.at("02:00").do(cleanup_old_comments_job)
-    
     # Start background scheduler thread
     scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
     scheduler_thread.start()
     
     print("=" * 80)
     print("✅ Background scheduler started:")
-    print("   - Midnight sync at 00:00 (Israel time)")
-    print("   - Notifications check every 6 hours")
-    print("   - Comments scanner every hour")
-    print("   - Old comments cleanup daily at 02:00")
-    print("   - Scheduler thread running in background")
+    print(f"   - Midnight sync at {midnight_local:02d}:00 server time (00:00 Israel)")
+    print(f"   - Notifications check every 6 hours")
+    print(f"   - Comments scanner every hour")
+    print(f"   - Old comments cleanup at {cleanup_local:02d}:00 server time (02:00 Israel)")
+    print(f"   - Scheduler thread running in background")
     print("=" * 80)
 
 # Initialize scheduler at module level (runs when app starts)

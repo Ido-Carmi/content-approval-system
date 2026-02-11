@@ -15,6 +15,17 @@
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     color: white;
     padding: 1rem 1.5rem;
+    cursor: pointer;
+    user-select: none;
+    overflow: hidden;
+}
+
+.post-header:hover {
+    filter: brightness(1.1);
+}
+
+.post-header:active {
+    filter: brightness(0.95);
 }
 
 .post-context {
@@ -113,6 +124,12 @@
     color: #0f5132;
 }
 
+/* HTMX swap animation - fade out before removal */
+.comment-item.htmx-swapping {
+    opacity: 0;
+    transition: opacity 0.3s ease-out;
+}
+
 /* Mobile responsive */
 @media (max-width: 768px) {
     .post-context {
@@ -135,56 +152,21 @@
 </style>
 
 <!-- Stats Cards -->
-<div class="row mb-3">
-    <div class="col-md-3 col-6 mb-2">
-        <div class="card">
-            <div class="card-body text-center">
-                <h4 class="mb-0">{{ stats.total }}</h4>
-                <small class="text-muted">סה"כ</small>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-3 col-6 mb-2">
-        <div class="card">
-            <div class="card-body text-center">
-                <h4 class="mb-0 text-success">{{ stats.shown }}</h4>
-                <small class="text-muted">מוצגות</small>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-3 col-6 mb-2">
-        <div class="card">
-            <div class="card-body text-center">
-                <h4 class="mb-0 text-danger">{{ stats.hidden }}</h4>
-                <small class="text-muted">מוסתרות</small>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-3 col-6 mb-2">
-        <div class="card">
-            <div class="card-body text-center">
-                <h4 class="mb-0 text-warning">{{ stats.political }}</h4>
-                <small class="text-muted">פוליטי</small>
-            </div>
-        </div>
-    </div>
-</div>
-
 <!-- Filter Tabs + Scan Button -->
 <div class="card mb-3">
     <div class="card-body">
         <div class="btn-group" role="group">
             <a href="{{ url_for('comments_page', filter='all') }}" 
                class="btn {% if filter_status == 'all' %}btn-primary{% else %}btn-outline-primary{% endif %}">
-                הכל ({{ stats.total }})
+                הכל (<span id="count-total">{{ stats.total }}</span>)
             </a>
             <a href="{{ url_for('comments_page', filter='shown') }}" 
                class="btn {% if filter_status == 'shown' %}btn-primary{% else %}btn-outline-primary{% endif %}">
-                מוצגות ({{ stats.shown }})
+                מוצגות (<span id="count-shown">{{ stats.shown }}</span>)
             </a>
             <a href="{{ url_for('comments_page', filter='hidden') }}" 
                class="btn {% if filter_status == 'hidden' %}btn-primary{% else %}btn-outline-primary{% endif %}">
-                מוסתרות ({{ stats.hidden }})
+                מוסתרות (<span id="count-hidden">{{ stats.hidden }}</span>)
             </a>
         </div>
         
@@ -299,20 +281,23 @@ function checkScanStatus() {
 <!-- Comments Grouped by Post -->
 {% else %}
 {% for post_id, post_data in grouped_comments.items() %}
-<div class="post-card">
-    <!-- Post Header -->
-    <div class="post-header">
+<div class="post-card" id="post-{{ post_id }}" data-post-id="{{ post_id }}">
+    <!-- Post Header (Clickable to collapse) -->
+    <div class="post-header" onclick="togglePost('{{ post_id }}')">
         <strong>📌 פוסט #{{ post_data.post_number or '?' }}</strong>
-        <span class="badge bg-light text-dark float-start">{{ post_data.comments|length }} תגובות</span>
+        <span class="badge bg-light text-dark float-start" id="count-post-{{ post_id }}">
+            {{ post_data.comments|length }} תגובות
+        </span>
+        <i class="bi bi-chevron-down float-start me-2" id="chevron-{{ post_id }}"></i>
     </div>
     
     <!-- Post Context (Desktop & Mobile) -->
-    <div class="post-context">
+    <div class="post-context post-collapse" id="context-{{ post_id }}">
         <strong>הקשר:</strong> {{ post_data.post_text }}
     </div>
     
     <!-- Comments List -->
-    <div>
+    <div class="post-collapse" id="comments-{{ post_id }}">
         {% for comment in post_data.comments %}
         <div class="comment-item status-{{ comment.status }}" id="comment-{{ comment.id }}">
             <!-- Dismiss Button (X) -->
@@ -381,6 +366,13 @@ function checkScanStatus() {
                             title="מחיקה מפייסבוק + הוספה לדוגמאות שנאה">
                         ⚠️ שנאה
                     </button>
+                    <button class="btn btn-warning" 
+                            hx-post="{{ url_for('mark_comment_spam', comment_id=comment.comment_id) }}"
+                            hx-target="#comment-{{ comment.id }}"
+                            hx-swap="outerHTML swap:300ms"
+                            title="מחיקה מפייסבוק + הוספה לדוגמאות ספאם">
+                        🚫 ספאם
+                    </button>
                     <button class="btn btn-success" 
                             hx-post="{{ url_for('mark_comment_ok', comment_id=comment.comment_id) }}"
                             hx-target="#comment-{{ comment.id }}"
@@ -396,5 +388,84 @@ function checkScanStatus() {
 </div>
 {% endfor %}
 {% endif %}
+
+<script>
+// Collapse/expand posts
+function togglePost(postId) {
+    var comments = document.getElementById('comments-' + postId);
+    var context = document.getElementById('context-' + postId);
+    var chevron = document.getElementById('chevron-' + postId);
+    
+    if (!comments || !chevron) {
+        console.error('togglePost: elements not found for postId:', postId);
+        return;
+    }
+    
+    // Check computed display, not just inline style
+    var isHidden = (comments.style.display === 'none');
+    
+    if (isHidden) {
+        comments.style.display = 'block';
+        if (context) context.style.display = 'block';
+        chevron.className = 'bi bi-chevron-down float-start me-2';
+    } else {
+        comments.style.display = 'none';
+        if (context) context.style.display = 'none';
+        chevron.className = 'bi bi-chevron-up float-start me-2';
+    }
+}
+
+// Live update counters - use htmx:beforeSwap to capture state BEFORE element is removed
+document.body.addEventListener('htmx:beforeSwap', function(event) {
+    var target = event.detail.target;
+    
+    // Only handle comment dismissals/actions
+    if (!target || !target.id || !target.id.startsWith('comment-')) return;
+    
+    // Capture state while element is still in the DOM
+    var wasShown = target.classList.contains('status-shown');
+    var wasHidden = target.classList.contains('status-hidden');
+    var postCard = target.closest('.post-card');
+    var postId = postCard ? postCard.dataset.postId : null;
+    
+    // Update global counters
+    var totalEl = document.getElementById('count-total');
+    var shownEl = document.getElementById('count-shown');
+    var hiddenEl = document.getElementById('count-hidden');
+    
+    if (totalEl) {
+        var newTotal = Math.max(0, parseInt(totalEl.textContent) - 1);
+        totalEl.textContent = newTotal;
+    }
+    
+    if (wasShown && shownEl) {
+        shownEl.textContent = Math.max(0, parseInt(shownEl.textContent) - 1);
+    } else if (wasHidden && hiddenEl) {
+        hiddenEl.textContent = Math.max(0, parseInt(hiddenEl.textContent) - 1);
+    }
+    
+    // Update post comment count
+    if (postId) {
+        var countEl = document.getElementById('count-post-' + postId);
+        if (countEl) {
+            var currentCount = parseInt(countEl.textContent) || 0;
+            var newCount = Math.max(0, currentCount - 1);
+            countEl.textContent = newCount + ' תגובות';
+            
+            // Hide post if no comments left
+            if (newCount === 0 && postCard) {
+                // Use setTimeout so the HTMX swap finishes first
+                setTimeout(function() {
+                    postCard.style.transition = 'opacity 0.3s';
+                    postCard.style.opacity = '0';
+                    setTimeout(function() {
+                        postCard.style.display = 'none';
+                    }, 300);
+                }, 400);
+            }
+        }
+    }
+});
+</script>
 
 {% endblock %}

@@ -70,22 +70,24 @@ class FacebookCommentsHandler:
             print(f"❌ Error fetching comments from post {post_id}: {e}")
             return []
     
-    def fetch_all_recent_comments(self, post_ids: List[str], since_hours: int = 1) -> List[Dict]:
+    def fetch_all_recent_comments(self, post_ids: List[str], since_hours: float = 1.0) -> List[Dict]:
         """
         Fetch recent comments from multiple posts
         
         Args:
             post_ids: List of Facebook post IDs to check
-            since_hours: Only get comments from last N hours
+            since_hours: Ignored - kept for API compatibility
         
         Returns:
             List of all comments from all posts
         """
-        since_time = datetime.now() - timedelta(hours=since_hours)
+        # Note: We don't use since_hours because Facebook's API has delays
+        # Client-side filtering handles this better
         all_comments = []
         
         for post_id in post_ids:
-            comments = self.fetch_post_comments(post_id, since=since_time)
+            # Fetch without time filter - get recent comments
+            comments = self.fetch_post_comments(post_id, since=None, limit=100)
             all_comments.extend(comments)
             
             # Rate limiting - don't hammer API
@@ -123,6 +125,13 @@ class FacebookCommentsHandler:
                 print(f"⚠️  Failed to hide comment: {comment_id}")
                 return False
                 
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                print(f"⚠️  Cannot hide comment {comment_id} - may be deleted, a reply, or invalid ID (400)")
+                return False  # Treat as non-fatal - comment might already be gone
+            else:
+                print(f"❌ HTTP Error hiding comment {comment_id}: {e}")
+                return False
         except requests.exceptions.RequestException as e:
             print(f"❌ Error hiding comment {comment_id}: {e}")
             return False
@@ -188,6 +197,13 @@ class FacebookCommentsHandler:
                 print(f"⚠️  Failed to delete comment: {comment_id}")
                 return False
                 
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                print(f"⚠️  Cannot delete comment {comment_id} - may be already deleted, a reply, or invalid (400)")
+                return False
+            else:
+                print(f"❌ HTTP Error deleting comment {comment_id}: {e}")
+                return False
         except requests.exceptions.RequestException as e:
             print(f"❌ Error deleting comment {comment_id}: {e}")
             return False

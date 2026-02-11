@@ -2,17 +2,139 @@
 {% block title %}סטטיסטיקה{% endblock %}
 {% block page_title %}<div class="text-center">📊 סטטיסטיקה</div>{% endblock %}
 {% block content %}
+
+<h4 class="mb-3">📄 סטטיסטיקת פוסטים</h4>
 <div class="row mb-4">
-    <div class="col-md-3"><div class="card text-center"><div class="card-body"><h5>ממתין</h5><h2>{{stats.pending}}</h2></div></div></div>
-    <div class="col-md-3"><div class="card text-center"><div class="card-body"><h5>מתוזמן</h5><h2>{{stats.scheduled}}</h2></div></div></div>
-    <div class="col-md-3"><div class="card text-center"><div class="card-body"><h5>פורסם</h5><h2>{{stats.published}}</h2></div></div></div>
-    <div class="col-md-3"><div class="card text-center"><div class="card-body"><h5>מספר נוכחי</h5><h2>#{{current_number}}</h2></div></div></div>
+    <div class="col-md-3">
+        <div class="card text-center">
+            <div class="card-body">
+                <h5>ממתין</h5>
+                <h2 class="text-warning">{{stats.pending}}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-center">
+            <div class="card-body">
+                <h5>מתוזמן</h5>
+                <h2 class="text-info">{{stats.scheduled}}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-center">
+            <div class="card-body">
+                <h5>פורסם</h5>
+                <h2 class="text-success">{{stats.published}}</h2>
+                <small class="text-muted">כל הזמנים</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-center">
+            <div class="card-body">
+                <h5>מספר נוכחי</h5>
+                <h2 class="text-primary">#{{current_number}}</h2>
+            </div>
+        </div>
+    </div>
 </div>
-<h4>פעילות אחרונה</h4>
-<table class="table">
-    <thead><tr><th>זמן</th><th>סטטוס</th><th>תוכן</th></tr></thead>
+
+<h4 class="mb-3">💬 סטטיסטיקת תגובות</h4>
+<div class="row mb-4">
+    <div class="col-md-3">
+        <div class="card text-center">
+            <div class="card-body">
+                <h5>סה"כ תגובות</h5>
+                <h2 class="text-primary">{{stats.comments_total}}</h2>
+                <small class="text-muted">7 ימים אחרונים</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-center">
+            <div class="card-body">
+                <h5>מוסתרות</h5>
+                <h2 class="text-danger">{{stats.comments_hidden}}</h2>
+                <small class="text-muted">על ידי AI</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-2">
+        <div class="card text-center">
+            <div class="card-body">
+                <h5>🏛️ פוליטי</h5>
+                <h2 class="text-warning">{{stats.comments_political}}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-2">
+        <div class="card text-center">
+            <div class="card-body">
+                <h5>⚠️ שנאה</h5>
+                <h2 class="text-danger">{{stats.comments_hate}}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-2">
+        <div class="card text-center">
+            <div class="card-body">
+                <h5>🚫 ספאם</h5>
+                <h2 class="text-info">{{stats.comments_spam}}</h2>
+            </div>
+        </div>
+    </div>
+</div>
+
+<h4 class="mb-3">🎓 AI למידה</h4>
+<div class="row mb-4">
+    <div class="col-md-3">
+        <div class="card text-center">
+            <div class="card-body">
+                <h5>דוגמאות ל-AI</h5>
+                <h2 class="text-success">{{stats.ai_examples}}</h2>
+                <small class="text-muted">מקסימום 30</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-center">
+            <div class="card-body">
+                <h5>פוסטים נדחו</h5>
+                <h2 class="text-muted">{{stats.denied}}</h2>
+            </div>
+        </div>
+    </div>
+</div>
+
+<h4>📋 פעילות אחרונה</h4>
+<table class="table table-striped">
+    <thead>
+        <tr>
+            <th>זמן</th>
+            <th>סטטוס</th>
+            <th>תוכן</th>
+        </tr>
+    </thead>
     <tbody>
-        {% for item in recent %}<tr><td>{{item.timestamp}}</td><td>{{item.status}}</td><td>{{item.text[:50]}}...</td></tr>{% endfor %}
+        {% for item in recent %}
+        <tr>
+            <td>{{item.timestamp}}</td>
+            <td>
+                {% if item.status == 'published' %}
+                    <span class="badge bg-success">{{item.status}}</span>
+                {% elif item.status == 'scheduled' %}
+                    <span class="badge bg-info">{{item.status}}</span>
+                {% elif item.status == 'denied' %}
+                    <span class="badge bg-danger">{{item.status}}</span>
+                {% else %}
+                    <span class="badge bg-secondary">{{item.status}}</span>
+                {% endif %}
+            </td>
+            <td>{{item.text[:80]}}...</td>
+        </tr>
+        {% endfor %}
     </tbody>
 </table>
+
 {% endblock %}

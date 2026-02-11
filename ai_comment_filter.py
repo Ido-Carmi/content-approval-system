@@ -31,9 +31,10 @@ Your job is to identify comments that violate these rules:
 
 1. **Too Political**: Comments discussing political parties, politicians, elections, or government policies
 2. **Hate Speech**: Comments containing slurs, personal attacks, discrimination, or hateful language
+3. **Spam**: Commercial advertisements, repeated messages, off-topic promotions, or bot-like content
 
 Context: This is an IDF (Israel Defense Forces) confessions page where soldiers share experiences.
-Some military/army discussion is okay, but partisan politics and hate speech are not."""
+Some military/army discussion is okay, but partisan politics, hate speech, and spam are not."""
 
         # Add few-shot examples from permanent curated examples
         if self.db:
@@ -48,8 +49,9 @@ Some military/army discussion is okay, but partisan politics and hate speech are
                 # FALSE POSITIVES - What NOT to flag
                 fp_political = examples.get('false_positive_political', [])
                 fp_hate = examples.get('false_positive_hate', [])
+                fp_spam = examples.get('false_positive_spam', [])
                 
-                if fp_political or fp_hate:
+                if fp_political or fp_hate or fp_spam:
                     base_prompt += "\n**❌ DON'T Flag These (Acceptable Comments):**\n"
                     
                     for ex in fp_political:
@@ -59,12 +61,17 @@ Some military/army discussion is okay, but partisan politics and hate speech are
                     for ex in fp_hate:
                         base_prompt += f"\n- \"{ex['comment_text']}\""
                         base_prompt += f"\n  ❌ NOT hate speech - this is acceptable\n"
+                    
+                    for ex in fp_spam:
+                        base_prompt += f"\n- \"{ex['comment_text']}\""
+                        base_prompt += f"\n  ❌ NOT spam - this is acceptable\n"
                 
                 # CORRECT PREDICTIONS - Reinforce good behavior
                 correct_political = examples.get('correct_political', [])
                 correct_hate = examples.get('correct_hate', [])
+                correct_spam = examples.get('correct_spam', [])
                 
-                if correct_political or correct_hate:
+                if correct_political or correct_hate or correct_spam:
                     base_prompt += "\n**✓ Correctly Flagged (Keep Doing This):**\n"
                     
                     for ex in correct_political:
@@ -74,12 +81,17 @@ Some military/army discussion is okay, but partisan politics and hate speech are
                     for ex in correct_hate:
                         base_prompt += f"\n- \"{ex['comment_text']}\""
                         base_prompt += f"\n  ✓ Correctly identified as HATE SPEECH\n"
+                    
+                    for ex in correct_spam:
+                        base_prompt += f"\n- \"{ex['comment_text']}\""
+                        base_prompt += f"\n  ✓ Correctly identified as SPAM\n"
                 
                 # MISSED VIOLATIONS - What TO flag
                 missed_political = examples.get('missed_political', [])
                 missed_hate = examples.get('missed_hate', [])
+                missed_spam = examples.get('missed_spam', [])
                 
-                if missed_political or missed_hate:
+                if missed_political or missed_hate or missed_spam:
                     base_prompt += "\n**✅ DO Flag These (Violations You Missed Before):**\n"
                     
                     for ex in missed_political:
@@ -89,10 +101,14 @@ Some military/army discussion is okay, but partisan politics and hate speech are
                     for ex in missed_hate:
                         base_prompt += f"\n- \"{ex['comment_text']}\""
                         base_prompt += f"\n  ✓ This IS hate speech - flag it\n"
+                    
+                    for ex in missed_spam:
+                        base_prompt += f"\n- \"{ex['comment_text']}\""
+                        base_prompt += f"\n  ✓ This IS spam - flag it\n"
                 
                 total_examples = sum(len(v) for v in examples.values())
                 if total_examples > 0:
-                    print(f"   [AI] Using {total_examples} curated examples across 6 categories")
+                    print(f"   [AI] Using {total_examples} curated examples across 9 categories")
                 
             except Exception as e:
                 print(f"   [AI] Warning: Could not load examples: {e}")
@@ -101,12 +117,12 @@ Some military/army discussion is okay, but partisan politics and hate speech are
 
 For each comment, determine:
 - Should it be hidden? (yes/no)
-- What rule does it violate? (political/hate/none)
+- What rule does it violate? (political/hate/spam/none)
 - Brief explanation (1 sentence)
 
 Respond ONLY with valid JSON array, no markdown formatting:
 [
-  {"id": "comment_id", "hide": true/false, "reason": "political"/"hate"/null, "explanation": "brief reason"},
+  {"id": "comment_id", "hide": true/false, "reason": "political"/"hate"/"spam"/null, "explanation": "brief reason"},
   ...
 ]"""
         

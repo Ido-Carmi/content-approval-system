@@ -178,6 +178,9 @@
                             <button type="button" class="btn btn-warning text-dark" onclick="if(confirm('האם למחוק את כל הערכים הממתינים?')) { document.getElementById('clearPendingForm').submit(); }">
                                 <i class="bi bi-trash"></i> מחק ערכים ממתינים
                             </button>
+                            <button type="button" class="btn btn-warning text-dark" onclick="if(confirm('האם למחוק את כל התגובות ממסד הנתונים? (דוגמאות AI יישמרו)')) { document.getElementById('clearCommentsForm').submit(); }">
+                                <i class="bi bi-chat-left-text"></i> מחק כל התגובות
+                            </button>
                             <button type="button" class="btn btn-danger text-white" onclick="if(confirm('האם למחוק את כל מסד הנתונים? (לא ניתן לשחזר!)')) { document.getElementById('deleteDbForm').submit(); }">
                                 <i class="bi bi-database-x"></i> מחק את כל מסד הנתונים
                             </button>
@@ -199,6 +202,7 @@
 
 <!-- Hidden forms for dangerous actions -->
 <form id="clearPendingForm" action="{{ url_for('clear_pending') }}" method="POST" style="display: none;"></form>
+<form id="clearCommentsForm" action="{{ url_for('clear_comments') }}" method="POST" style="display: none;"></form>
 <form id="deleteDbForm" action="{{ url_for('delete_database') }}" method="POST" style="display: none;"></form>
 
 <div class="row">

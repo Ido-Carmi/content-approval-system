@@ -68,18 +68,45 @@ class CommentsScanner:
             
             print(f"📝 Found {len(comments)} new comments")
             
+            # CRITICAL: Separate truly NEW comments from already-in-database
+            # Only filter NEW comments through AI (expensive!)
+            new_comments = []
+            existing_count = 0
+            
+            conn = self.db.get_connection()
+            cursor = conn.cursor()
+            for comment in comments:
+                cursor.execute('SELECT id FROM hidden_comments WHERE comment_id = ?', 
+                              (comment['comment_id'],))
+                if cursor.fetchone():
+                    existing_count += 1
+                else:
+                    new_comments.append(comment)
+            conn.close()
+            
+            if existing_count > 0:
+                print(f"   [Skip] {existing_count} comments already in database (no AI needed)")
+            if new_comments:
+                print(f"   [New] {len(new_comments)} truly NEW comments (will filter with AI)")
+            
             # Step 3: Add any queued comments from previous failed attempts
             queued = self.db.get_queued_comments()
             if queued:
                 print(f"📥 Adding {len(queued)} queued comments from previous attempts")
-                comments.extend(queued)
+                new_comments.extend(queued)
             
-            # Step 4: Filter with AI
-            filter_results = self._filter_comments_with_ai(comments)
+            # Skip if no new comments to filter
+            if not new_comments:
+                print("ℹ️  No new comments to filter")
+                return stats
+            
+            # Step 4: Filter ONLY NEW comments with AI
+            print(f"🤖 Filtering {len(new_comments)} NEW comments with AI...")
+            filter_results = self._filter_comments_with_ai(new_comments)
             stats['comments_filtered'] = len(filter_results)
             
             # Step 5: Process results
-            hidden_count = self._process_filter_results(filter_results, comments)
+            hidden_count = self._process_filter_results(filter_results, new_comments)
             stats['comments_hidden'] = hidden_count
             
             # Count by reason
@@ -165,16 +192,27 @@ class CommentsScanner:
         # Get last fetch time from database
         last_fetch = self.db.get_last_fetch_time()
         
+        # Always fetch last 1.5 hours to account for Facebook API delays
+        # Facebook can take 5-15 minutes to index new comments
+        since_hours = 1.5
+        
         if last_fetch:
-            # Calculate hours since last fetch
-            from datetime import datetime
+            # Calculate time since last fetch for logging
             last_fetch_dt = datetime.fromisoformat(last_fetch)
             now = datetime.now()
-            hours_since = (now - last_fetch_dt).total_seconds() / 3600
-            since_hours = max(1, int(hours_since) + 1)  # At least 1 hour, plus buffer
-            print(f"📅 Last fetch: {last_fetch} ({since_hours} hours ago)")
+            seconds_since = (now - last_fetch_dt).total_seconds()
+            
+            # Log in human-readable format
+            if seconds_since < 120:
+                time_str = f"{int(seconds_since)} seconds ago"
+            elif seconds_since < 7200:
+                time_str = f"{int(seconds_since / 60)} minutes ago"
+            else:
+                time_str = f"{int(seconds_since / 3600)} hours ago"
+            
+            print(f"📅 Last fetch: {last_fetch} ({time_str})")
+            print(f"   Fetching last {since_hours} hours (to handle Facebook delays)")
         else:
-            since_hours = 24  # First time - get last 24 hours
             print(f"📅 First fetch - getting last {since_hours} hours")
         
         # Fetch comments since last fetch
@@ -183,28 +221,46 @@ class CommentsScanner:
             since_hours=since_hours
         )
         
-        # Update last fetch time for all posts
-        for post_id in post_ids:
-            self.db.update_last_fetch_time(post_id)
+        # Log newest comment from Facebook API
+        if comments:
+            newest_time = max([c.get('created_at', '') for c in comments if c.get('created_at')])
+            print(f"   📅 Newest comment from Facebook API: {newest_time}")
+        else:
+            print(f"   ⚠️  Facebook returned 0 comments")
         
-        # Filter out comments we've already processed
-        new_comments = []
-        for comment in comments:
-            # Check if comment already exists in database
-            conn = self.db.get_connection()
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT comment_id FROM hidden_comments 
-                WHERE comment_id = ?
-            ''', (comment['comment_id'],))
-            exists = cursor.fetchone()
-            conn.close()
-            
-            if not exists:
-                new_comments.append(comment)
+        # NO TIME-BASED FILTER!
+        # We rely entirely on the dismissed system
+        # This allows delayed Facebook comments to appear when indexed
         
-        print(f"📊 {len(comments)} total fetched, {len(new_comments)} are new (not yet processed)")
-        comments = new_comments
+        # NO database deduplication needed - time-based filter handles it!
+        # But we DO need to filter out comments we've already dismissed
+        
+        # Clean up old dismissed comments (older than 2 hours)
+        self.db.cleanup_old_dismissed_comments()
+        
+        # Filter out already-dismissed comments
+        dismissed_ids = set()
+        conn = self.db.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT comment_id FROM hidden_comments WHERE dismissed_at IS NOT NULL')
+        dismissed_ids = {row['comment_id'] for row in cursor.fetchall()}
+        conn.close()
+        
+        if dismissed_ids:
+            before_filter = len(comments)
+            comments = [c for c in comments if c['comment_id'] not in dismissed_ids]
+            filtered_out = before_filter - len(comments)
+            if filtered_out > 0:
+                print(f"   [Filter] Removed {filtered_out} already-dismissed comments")
+        
+        print(f"📝 Found {len(comments)} new comments (after all filters)")
+        
+        # DON'T update last_fetch_time anymore!
+        # We rely on the dismissed system to prevent re-showing comments
+        # This allows Facebook's delayed comments to appear when they're finally indexed
+        
+        # Just log for reference
+        print(f"   [Scan completed at {datetime.now().isoformat()}]")
         
         # Enrich comments with post metadata
         post_map = {p['post_id']: p for p in posts}
@@ -335,6 +391,8 @@ class CommentsScanner:
             return 0
         
         hidden_count = 0
+        added_count = 0
+        skipped_count = 0
         
         # Create comment lookup
         comment_map = {c['comment_id']: c for c in comments}
@@ -350,11 +408,15 @@ class CommentsScanner:
             comment_data['ai_explanation'] = result['explanation']
             comment_data['ai_confidence'] = result.get('confidence', 0.0)
             
-            # Save ALL comments to database (both clean and flagged)
-            self.db.add_comment(comment_data)
+            # Save comment to database (skips if already exists)
+            was_added = self.db.add_comment(comment_data)
+            if was_added:
+                added_count += 1
+            else:
+                skipped_count += 1
             
-            # Only hide on Facebook if AI flagged it
-            if result['should_hide']:
+            # Only hide on Facebook if AI flagged it AND it was newly added
+            if result['should_hide'] and was_added:
                 success = self.facebook.hide_comment(result['comment_id'])
                 
                 if success:
