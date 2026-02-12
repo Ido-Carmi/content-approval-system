@@ -3,7 +3,7 @@ Comments Scanner
 Hourly job to scan comments, filter with AI, and hide violations
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict
 import time
 
@@ -228,12 +228,34 @@ class CommentsScanner:
         else:
             print(f"   ⚠️  Facebook returned 0 comments")
         
-        # NO TIME-BASED FILTER!
-        # We rely entirely on the dismissed system
-        # This allows delayed Facebook comments to appear when indexed
+        # Client-side time filter: discard comments older than 1.5 hours
+        # Facebook's 'since' parameter is unreliable, so we filter here
+        # Use UTC because Facebook returns UTC timestamps (+0000)
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=1.5)
+        before_time_filter = len(comments)
         
-        # NO database deduplication needed - time-based filter handles it!
-        # But we DO need to filter out comments we've already dismissed
+        filtered_comments = []
+        for c in comments:
+            created = c.get('created_at', '')
+            if not created:
+                filtered_comments.append(c)  # Keep if no timestamp (safety)
+                continue
+            try:
+                # Facebook returns ISO format: 2026-02-11T14:30:00+0000
+                comment_time = datetime.fromisoformat(created.replace('+0000', '+00:00').replace('Z', '+00:00'))
+                # Ensure timezone-aware comparison (both UTC)
+                if comment_time.tzinfo is None:
+                    comment_time = comment_time.replace(tzinfo=timezone.utc)
+                if comment_time >= cutoff_time:
+                    filtered_comments.append(c)
+            except (ValueError, TypeError):
+                filtered_comments.append(c)  # Keep if parsing fails (safety)
+        
+        comments = filtered_comments
+        time_filtered_out = before_time_filter - len(comments)
+        if time_filtered_out > 0:
+            print(f"   [Time Filter] Removed {time_filtered_out} comments older than 1.5 hours")
+        
         
         # Clean up old dismissed comments (older than 2 hours)
         self.db.cleanup_old_dismissed_comments()
