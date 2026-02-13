@@ -189,20 +189,14 @@ class CommentsScanner:
         """
         post_ids = [post['post_id'] for post in posts]
         
-        # Get last fetch time from database
+        # Get last fetch time from database (for logging only)
         last_fetch = self.db.get_last_fetch_time()
         
-        # Always fetch last 1.5 hours to account for Facebook API delays
-        # Facebook can take 5-15 minutes to index new comments
-        since_hours = 1.5
-        
         if last_fetch:
-            # Calculate time since last fetch for logging
             last_fetch_dt = datetime.fromisoformat(last_fetch)
             now = datetime.now()
             seconds_since = (now - last_fetch_dt).total_seconds()
             
-            # Log in human-readable format
             if seconds_since < 120:
                 time_str = f"{int(seconds_since)} seconds ago"
             elif seconds_since < 7200:
@@ -211,14 +205,13 @@ class CommentsScanner:
                 time_str = f"{int(seconds_since / 3600)} hours ago"
             
             print(f"📅 Last fetch: {last_fetch} ({time_str})")
-            print(f"   Fetching last {since_hours} hours (to handle Facebook delays)")
         else:
-            print(f"📅 First fetch - getting last {since_hours} hours")
+            print(f"📅 First fetch")
         
-        # Fetch comments since last fetch
+        # Fetch all comments (no server-side time filter — Facebook ignores it)
+        # Client-side 1.5h filter is applied below
         comments = self.facebook.fetch_all_recent_comments(
-            post_ids=post_ids,
-            since_hours=since_hours
+            post_ids=post_ids
         )
         
         # Log newest comment from Facebook API

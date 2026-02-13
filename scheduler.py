@@ -1,8 +1,7 @@
 from datetime import datetime, timedelta, time
 import pytz
 from typing import List, Dict, Optional
-import json
-from pathlib import Path
+from config import load_config
 import threading
 
 class Scheduler:
@@ -66,17 +65,9 @@ class Scheduler:
             '2027-10-23': 'Simchat Torah',
         }
     
-    def load_config(self) -> Dict:
-        """Load configuration from file"""
-        config_file = Path("config.json")
-        if config_file.exists():
-            with open(config_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        return {}
-    
     def load_posting_windows(self) -> List[time]:
         """Load posting windows from config"""
-        config = self.load_config()
+        config = load_config()
         windows_str = config.get('posting_windows', ['09:00', '14:00', '19:00'])
         
         windows = []
@@ -97,7 +88,7 @@ class Scheduler:
     
     def should_skip_date(self, date: datetime.date) -> bool:
         """Check if a date should be skipped based on config"""
-        config = self.load_config()
+        config = load_config()
         skip_shabbat = config.get('skip_shabbat', True)
         skip_holidays = config.get('skip_jewish_holidays', True)
         

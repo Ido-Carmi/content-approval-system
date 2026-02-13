@@ -2,15 +2,14 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import List, Optional
-import json
-from pathlib import Path
+from config import load_config, save_config
 from datetime import datetime
 import pytz
 
 class NotificationHandler:
     def __init__(self):
         """Initialize notification handler"""
-        self.config = self.load_config()
+        self.config = load_config()
         self.gmail_email = self.config.get('gmail_email')
         self.gmail_password = self.config.get('gmail_app_password')
         self.notification_emails = self.config.get('notification_emails', [])
@@ -19,26 +18,12 @@ class NotificationHandler:
         self.app_url = self.config.get('app_url', 'http://localhost:8501')
         self.last_empty_window_alert = self.config.get('last_empty_window_alert')
     
-    def load_config(self) -> dict:
-        """Load configuration from file"""
-        config_file = Path("config.json")
-        if config_file.exists():
-            with open(config_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        return {}
-    
     def save_last_alert_time(self):
         """Save the last time empty window alert was sent"""
-        config_file = Path("config.json")
-        if config_file.exists():
-            with open(config_file, 'r', encoding='utf-8') as f:
-                config = json.load(f)
-            
-            israel_tz = pytz.timezone('Asia/Jerusalem')
-            config['last_empty_window_alert'] = datetime.now(israel_tz).isoformat()
-            
-            with open(config_file, 'w', encoding='utf-8') as f:
-                json.dump(config, f, indent=2, ensure_ascii=False)
+        config = load_config()
+        israel_tz = pytz.timezone('Asia/Jerusalem')
+        config['last_empty_window_alert'] = datetime.now(israel_tz).isoformat()
+        save_config(config)
     
     def should_send_empty_window_alert(self) -> bool:
         """Check if enough time has passed since last empty window alert (1 hour)"""

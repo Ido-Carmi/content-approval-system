@@ -4,7 +4,7 @@ Fetch, hide, unhide, and delete comments via Facebook Graph API
 """
 
 import requests
-from typing import List, Dict, Optional
+from typing import List, Dict
 from datetime import datetime, timedelta
 import time
 
@@ -15,13 +15,15 @@ class FacebookCommentsHandler:
         self.page_id = page_id
         self.base_url = "https://graph.facebook.com/v18.0"
     
-    def fetch_post_comments(self, post_id: str, since: Optional[datetime] = None, limit: int = 100) -> List[Dict]:
+    def fetch_post_comments(self, post_id: str, limit: int = 100) -> List[Dict]:
         """
         Fetch comments from a specific post
         
+        Note: Facebook's 'since' parameter is unreliable and ignored.
+        Client-side time filtering is done in comments_scanner.py instead.
+        
         Args:
             post_id: Facebook post ID
-            since: Only fetch comments after this time (for hourly scans)
             limit: Max comments to fetch
         
         Returns:
@@ -34,10 +36,6 @@ class FacebookCommentsHandler:
             'fields': 'id,message,from,created_time,is_hidden',
             'limit': limit
         }
-        
-        # Add time filter if provided
-        if since:
-            params['since'] = int(since.timestamp())
         
         try:
             response = requests.get(url, params=params, timeout=30)
@@ -70,24 +68,23 @@ class FacebookCommentsHandler:
             print(f"❌ Error fetching comments from post {post_id}: {e}")
             return []
     
-    def fetch_all_recent_comments(self, post_ids: List[str], since_hours: float = 1.0) -> List[Dict]:
+    def fetch_all_recent_comments(self, post_ids: List[str]) -> List[Dict]:
         """
-        Fetch recent comments from multiple posts
+        Fetch comments from multiple posts
+        
+        Note: No time filtering here — Facebook's 'since' param is unreliable.
+        Client-side filtering is handled in comments_scanner.py.
         
         Args:
             post_ids: List of Facebook post IDs to check
-            since_hours: Ignored - kept for API compatibility
         
         Returns:
             List of all comments from all posts
         """
-        # Note: We don't use since_hours because Facebook's API has delays
-        # Client-side filtering handles this better
         all_comments = []
         
         for post_id in post_ids:
-            # Fetch without time filter - get recent comments
-            comments = self.fetch_post_comments(post_id, since=None, limit=100)
+            comments = self.fetch_post_comments(post_id, limit=100)
             all_comments.extend(comments)
             
             # Rate limiting - don't hammer API

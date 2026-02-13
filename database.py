@@ -1120,56 +1120,6 @@ class Database:
         
         return grouped
 
-    def get_best_feedback_examples(self, limit: int = 10) -> Dict[str, List[Dict]]:
-        """
-        Get most representative feedback examples for few-shot learning
-        
-        Returns dict with:
-        - false_positives: Examples AI wrongly flagged
-        - missed: Examples AI missed
-        - correct: Examples AI got right
-        """
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        
-        # Get false positives (AI was too aggressive)
-        cursor.execute('''
-            SELECT comment_text, ai_prediction, ai_reason, feedback_type
-            FROM ai_feedback 
-            WHERE feedback_type = 'false_positive'
-            ORDER BY created_at DESC
-            LIMIT ?
-        ''', (limit,))
-        false_positives = [dict(row) for row in cursor.fetchall()]
-        
-        # Get missed violations (AI was too lenient)
-        cursor.execute('''
-            SELECT comment_text, correct_reason, feedback_type
-            FROM ai_feedback 
-            WHERE feedback_type = 'missed'
-            ORDER BY created_at DESC
-            LIMIT ?
-        ''', (limit,))
-        missed = [dict(row) for row in cursor.fetchall()]
-        
-        # Get correct predictions (for balance)
-        cursor.execute('''
-            SELECT comment_text, ai_prediction, ai_reason, feedback_type
-            FROM ai_feedback 
-            WHERE feedback_type = 'correct_hide'
-            ORDER BY created_at DESC
-            LIMIT ?
-        ''', (limit // 2,))  # Fewer correct examples
-        correct = [dict(row) for row in cursor.fetchall()]
-        
-        conn.close()
-        
-        return {
-            'false_positives': false_positives,
-            'missed': missed,
-            'correct': correct
-        }
-
     def log_ai_feedback(self, comment_id: str, feedback_type: str, correct_reason: str = None) -> bool:
         """
         Log feedback for AI training

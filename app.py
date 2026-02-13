@@ -1,6 +1,10 @@
 from flask import Flask, render_template, request, redirect, url_for, jsonify, flash
 from pathlib import Path
 import json
+import threading
+import traceback
+import time
+import schedule
 from datetime import datetime, timedelta
 import pytz
 
@@ -29,19 +33,7 @@ facebook_handler = None
 sheets_handler = None
 notifications = NotificationHandler()
 
-def load_config():
-    """Load configuration from file"""
-    config_file = Path("config.json")
-    if config_file.exists():
-        with open(config_file, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return {}
-
-def save_config(config):
-    """Save configuration to file"""
-    config_file = Path("config.json")
-    with open(config_file, 'w', encoding='utf-8') as f:
-        json.dump(config, f, indent=2, ensure_ascii=False)
+from config import load_config, save_config
 
 def init_handlers():
     """Initialize handlers from config"""
@@ -170,7 +162,6 @@ def review_page():
                              config=config)
     except Exception as e:
         print(f"✗ Template rendering failed: {e}")
-        import traceback
         traceback.print_exc()
         return f"Error rendering template: {e}", 500
 
@@ -202,7 +193,6 @@ def approve_entry(entry_id):
                 print(f"Background scheduling error: {e}")
     
     # Start background thread
-    import threading
     thread = threading.Thread(target=schedule_in_background, daemon=True)
     thread.start()
     
@@ -270,7 +260,6 @@ def sync_now():
         flash(f'✅ סונכרן! נוספו {added_count} ערכים חדשים', 'success')
     except Exception as e:
         print(f"DEBUG: Sync error: {e}")
-        import traceback
         traceback.print_exc()
         flash(f'❌ סנכרון נכשל: {str(e)}', 'error')
     
@@ -507,7 +496,6 @@ def scheduled_page():
             if '+' in scheduled_time_str:
                 scheduled_time_str = scheduled_time_str.split('+')[0]
             if 'T' in scheduled_time_str:
-                from datetime import datetime
                 try:
                     dt = datetime.fromisoformat(scheduled_time_str.split('+')[0])
                     display_time = dt.strftime('%H:%M %d/%m/%Y')
@@ -527,54 +515,56 @@ def scheduled_page():
         # Fill holes: move posts to earliest available slots
         print("\n5. Checking for holes in schedule...")
         if scheduler and len(fb_posts) > 0:
-            from datetime import datetime, timedelta
-            import pytz
             
-            # Get all scheduled times
-            scheduled_times = sorted([
-                datetime.fromisoformat(p['scheduled_time'].replace('+02:00', '').replace('+03:00', ''))
-                for p in fb_posts
-            ])
+            def _parse_fb_time(time_str):
+                """Parse Facebook scheduled_time to timezone-aware datetime in Israel tz"""
+                try:
+                    dt = datetime.fromisoformat(time_str)
+                    if dt.tzinfo is None:
+                        dt = scheduler.timezone.localize(dt)
+                    return dt.astimezone(scheduler.timezone)
+                except (ValueError, TypeError):
+                    return None
             
-            if scheduled_times:
-                # Generate all valid slots from now until last scheduled post
+            # Parse all scheduled times as timezone-aware
+            parsed_posts = []
+            for p in fb_posts:
+                dt = _parse_fb_time(p['scheduled_time'])
+                if dt:
+                    parsed_posts.append((p, dt))
+            
+            parsed_posts.sort(key=lambda x: x[1])
+            
+            if parsed_posts:
                 windows = scheduler.load_posting_windows()
                 now = datetime.now(scheduler.timezone)
-                last_scheduled = max(scheduled_times)
                 
+                # Generate N valid future slots (where N = number of scheduled posts)
                 valid_slots = []
                 current_date = now.date()
                 
-                while True:
+                while len(valid_slots) < len(parsed_posts):
                     if not scheduler.should_skip_date(current_date):
                         for window_time in windows:
                             slot = scheduler.timezone.localize(datetime.combine(current_date, window_time))
                             if slot > now:
                                 valid_slots.append(slot)
-                                if len(valid_slots) >= len(scheduled_times):
+                                if len(valid_slots) >= len(parsed_posts):
                                     break
-                        if len(valid_slots) >= len(scheduled_times):
-                            break
                     current_date += timedelta(days=1)
                     if (current_date - now.date()).days > 365:
                         break
                 
-                # Take only the slots we need
-                valid_slots = valid_slots[:len(scheduled_times)]
+                valid_slots = valid_slots[:len(parsed_posts)]
                 
                 # Check if posts need to be moved to fill holes
-                posts_moved = False
                 posts_to_update = []
                 
-                for i, (fb_post, target_slot) in enumerate(zip(sorted(fb_posts, key=lambda p: p['scheduled_time']), valid_slots)):
-                    current_time = datetime.fromisoformat(fb_post['scheduled_time'].replace('+02:00', '').replace('+03:00', ''))
-                    
-                    # If post is not at the right slot, mark for update
-                    if abs((scheduler.timezone.localize(current_time) - target_slot).total_seconds()) > 60:
+                for (fb_post, current_time), target_slot in zip(parsed_posts, valid_slots):
+                    if abs((current_time - target_slot).total_seconds()) > 60:
                         posts_to_update.append((fb_post, target_slot))
-                        posts_moved = True
                 
-                if posts_moved:
+                if posts_to_update:
                     print(f"   Found holes! Moving {len(posts_to_update)} posts to fill gaps...")
                     
                     conn = db.get_connection()
@@ -637,15 +627,8 @@ def scheduled_page():
                             entry = next((e for e in db_entries if e.get('post_number') == post_number), None)
                             if entry:
                                 weekday = get_hebrew_weekday(fb_post['scheduled_time'])
-                                scheduled_time_str = fb_post['scheduled_time'].split('+')[0] if '+' in fb_post['scheduled_time'] else fb_post['scheduled_time']
-                                if 'T' in scheduled_time_str:
-                                    try:
-                                        dt = datetime.fromisoformat(scheduled_time_str)
-                                        display_time = dt.strftime('%H:%M %d/%m/%Y')
-                                    except:
-                                        display_time = scheduled_time_str
-                                else:
-                                    display_time = scheduled_time_str
+                                dt = _parse_fb_time(fb_post['scheduled_time'])
+                                display_time = dt.strftime('%H:%M %d/%m/%Y') if dt else fb_post['scheduled_time']
                                 
                                 posts_data.append({
                                     'fb_post': fb_post,
@@ -671,7 +654,6 @@ def scheduled_page():
         
     except Exception as e:
         print(f"\nERROR in scheduled_page: {e}")
-        import traceback
         traceback.print_exc()
         print("=" * 80)
         flash(f'❌ שגיאה: {str(e)}', 'error')
@@ -719,7 +701,6 @@ def unschedule_entry(entry_id):
                 print("✓ Deleted from Facebook")
             except Exception as e:
                 print(f"ERROR deleting from Facebook: {e}")
-                import traceback
                 traceback.print_exc()
         else:
             print("No Facebook post ID, skipping deletion")
@@ -766,8 +747,6 @@ def unschedule_entry(entry_id):
                 
                 try:
                     # Parse to datetime
-                    from datetime import datetime
-                    import pytz
                     timezone = pytz.timezone('Asia/Jerusalem')
                     
                     new_time_dt = datetime.fromisoformat(new_time_str.replace('+02:00', '').replace('+03:00', ''))
@@ -800,7 +779,6 @@ def unschedule_entry(entry_id):
                     
                 except Exception as e:
                     print(f"  ✗ Error shifting post {entry['id']}: {e}")
-                    import traceback
                     traceback.print_exc()
         
         # Decrement global counter
@@ -819,7 +797,6 @@ def unschedule_entry(entry_id):
         print("=" * 80)
         print("UNSCHEDULE ENTRY - ERROR")
         print(f"ERROR: {e}")
-        import traceback
         traceback.print_exc()
         print("=" * 80)
         flash(f'❌ שגיאה: {str(e)}', 'error')
@@ -906,7 +883,6 @@ def edit_scheduled_post(entry_id):
         print("=" * 80)
         print("EDIT SCHEDULED POST - ERROR")
         print(f"ERROR: {e}")
-        import traceback
         traceback.print_exc()
         print("=" * 80)
         
@@ -993,8 +969,6 @@ def swap_posts(entry_id, direction):
         print(f"Swapping times: {current_time_str} ↔ {target_time_str}")
         
         # Convert strings to datetime objects for Facebook API
-        from datetime import datetime
-        import pytz
         timezone = pytz.timezone('Asia/Jerusalem')
         
         try:
@@ -1014,7 +988,6 @@ def swap_posts(entry_id, direction):
             print("✓ Times parsed successfully")
         except Exception as e:
             print(f"ERROR parsing times: {e}")
-            import traceback
             traceback.print_exc()
             flash(f'❌ שגיאת פורמט זמן: {str(e)}', 'error')
             return redirect(url_for('scheduled_page'))
@@ -1084,7 +1057,6 @@ def swap_posts(entry_id, direction):
         print("=" * 80)
         print("SWAP POSTS - ERROR")
         print(f"ERROR: {e}")
-        import traceback
         traceback.print_exc()
         print("=" * 80)
         flash(f'❌ שגיאה: {str(e)}', 'error')
@@ -1277,7 +1249,6 @@ def comments_page():
         print(f"   ✓ Returned {len(grouped_comments)} posts with {total_comments} comments")
     except Exception as e:
         print(f"   ✗ Error: {e}")
-        import traceback
         traceback.print_exc()
         grouped_comments = {}
     
@@ -1288,7 +1259,6 @@ def comments_page():
         print(f"   ✓ Stats: {stats}")
     except Exception as e:
         print(f"   ✗ Error: {e}")
-        import traceback
         traceback.print_exc()
         stats = {'total': 0, 'hidden': 0, 'shown': 0}
     
@@ -1303,7 +1273,6 @@ def comments_page():
 @app.route('/scan-comments-now', methods=['POST'])
 def scan_comments_now():
     """Manually trigger comment scanning (runs async)"""
-    import threading
     
     # Set global scan status
     global scan_in_progress
@@ -1351,7 +1320,6 @@ def scan_comments_now():
             print(f"❌ Import error: {e}")
         except Exception as e:
             print(f"❌ Scan error: {e}")
-            import traceback
             traceback.print_exc()
         finally:
             scan_in_progress = False
@@ -1371,168 +1339,117 @@ def scan_status():
 # Initialize scan status
 scan_in_progress = False
 
-@app.route('/comment/<comment_id>/mark-political', methods=['POST'])
-def mark_comment_political(comment_id):
-    """Mark comment as political - deletes from Facebook + adds to examples"""
-    import threading
-    
+# ============================================================================
+# COMMENT ACTION HELPERS
+# ============================================================================
+
+def _get_fb_handler():
+    """Create FacebookCommentsHandler from config. Returns None if not configured."""
+    from facebook_comments_handler import FacebookCommentsHandler
+    config = load_config()
+    if not config.get('facebook_access_token') or not config.get('facebook_page_id'):
+        return None
+    return FacebookCommentsHandler(
+        access_token=config['facebook_access_token'],
+        page_id=config['facebook_page_id']
+    )
+
+def _get_comment(comment_id):
+    """Fetch comment from hidden_comments table."""
+    conn = db.get_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM hidden_comments WHERE comment_id = ?', (comment_id,))
+    comment = cursor.fetchone()
+    conn.close()
+    return comment
+
+def _run_async(fn):
+    """Run function in a background daemon thread."""
+    threading.Thread(target=fn, daemon=True).start()
+
+# Shared HTML response for buttons that trigger a page reload
+_PROCESSING_RESPONSE = '''
+    <button class="btn btn-sm btn-secondary" disabled>
+        <i class="bi bi-hourglass-split"></i> מעבד...
+    </button>
+    <script>
+        setTimeout(() => location.reload(), 1000);
+    </script>
+'''
+
+# Label descriptions for AI example explanations
+_LABEL_DESCRIPTIONS = {
+    'political': 'Political content',
+    'hate': 'Hate speech',
+    'spam': 'Spam',
+}
+
+def _mark_and_delete_comment(comment_id, label):
+    """
+    Shared logic for mark-political, mark-hate, mark-spam routes.
+    Deletes comment from Facebook, adds AI training example, dismisses from DB.
+    """
     def async_action():
         try:
-            from facebook_comments_handler import FacebookCommentsHandler
-            config = load_config()
-            
-            if not config.get('facebook_access_token') or not config.get('facebook_page_id'):
+            fb = _get_fb_handler()
+            if not fb:
                 return
             
-            fb = FacebookCommentsHandler(
-                access_token=config['facebook_access_token'],
-                page_id=config['facebook_page_id']
-            )
-            
-            # Get comment details
-            conn = db.get_connection()
-            cursor = conn.cursor()
-            cursor.execute('SELECT * FROM hidden_comments WHERE comment_id = ?', (comment_id,))
-            comment = cursor.fetchone()
-            conn.close()
-            
+            comment = _get_comment(comment_id)
             if not comment:
                 return
             
-            # Delete from Facebook
             success = fb.delete_comment(comment_id)
             
-            # Determine category based on AI prediction
             ai_said = comment['filter_reason']
+            category = f'correct_{label}' if ai_said == label else f'missed_{label}'
+            description = _LABEL_DESCRIPTIONS.get(label, label.capitalize())
             
-            if ai_said == 'political':
-                category = 'correct_political'
-            elif ai_said == 'clean':
-                category = 'missed_political'
-            else:
-                category = 'missed_political'
-            
-            # Add to examples (even if delete failed)
             db.add_ai_example(
                 category=category,
                 comment_text=comment['comment_text'],
                 original_ai_prediction=ai_said,
-                explanation=f"Political content - admin marked for deletion"
+                explanation=f"{description} - admin marked for deletion"
             )
             
-            # Always dismiss to prevent reappearance
             db.dismiss_comment(comment_id)
             
             if success:
-                print(f"✅ Marked as political and deleted: {comment_id} → {category}")
+                print(f"✅ Marked as {label} and deleted: {comment_id} → {category}")
             else:
-                print(f"⚠️  Marked as political but Facebook delete failed: {comment_id} → {category}")
+                print(f"⚠️  Marked as {label} but Facebook delete failed: {comment_id} → {category}")
             
         except Exception as e:
-            print(f"❌ Error marking political: {e}")
+            print(f"❌ Error marking {label}: {e}")
     
-    thread = threading.Thread(target=async_action, daemon=True)
-    thread.start()
-    
-    # Return empty - comment will disappear
+    _run_async(async_action)
     return '', 200
+
+# ============================================================================
+# COMMENT ROUTES
+# ============================================================================
+
+@app.route('/comment/<comment_id>/mark-political', methods=['POST'])
+def mark_comment_political(comment_id):
+    """Mark comment as political - deletes from Facebook + adds to examples"""
+    return _mark_and_delete_comment(comment_id, 'political')
 
 @app.route('/comment/<comment_id>/mark-hate', methods=['POST'])
 def mark_comment_hate(comment_id):
     """Mark comment as hate speech - deletes from Facebook + adds to examples"""
-    import threading
-    
-    def async_action():
-        try:
-            from facebook_comments_handler import FacebookCommentsHandler
-            config = load_config()
-            
-            if not config.get('facebook_access_token') or not config.get('facebook_page_id'):
-                return
-            
-            fb = FacebookCommentsHandler(
-                access_token=config['facebook_access_token'],
-                page_id=config['facebook_page_id']
-            )
-            
-            # Get comment details
-            conn = db.get_connection()
-            cursor = conn.cursor()
-            cursor.execute('SELECT * FROM hidden_comments WHERE comment_id = ?', (comment_id,))
-            comment = cursor.fetchone()
-            conn.close()
-            
-            if not comment:
-                return
-            
-            # Delete from Facebook
-            success = fb.delete_comment(comment_id)
-            
-            # Determine category based on AI prediction
-            ai_said = comment['filter_reason']
-            
-            if ai_said == 'hate':
-                category = 'correct_hate'
-            elif ai_said == 'clean':
-                category = 'missed_hate'
-            else:
-                category = 'missed_hate'
-            
-            # Add to examples (even if delete failed - we still learn from it)
-            db.add_ai_example(
-                category=category,
-                comment_text=comment['comment_text'],
-                original_ai_prediction=ai_said,
-                explanation=f"Hate speech - admin marked for deletion"
-            )
-            
-            # Only dismiss from our database if:
-            # 1. Delete succeeded, OR
-            # 2. Delete failed but we want to hide it from UI anyway
-            # For 400 errors, the comment might already be gone from Facebook
-            if success:
-                db.dismiss_comment(comment_id)
-                print(f"✅ Marked as hate and deleted: {comment_id} → {category}")
-            else:
-                # Delete failed - still dismiss to avoid seeing it again
-                # But log that Facebook deletion failed
-                db.dismiss_comment(comment_id)
-                print(f"⚠️  Marked as hate but Facebook delete failed: {comment_id} → {category}")
-            
-        except Exception as e:
-            print(f"❌ Error marking hate: {e}")
-    
-    thread = threading.Thread(target=async_action, daemon=True)
-    thread.start()
-    
-    # Return empty - comment will disappear
-    return '', 200
+    return _mark_and_delete_comment(comment_id, 'hate')
 
 @app.route('/comment/<comment_id>/mark-ok', methods=['POST'])
 def mark_comment_ok(comment_id):
     """Mark comment as OK - unhides on Facebook + adds to examples"""
-    import threading
     
     def async_action():
         try:
-            from facebook_comments_handler import FacebookCommentsHandler
-            config = load_config()
-            
-            if not config.get('facebook_access_token') or not config.get('facebook_page_id'):
+            fb = _get_fb_handler()
+            if not fb:
                 return
             
-            fb = FacebookCommentsHandler(
-                access_token=config['facebook_access_token'],
-                page_id=config['facebook_page_id']
-            )
-            
-            # Get comment details
-            conn = db.get_connection()
-            cursor = conn.cursor()
-            cursor.execute('SELECT * FROM hidden_comments WHERE comment_id = ?', (comment_id,))
-            comment = cursor.fetchone()
-            conn.close()
-            
+            comment = _get_comment(comment_id)
             if not comment:
                 return
             
@@ -1543,107 +1460,36 @@ def mark_comment_ok(comment_id):
                 success = True
             
             if success:
-                # Determine category - this is a false positive
                 ai_said = comment['filter_reason']
                 
-                if ai_said == 'political':
-                    category = 'false_positive_political'
-                elif ai_said == 'hate':
-                    category = 'false_positive_hate'
-                elif ai_said == 'spam':
-                    category = 'false_positive_spam'
-                else:
-                    # AI said clean and it is clean - just remove from view
+                if ai_said == 'clean':
+                    # AI said clean and it is clean - just dismiss
                     db.dismiss_comment(comment_id)
                     print(f"✅ Marked as OK (already clean): {comment_id}")
                     return
                 
-                # Add to examples
+                category = f'false_positive_{ai_said}'
+                
                 db.add_ai_example(
                     category=category,
                     comment_text=comment['comment_text'],
                     original_ai_prediction=ai_said,
-                    explanation=f"False positive - actually acceptable"
+                    explanation="False positive - actually acceptable"
                 )
                 
-                # Remove from database
                 db.dismiss_comment(comment_id)
                 print(f"✅ Marked as OK and unhidden: {comment_id} → {category}")
             
         except Exception as e:
             print(f"❌ Error marking OK: {e}")
     
-    thread = threading.Thread(target=async_action, daemon=True)
-    thread.start()
-    
-    # Return empty - comment will disappear
+    _run_async(async_action)
     return '', 200
 
 @app.route('/comment/<comment_id>/mark-spam', methods=['POST'])
 def mark_comment_spam(comment_id):
     """Mark comment as spam - deletes from Facebook + adds to examples"""
-    import threading
-    
-    def async_action():
-        try:
-            from facebook_comments_handler import FacebookCommentsHandler
-            config = load_config()
-            
-            if not config.get('facebook_access_token') or not config.get('facebook_page_id'):
-                return
-            
-            fb = FacebookCommentsHandler(
-                access_token=config['facebook_access_token'],
-                page_id=config['facebook_page_id']
-            )
-            
-            # Get comment details
-            conn = db.get_connection()
-            cursor = conn.cursor()
-            cursor.execute('SELECT * FROM hidden_comments WHERE comment_id = ?', (comment_id,))
-            comment = cursor.fetchone()
-            conn.close()
-            
-            if not comment:
-                return
-            
-            # Delete from Facebook
-            success = fb.delete_comment(comment_id)
-            
-            # Determine category based on AI prediction
-            ai_said = comment['filter_reason']
-            
-            if ai_said == 'spam':
-                category = 'correct_spam'
-            elif ai_said == 'clean':
-                category = 'missed_spam'
-            else:
-                category = 'missed_spam'
-            
-            # Add to examples (even if delete failed)
-            db.add_ai_example(
-                category=category,
-                comment_text=comment['comment_text'],
-                original_ai_prediction=ai_said,
-                explanation=f"Spam - admin marked for deletion"
-            )
-            
-            # Always dismiss to prevent reappearance
-            db.dismiss_comment(comment_id)
-            
-            if success:
-                print(f"✅ Marked as spam and deleted: {comment_id} → {category}")
-            else:
-                print(f"⚠️  Marked as spam but Facebook delete failed: {comment_id} → {category}")
-            
-        except Exception as e:
-            print(f"❌ Error marking spam: {e}")
-    
-    thread = threading.Thread(target=async_action, daemon=True)
-    thread.start()
-    
-    # Return empty - comment will disappear
-    return '', 200
+    return _mark_and_delete_comment(comment_id, 'spam')
 
 @app.route('/comment/<comment_id>/dismiss', methods=['POST'])
 def dismiss_comment(comment_id):
@@ -1652,7 +1498,6 @@ def dismiss_comment(comment_id):
         success = db.dismiss_comment(comment_id)
         
         if success:
-            # Return empty div - HTMX will swap and trigger live update
             return '', 200
         else:
             return '<div class="alert alert-danger">❌ תגובה לא נמצאה</div>', 404
@@ -1661,33 +1506,111 @@ def dismiss_comment(comment_id):
         print(f"Error dismissing comment: {e}")
         return f'<div class="alert alert-danger">❌ שגיאה: {str(e)}</div>', 500
 
+@app.route('/comments/mark-all-ok', methods=['POST'])
+def mark_all_comments_ok():
+    """Mark ALL visible comments as OK (batch operation)"""
+    filter_status = request.form.get('filter_status')
+    
+    # Get all current comments
+    grouped = db.get_comments_grouped_by_post(
+        filter_status=filter_status if filter_status != 'all' else None,
+        days=7
+    )
+    
+    comment_ids = []
+    for post_data in grouped.values():
+        for comment in post_data['comments']:
+            comment_ids.append(comment['comment_id'])
+    
+    if not comment_ids:
+        return redirect(url_for('comments_page', filter=filter_status or 'all'))
+    
+    _batch_mark_ok(comment_ids)
+    flash(f'✅ {len(comment_ids)} תגובות סומנו כתקינות', 'success')
+    return redirect(url_for('comments_page', filter=filter_status or 'all'))
+
+@app.route('/comments/post/<post_id>/mark-all-ok', methods=['POST'])
+def mark_post_comments_ok(post_id):
+    """Mark all comments for a specific post as OK"""
+    filter_status = request.form.get('filter_status', 'all')
+    
+    grouped = db.get_comments_grouped_by_post(
+        filter_status=filter_status if filter_status != 'all' else None,
+        days=7
+    )
+    
+    post_data = grouped.get(post_id)
+    if not post_data:
+        return redirect(url_for('comments_page', filter=filter_status))
+    
+    comment_ids = [c['comment_id'] for c in post_data['comments']]
+    
+    if not comment_ids:
+        return redirect(url_for('comments_page', filter=filter_status))
+    
+    _batch_mark_ok(comment_ids)
+    flash(f'✅ {len(comment_ids)} תגובות בפוסט סומנו כתקינות', 'success')
+    return redirect(url_for('comments_page', filter=filter_status))
+
+def _batch_mark_ok(comment_ids):
+    """Shared batch mark-ok logic. Runs in background thread."""
+    def async_batch():
+        try:
+            fb = _get_fb_handler()
+            
+            for cid in comment_ids:
+                try:
+                    comment = _get_comment(cid)
+                    if not comment:
+                        continue
+                    
+                    # Unhide on Facebook if hidden
+                    if fb and comment['status'] == 'hidden':
+                        fb.unhide_comment(cid)
+                    
+                    # Add AI example if it was a false positive
+                    ai_said = comment['filter_reason']
+                    if ai_said and ai_said != 'clean':
+                        db.add_ai_example(
+                            category=f'false_positive_{ai_said}',
+                            comment_text=comment['comment_text'],
+                            original_ai_prediction=ai_said,
+                            explanation="False positive - batch marked as OK"
+                        )
+                    
+                    db.dismiss_comment(cid)
+                    
+                except Exception as e:
+                    print(f"⚠️  Error marking comment {cid} as OK: {e}")
+                    # Still try to dismiss even if unhide failed
+                    try:
+                        db.dismiss_comment(cid)
+                    except:
+                        pass
+            
+            print(f"✅ Batch mark-ok complete: {len(comment_ids)} comments processed")
+            
+        except Exception as e:
+            print(f"❌ Batch mark-ok error: {e}")
+    
+    _run_async(async_batch)
+
 @app.route('/comment/<comment_id>/show', methods=['POST'])
 def show_comment(comment_id):
     """Show a comment on Facebook (async action)"""
-    import threading
     
-    def async_show():
+    def async_action():
         try:
-            from facebook_comments_handler import FacebookCommentsHandler
-            config = load_config()
-            
-            if not config.get('facebook_access_token') or not config.get('facebook_page_id'):
+            fb = _get_fb_handler()
+            if not fb:
                 print(f"⚠️  Facebook not configured for comment {comment_id}")
                 return
-            
-            fb = FacebookCommentsHandler(
-                access_token=config['facebook_access_token'],
-                page_id=config['facebook_page_id']
-            )
             
             success = fb.unhide_comment(comment_id)
             
             if success:
                 db.update_comment_status(comment_id, 'shown')
-                
-                # Log AI feedback: AI was wrong (false positive)
                 db.log_ai_feedback(comment_id, 'false_positive')
-                
                 print(f"✅ Showed comment {comment_id}")
             else:
                 print(f"❌ Failed to show comment {comment_id}")
@@ -1695,35 +1618,19 @@ def show_comment(comment_id):
         except Exception as e:
             print(f"❌ Error showing comment {comment_id}: {e}")
     
-    # Start async
-    thread = threading.Thread(target=async_show, daemon=True)
-    thread.start()
-    
-    # Immediate response with optimistic update
-    return '''
-    <button class="btn btn-sm btn-secondary" disabled>
-        <i class="bi bi-hourglass-split"></i> מעבד...
-    </button>
-    <script>
-        setTimeout(() => location.reload(), 1000);
-    </script>
-    ''', 200
+    _run_async(async_action)
+    return _PROCESSING_RESPONSE, 200
 
 @app.route('/comment/<comment_id>/hide', methods=['POST'])
 def hide_comment(comment_id):
     """Hide a comment on Facebook"""
-    # Get reason from form data
     reason = request.form.get('reason')
     
     # Check if comment was flagged by AI
-    conn = db.get_connection()
-    cursor = conn.cursor()
-    cursor.execute('SELECT filter_reason, status FROM hidden_comments WHERE comment_id = ?', (comment_id,))
-    row = cursor.fetchone()
-    conn.close()
+    comment = _get_comment(comment_id)
     
     # If no reason provided and comment was NOT flagged, return buttons to choose reason
-    if not reason and row and row['filter_reason'] == 'clean':
+    if not reason and comment and comment['filter_reason'] == 'clean':
         return '''
         <div>
             <p class="mb-2"><strong>למה להסתיר?</strong></p>
@@ -1737,27 +1644,17 @@ def hide_comment(comment_id):
         </div>
         ''', 200
     
-    import threading
-    
-    def async_hide():
+    def async_action():
         try:
-            from facebook_comments_handler import FacebookCommentsHandler
-            config = load_config()
-            
-            if not config.get('facebook_access_token') or not config.get('facebook_page_id'):
+            fb = _get_fb_handler()
+            if not fb:
                 print(f"⚠️  Facebook not configured for comment {comment_id}")
                 return
-            
-            fb = FacebookCommentsHandler(
-                access_token=config['facebook_access_token'],
-                page_id=config['facebook_page_id']
-            )
             
             success = fb.hide_comment(comment_id)
             
             if success:
-                # If AI didn't flag this (clean), log as missed
-                if row and row['filter_reason'] == 'clean' and reason:
+                if comment and comment['filter_reason'] == 'clean' and reason:
                     db.log_ai_feedback(comment_id, 'missed', reason)
                 
                 db.update_comment_status(comment_id, 'hidden')
@@ -1768,54 +1665,28 @@ def hide_comment(comment_id):
         except Exception as e:
             print(f"❌ Error hiding comment {comment_id}: {e}")
     
-    # Start async
-    thread = threading.Thread(target=async_hide, daemon=True)
-    thread.start()
-    
-    # Immediate response
-    return '''
-    <button class="btn btn-sm btn-secondary" disabled>
-        <i class="bi bi-hourglass-split"></i> מעבד...
-    </button>
-    <script>
-        setTimeout(() => location.reload(), 1000);
-    </script>
-    ''', 200
+    _run_async(async_action)
+    return _PROCESSING_RESPONSE, 200
 
 @app.route('/comment/<comment_id>/delete', methods=['POST'])
 def delete_comment_action(comment_id):
     """Delete a comment permanently from Facebook (async action)"""
-    import threading
     
-    def async_delete():
+    def async_action():
         try:
-            from facebook_comments_handler import FacebookCommentsHandler
-            config = load_config()
-            
-            if not config.get('facebook_access_token') or not config.get('facebook_page_id'):
+            fb = _get_fb_handler()
+            if not fb:
                 print(f"⚠️  Facebook not configured for comment {comment_id}")
                 return
-            
-            fb = FacebookCommentsHandler(
-                access_token=config['facebook_access_token'],
-                page_id=config['facebook_page_id']
-            )
             
             success = fb.delete_comment(comment_id)
             
             if success:
-                # Get comment to check if it was flagged
-                conn = db.get_connection()
-                cursor = conn.cursor()
-                cursor.execute('SELECT filter_reason, status FROM hidden_comments WHERE comment_id = ?', (comment_id,))
-                row = cursor.fetchone()
-                conn.close()
+                comment = _get_comment(comment_id)
                 
-                if row:
-                    # If comment was hidden (AI flagged it), log as correct prediction
-                    if row['status'] == 'hidden' and row['filter_reason'] in ['political', 'hate']:
+                if comment:
+                    if comment['status'] == 'hidden' and comment['filter_reason'] in ['political', 'hate']:
                         db.log_ai_feedback(comment_id, 'correct_hide')
-                    # If comment was shown (AI missed it), this is manual moderation - we'll handle in hide route
                 
                 db.update_comment_status(comment_id, 'deleted')
                 print(f"✅ Deleted comment {comment_id}")
@@ -1825,19 +1696,8 @@ def delete_comment_action(comment_id):
         except Exception as e:
             print(f"❌ Error deleting comment {comment_id}: {e}")
     
-    # Start async
-    thread = threading.Thread(target=async_delete, daemon=True)
-    thread.start()
-    
-    # Immediate response
-    return '''
-    <button class="btn btn-sm btn-secondary" disabled>
-        <i class="bi bi-hourglass-split"></i> מעבד...
-    </button>
-    <script>
-        setTimeout(() => location.reload(), 1000);
-    </script>
-    ''', 200
+    _run_async(async_action)
+    return _PROCESSING_RESPONSE, 200
 
 @app.route('/ai-examples')
 def ai_examples_page():
@@ -1933,11 +1793,6 @@ def delete_ai_example(example_id):
 # BACKGROUND TASKS - Auto-sync and Notifications
 # ============================================================================
 
-import schedule
-import threading
-import time
-from datetime import datetime
-
 def midnight_sync_job():
     """Run at midnight: sync from sheets + cleanup + check notifications"""
     try:
@@ -1945,7 +1800,10 @@ def midnight_sync_job():
         print(f"🌙 MIDNIGHT SYNC STARTED: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print("=" * 80)
         
-        # Log to file for debugging
+        # Ensure logs directory exists
+        import os
+        os.makedirs('logs', exist_ok=True)
+        
         with open('logs/midnight_sync.log', 'a') as f:
             f.write(f"\n{datetime.now().isoformat()} - Midnight sync triggered\n")
         
@@ -1953,24 +1811,36 @@ def midnight_sync_job():
         if sheets_handler:
             try:
                 config = load_config()
-                last_timestamp = config.get('read_from_date', '')
+                read_from_date = config.get('read_from_date', '').strip()
                 
-                print(f"📊 Syncing from Google Sheets (from: {last_timestamp})...")
-                new_entries = sheets_handler.get_new_entries(last_timestamp)
+                # Convert date format: YYYY-MM-DD → DD/MM/YYYY 00:00:00
+                # (same conversion as the manual sync route)
+                last_timestamp = None
+                if read_from_date:
+                    try:
+                        dt = datetime.strptime(read_from_date, '%Y-%m-%d')
+                        last_timestamp = dt.strftime('%d/%m/%Y 00:00:00')
+                    except Exception as e:
+                        print(f"⚠️  Date parse error for '{read_from_date}': {e}")
+                
+                print(f"📊 Syncing from Google Sheets (from: {last_timestamp or 'ALL'})...")
+                new_entries = sheets_handler.fetch_new_entries(last_timestamp)
                 
                 added = 0
                 for entry in new_entries:
-                    db.add_entry(entry['timestamp'], entry['text'])
-                    added += 1
+                    if db.add_entry(entry['timestamp'], entry['text']):
+                        added += 1
                 
                 print(f"✅ Synced {added} new entries from Google Sheets")
                 
-                # Update last sync time
-                config['last_sync'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                # Update last sync time (use Israel timezone like manual sync)
+                israel_tz = pytz.timezone('Asia/Jerusalem')
+                config['last_sync'] = datetime.now(israel_tz).strftime('%Y-%m-%d %H:%M:%S')
                 save_config(config)
                 
             except Exception as e:
                 print(f"❌ Sheets sync error: {e}")
+                traceback.print_exc()
         else:
             print("⚠️ Sheets handler not initialized")
         
@@ -1982,15 +1852,7 @@ def midnight_sync_job():
         except Exception as e:
             print(f"❌ Cleanup error: {e}")
         
-        # 3. Send AI training feedback
-        try:
-            print(f"🎓 Sending AI training feedback...")
-            from ai_training import aggregate_and_send_daily_feedback
-            aggregate_and_send_daily_feedback(db, load_config(), notifications)
-        except Exception as e:
-            print(f"❌ AI training error: {e}")
-        
-        # 4. Check and send notifications
+        # 3. Check and send notifications
         try:
             print(f"📧 Checking notifications...")
             check_and_send_notifications()
@@ -2003,7 +1865,6 @@ def midnight_sync_job():
         
     except Exception as e:
         print(f"❌ MIDNIGHT SYNC ERROR: {e}")
-        import traceback
         traceback.print_exc()
 
 def check_and_send_notifications():
@@ -2112,7 +1973,6 @@ def send_notification_email(subject, body, recipients):
         
     except Exception as e:
         print(f"❌ Email send error: {e}")
-        import traceback
         traceback.print_exc()
 
 def comments_scan_job():
@@ -2148,7 +2008,6 @@ def comments_scan_job():
         print(f"⚠️  Comments scanner not available: {e}")
     except Exception as e:
         print(f"❌ Comments scan error: {e}")
-        import traceback
         traceback.print_exc()
 
 def cleanup_old_comments_job():
@@ -2170,7 +2029,6 @@ def cleanup_old_comments_job():
             
     except Exception as e:
         print(f"❌ Cleanup error: {e}")
-        import traceback
         traceback.print_exc()
 
 def run_scheduler():
@@ -2189,13 +2047,11 @@ def run_scheduler():
             time.sleep(60)  # Check every minute
         except Exception as e:
             print(f"❌ Scheduler error: {e}")
-            import traceback
             traceback.print_exc()
             time.sleep(60)
 
 def start_scheduler():
     """Initialize and start the scheduler with Israel timezone"""
-    import pytz
     
     # Get current server timezone offset to Israel
     israel_tz = pytz.timezone('Asia/Jerusalem')
