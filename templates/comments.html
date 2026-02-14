@@ -1,6 +1,6 @@
 {% extends "base.html" %}
-{% block title %}ניהול תגובות{% endblock %}
-{% block page_title %}<div class="text-center">🗨️ ניהול תגובות</div>{% endblock %}
+{% block title %}סינון תגובות{% endblock %}
+{% block page_title %}<div class="text-center">🗨️ סינון תגובות</div>{% endblock %}
 
 {% block content %}
 <style>
@@ -174,7 +174,7 @@
                 id="scan-btn"
                 onclick="startScan()">
             <i class="bi bi-arrow-clockwise" id="scan-icon"></i> 
-            <span id="scan-text">סרוק תגובות חדשות</span>
+            <span id="scan-text">סריקת תגובות</span>
         </button>
         
         {% if grouped_comments %}
@@ -200,6 +200,11 @@
                 </div>
             </div>
         </div>
+        {% if last_scan %}
+        <div class="mt-2">
+            <small class="text-muted"><i class="bi bi-clock-history"></i> סריקה אחרונה: {{ last_scan }}</small>
+        </div>
+        {% endif %}
     </div>
 </div>
 
@@ -285,7 +290,7 @@ function checkScanStatus() {
 {% if not grouped_comments %}
 <div class="alert alert-info text-center py-5">
     <h4><i class="bi bi-info-circle"></i> אין תגובות להצגה</h4>
-    <p class="mb-0">לא נמצאו תגובות מ-7 הימים האחרונים.</p>
+    <p class="mb-0">כל התגובות סוננו או שאין תגובות חדשות מאז הסריקה האחרונה.</p>
 </div>
 
 <!-- Comments Grouped by Post -->

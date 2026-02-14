@@ -1,6 +1,6 @@
 {% extends "base.html" %}
-{% block title %}ערכים שנדחו{% endblock %}
-{% block page_title %}<div class="text-center">🗑️ ערכים שנדחו</div>{% endblock %}
+{% block title %}וידויים שנדחו{% endblock %}
+{% block page_title %}<div class="text-center">🗑️ וידויים שנדחו</div>{% endblock %}
 
 {% block content %}
 <style>
@@ -51,12 +51,12 @@
 </style>
 
 <div class="alert alert-warning mb-3 py-2">
-    <strong>{{ entries|length if entries else 0 }}</strong> ערכים נדחו (נמחקים אוטומטית לאחר 24 שעות)
+    <strong>{{ entries|length if entries else 0 }}</strong> וידויים נדחו (נמחקים אוטומטית לאחר 24 שעות)
 </div>
 
 {% if not entries %}
 <div class="alert alert-info text-center py-5">
-    <h4>אין ערכים נדחים</h4>
+    <h4>אין וידויים שנדחו ב24 שעות האחרונות</h4>
 </div>
 {% else %}
 <div id="denied-grid">

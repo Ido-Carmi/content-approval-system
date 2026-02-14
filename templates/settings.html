@@ -17,7 +17,7 @@
                             <input type="text" name="google_sheet_id" class="form-control" value="{{config.google_sheet_id or ''}}">
                         </div>
                         <div class="mb-3">
-                            <label class="form-label">קרא שורות מתאריך</label>
+                            <label class="form-label">סנכרן וידויים מתאריך</label>
                             <input type="date" name="read_from_date" class="form-control" 
                                    value="{{config.read_from_date or ''}}">
                             <small class="text-muted">השאר ריק כדי לקרוא הכל</small>
@@ -95,7 +95,6 @@
                             <input type="password" name="resend_api_key" class="form-control" 
                                    placeholder="re_..."
                                    value="{{config.resend_api_key or ''}}">
-                            <small class="text-muted">Get from <a href="https://resend.com/api-keys" target="_blank">resend.com/api-keys</a></small>
                         </div>
                         <div class="mb-3">
                             <label class="form-label">From Email (דומיין מאומת ב-Resend)</label>
@@ -104,7 +103,7 @@
                                    value="{{config.resend_from_email or ''}}">
                         </div>
                         <div class="mb-3">
-                            <label class="form-label">כתובות אימייל (מופרדות בפסיק)</label>
+                            <label class="form-label">כתובות אימייל לתזכורות (מופרדות בפסיק)</label>
                             <input type="text" name="notification_emails" class="form-control" 
                                    placeholder="email1@example.com,email2@example.com"
                                    value="{{','.join(config.notification_emails) if config.notification_emails else ''}}">
@@ -126,7 +125,7 @@
             <!-- Comments Filter Settings -->
             <div class="card mb-3">
                 <div class="card-header" data-bs-toggle="collapse" data-bs-target="#commentsSettings" style="cursor: pointer;">
-                    <h5 class="mb-0"><i class="bi bi-chat-left-text"></i> סינון תגובות (Comments Filter)</h5>
+                    <h5 class="mb-0"><i class="bi bi-chat-left-text"></i> סינון תגובות AI </h5>
                 </div>
                 <div id="commentsSettings" class="collapse">
                     <div class="card-body">
@@ -139,7 +138,6 @@
                             <input type="password" name="openai_api_key" class="form-control" 
                                    value="{{config.openai_api_key or ''}}"
                                    placeholder="sk-...">
-                            <small class="text-muted">נדרש לסינון AI. <a href="https://platform.openai.com/api-keys" target="_blank">קבל מפתח כאן</a></small>
                         </div>
                         <div class="mb-3">
                             <label class="form-label">מכסת API יומית</label>
@@ -149,21 +147,11 @@
                             <small class="text-muted">מקסימום קריאות API ליום (למניעת עלויות יתר)</small>
                         </div>
                         <div class="mb-3">
-                            <label class="form-label">גודל אצווה</label>
+                            <label class="form-label">גודל בלוק סינון</label>
                             <input type="number" name="batch_size" class="form-control" 
                                    value="{{config.batch_size or 50}}"
                                    min="10" max="100">
-                            <small class="text-muted">מספר תגובות לעיבוד בכל קריאת API (50 מומלץ)</small>
-                        </div>
-                        <div class="alert alert-info">
-                            <strong>ℹ️ איך זה עובד:</strong>
-                            <ul class="mb-0">
-                                <li>הסריקה רצה אוטומטית כל שעה</li>
-                                <li>בודקת תגובות חדשות בפוסטים מ-48 השעות האחרונות</li>
-                                <li>AI מזהה תוכן פוליטי ודברי שנאה</li>
-                                <li>תגובות מסוננות מוסתרות אוטומטית (לא נמחקות)</li>
-                                <li>ניתן לבדוק ולבטל הסתרה ב"תגובות מוסתרות"</li>
-                            </ul>
+                            <small class="text-muted">מספר תגובות לעיבוד בכל קריאת API (30 מומלץ)</small>
                         </div>
                     </div>
                 </div>

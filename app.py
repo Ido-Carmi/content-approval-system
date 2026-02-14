@@ -1268,7 +1268,8 @@ def comments_page():
     return render_template('comments.html',
                          grouped_comments=grouped_comments,
                          stats=stats,
-                         filter_status=filter_status)
+                         filter_status=filter_status,
+                         last_scan=load_config().get('last_comment_scan', ''))
 
 @app.route('/scan-comments-now', methods=['POST'])
 def scan_comments_now():
@@ -1312,6 +1313,12 @@ def scan_comments_now():
             
             print("Running scan...")
             job()
+            
+            # Save last scan time
+            config = load_config()
+            israel_tz = pytz.timezone('Asia/Jerusalem')
+            config['last_comment_scan'] = datetime.now(israel_tz).strftime('%Y-%m-%d %H:%M:%S')
+            save_config(config)
             
             print("✅ Manual scan completed")
             print("="*60 + "\n")
@@ -1994,6 +2001,12 @@ def comments_scan_job():
         # Create and run the scanner
         job = create_hourly_job(db, config)
         job()
+        
+        # Save last scan time
+        config = load_config()
+        israel_tz = pytz.timezone('Asia/Jerusalem')
+        config['last_comment_scan'] = datetime.now(israel_tz).strftime('%Y-%m-%d %H:%M:%S')
+        save_config(config)
         
     except ImportError as e:
         print(f"⚠️  Comments scanner not available: {e}")
