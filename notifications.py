@@ -1,6 +1,4 @@
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import resend
 from typing import List, Optional
 from config import load_config, save_config
 from datetime import datetime
@@ -10,8 +8,8 @@ class NotificationHandler:
     def __init__(self):
         """Initialize notification handler"""
         self.config = load_config()
-        self.gmail_email = self.config.get('gmail_email')
-        self.gmail_password = self.config.get('gmail_app_password')
+        self.resend_api_key = self.config.get('resend_api_key', '')
+        self.resend_from_email = self.config.get('resend_from_email', '')
         self.notification_emails = self.config.get('notification_emails', [])
         self.notifications_enabled = self.config.get('notifications_enabled', False)
         self.pending_threshold = self.config.get('pending_threshold', 20)
@@ -45,63 +43,51 @@ class NotificationHandler:
     
     def send_email(self, subject: str, body: str) -> bool:
         """
-        Send email notification to all configured addresses using Gmail SMTP
-        
-        Args:
-            subject: Email subject
-            body: Email body (HTML supported)
-            
-        Returns:
-            True if sent successfully, False otherwise
+        Send email notification using Resend API (HTTPS, no SMTP needed)
         """
-        if not self.notifications_enabled:
+        # Reload config each time (settings may have changed since init)
+        config = load_config()
+        api_key = config.get('resend_api_key', '')
+        from_email = config.get('resend_from_email', '')
+        notification_emails = config.get('notification_emails', [])
+        notifications_enabled = config.get('notifications_enabled', False)
+        
+        if not notifications_enabled:
             print("Notifications are disabled")
             return False
         
-        if not self.gmail_email or not self.gmail_password:
-            print("Gmail credentials not configured")
+        if not api_key:
+            print("❌ Resend API key not configured")
             return False
         
-        if not self.notification_emails:
+        if not from_email:
+            print("❌ Resend from email not configured")
+            return False
+        
+        if not notification_emails:
             print("No notification email addresses configured")
             return False
         
         try:
-            # Create message
-            message = MIMEMultipart('alternative')
-            message['From'] = self.gmail_email
-            message['Subject'] = subject
+            resend.api_key = api_key
             
-            # Attach HTML body
-            html_part = MIMEText(body, 'html', 'utf-8')
-            message.attach(html_part)
+            params = {
+                "from": from_email,
+                "to": notification_emails,
+                "subject": subject,
+                "html": body,
+            }
             
-            # Connect to Gmail SMTP server
-            with smtplib.SMTP('smtp.gmail.com', 587) as server:
-                server.starttls()
-                server.login(self.gmail_email, self.gmail_password)
-                
-                # Send to each email address
-                for email in self.notification_emails:
-                    message['To'] = email
-                    server.send_message(message)
-                    print(f"✓ Notification sent to {email}")
-                    del message['To']  # Remove To for next iteration
-            
+            result = resend.Emails.send(params)
+            print(f"✅ Notification sent via Resend to {', '.join(notification_emails)} (id: {result.get('id', '?')})")
             return True
             
         except Exception as e:
-            print(f"✗ Failed to send notification: {str(e)}")
+            print(f"❌ Failed to send notification via Resend: {str(e)}")
             return False
     
     def send_pending_threshold_alert(self, pending_count: int, next_empty_window: Optional[str] = None):
-        """
-        Send alert when pending entries exceed threshold
-        
-        Args:
-            pending_count: Number of pending entries
-            next_empty_window: Next empty posting window (optional)
-        """
+        """Send alert when pending entries exceed threshold"""
         subject = f"⚠️ {pending_count} Pending Entries - Action Required"
         
         body = f"""
@@ -133,13 +119,7 @@ class NotificationHandler:
         self.send_email(subject, body)
     
     def send_empty_window_alert(self, next_empty_window: str, pending_count: int):
-        """
-        Send alert when there's an empty window in the next 24 hours
-        
-        Args:
-            next_empty_window: The empty posting window
-            pending_count: Number of pending entries
-        """
+        """Send alert when there's an empty window in the next 24 hours"""
         if not self.should_send_empty_window_alert():
             print("Skipping empty window alert - sent less than 1 hour ago")
             return
@@ -195,7 +175,7 @@ class NotificationHandler:
                     <li>Notifications: <strong>Enabled</strong></li>
                     <li>Pending Threshold: <strong>{self.pending_threshold}</strong></li>
                     <li>Email Addresses: <strong>{len(self.notification_emails)}</strong> configured</li>
-                    <li>Gmail: <strong>{self.gmail_email}</strong></li>
+                    <li>From: <strong>{self.resend_from_email}</strong></li>
                 </ul>
             </div>
             

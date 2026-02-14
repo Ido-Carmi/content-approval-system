@@ -1147,8 +1147,8 @@ def settings_page():
             'skip_shabbat': request.form.get('skip_shabbat') == 'on',
             'skip_jewish_holidays': request.form.get('skip_jewish_holidays') == 'on',
             'notifications_enabled': request.form.get('notifications_enabled') == 'on',
-            'gmail_email': request.form.get('gmail_email', ''),
-            'gmail_app_password': request.form.get('gmail_app_password', ''),
+            'resend_api_key': request.form.get('resend_api_key', ''),
+            'resend_from_email': request.form.get('resend_from_email', ''),
             'notification_emails': [e.strip() for e in request.form.get('notification_emails', '').split(',') if e.strip()],
             'pending_threshold': int(request.form.get('pending_threshold', 20)),
             'app_url': request.form.get('app_url', ''),
@@ -1938,41 +1938,32 @@ def check_and_send_notifications():
         print("⚠️ Scheduler not initialized")
 
 def send_notification_email(subject, body, recipients):
-    """Send email notification"""
+    """Send email notification via Resend API"""
     config = load_config()
     
-    gmail_email = config.get('gmail_email')
-    gmail_password = config.get('gmail_app_password')
+    api_key = config.get('resend_api_key')
+    from_email = config.get('resend_from_email')
     
-    if not gmail_email or not gmail_password:
-        print("❌ Gmail credentials not configured")
+    if not api_key or not from_email:
+        print("❌ Resend not configured (missing api_key or from_email)")
         return
     
     try:
-        import smtplib
-        from email.mime.text import MIMEText
-        from email.mime.multipart import MIMEMultipart
+        import resend
+        resend.api_key = api_key
         
-        msg = MIMEMultipart()
-        msg['From'] = gmail_email
-        msg['To'] = ', '.join(recipients)
-        msg['Subject'] = subject
+        params = {
+            "from": from_email,
+            "to": recipients,
+            "subject": subject,
+            "html": body,
+        }
         
-        msg.attach(MIMEText(body, 'plain', 'utf-8'))
-        
-        # Connect to Gmail
-        server = smtplib.SMTP('smtp.gmail.com', 587)
-        server.starttls()
-        server.login(gmail_email, gmail_password)
-        
-        # Send email
-        server.send_message(msg)
-        server.quit()
-        
-        print(f"✅ Email sent to: {', '.join(recipients)}")
+        result = resend.Emails.send(params)
+        print(f"✅ Email sent via Resend to: {', '.join(recipients)} (id: {result.get('id', '?')})")
         
     except Exception as e:
-        print(f"❌ Email send error: {e}")
+        print(f"❌ Resend email error: {e}")
         traceback.print_exc()
 
 def comments_scan_job():
