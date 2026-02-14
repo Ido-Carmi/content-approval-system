@@ -91,12 +91,17 @@
                             <label class="form-check-label" for="notifEnabled">אפשר התראות</label>
                         </div>
                         <div class="mb-3">
-                            <label class="form-label">Gmail Email</label>
-                            <input type="email" name="gmail_email" class="form-control" value="{{config.gmail_email or ''}}">
+                            <label class="form-label">Resend API Key</label>
+                            <input type="password" name="resend_api_key" class="form-control" 
+                                   placeholder="re_..."
+                                   value="{{config.resend_api_key or ''}}">
+                            <small class="text-muted">Get from <a href="https://resend.com/api-keys" target="_blank">resend.com/api-keys</a></small>
                         </div>
                         <div class="mb-3">
-                            <label class="form-label">Gmail App Password</label>
-                            <input type="password" name="gmail_app_password" class="form-control" value="{{config.gmail_app_password or ''}}">
+                            <label class="form-label">From Email (דומיין מאומת ב-Resend)</label>
+                            <input type="text" name="resend_from_email" class="form-control" 
+                                   placeholder="IDF Confessions <notifications@yourdomain.com>"
+                                   value="{{config.resend_from_email or ''}}">
                         </div>
                         <div class="mb-3">
                             <label class="form-label">כתובות אימייל (מופרדות בפסיק)</label>
