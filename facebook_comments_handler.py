@@ -68,7 +68,7 @@ class FacebookCommentsHandler:
             print(f"❌ Error fetching comments from post {post_id}: {e}")
             return []
     
-    def fetch_all_recent_comments(self, post_ids: List[str]) -> List[Dict]:
+    def fetch_all_recent_comments(self, post_ids: List[str], since_hours: float = 1.0) -> List[Dict]:
         """
         Fetch comments from multiple posts
         

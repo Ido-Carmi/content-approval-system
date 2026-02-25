@@ -1125,19 +1125,12 @@ def statistics_page():
 def settings_page():
     """Settings page"""
     if request.method == 'POST':
-        # Handle post number change
-        next_post_number = request.form.get('next_post_number', '')
-        if next_post_number:
-            try:
-                db.reset_post_number(int(next_post_number))
-            except:
-                pass
-        
         # Handle date picker (comes as YYYY-MM-DD)
         read_from_date_iso = request.form.get('read_from_date', '')
         
-        # Save all settings
-        config = {
+        # Merge with existing config (preserve keys set programmatically)
+        config = load_config()
+        config.update({
             'google_sheet_id': request.form.get('google_sheet_id', ''),
             'google_credentials_file': request.form.get('google_credentials_file', 'credentials.json'),
             'read_from_date': read_from_date_iso,  # Store ISO format from date picker
@@ -1157,8 +1150,7 @@ def settings_page():
             'openai_api_key': request.form.get('openai_api_key', ''),
             'daily_api_limit': int(request.form.get('daily_api_limit', 1000)),
             'batch_size': int(request.form.get('batch_size', 50)),
-            'last_sync': load_config().get('last_sync', 'Never')
-        }
+        })
         
         save_config(config)
         init_handlers()  # Reinitialize with new config
@@ -1171,6 +1163,23 @@ def settings_page():
     current_number = db.get_current_post_number()
     
     return render_template('settings.html', config=config, current_number=current_number)
+
+@app.route('/set_post_number', methods=['POST'])
+def set_post_number():
+    """Set the next post number (separate from settings save)"""
+    new_number = request.form.get('new_post_number', '').strip()
+    if not new_number:
+        flash('⚠️ לא הוזן מספר', 'error')
+        return redirect(url_for('settings_page'))
+    try:
+        num = int(new_number)
+        if num < 1:
+            raise ValueError
+        db.reset_post_number(num)
+        flash(f'✅ מספר הפוסט הבא עודכן ל-#{num}', 'success')
+    except ValueError:
+        flash('⚠️ מספר לא תקין', 'error')
+    return redirect(url_for('settings_page'))
 
 @app.route('/clear_pending', methods=['POST'])
 def clear_pending():

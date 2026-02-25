@@ -379,18 +379,12 @@ class CommentsScanner:
         except Exception as e:
             print(f"❌ AI filtering error: {e}")
             
-            # On error, check if it's a rate limit
-            error_msg = str(e).lower()
-            if 'rate limit' in error_msg or 'quota' in error_msg:
-                print("⚠️  Rate limit hit - queueing comments for retry")
-                
-                # Queue all comments for retry
-                for comment in comments:
-                    self.db.queue_comment(comment)
-                
-                return []
-            else:
-                raise
+            # On ANY error, queue comments for retry on next scan
+            print("⚠️  Queueing comments for retry on next scan")
+            for comment in comments:
+                self.db.queue_comment(comment)
+            
+            return []
     
     def _process_filter_results(self, filter_results: List[Dict], comments: List[Dict]) -> int:
         """

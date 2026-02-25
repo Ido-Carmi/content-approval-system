@@ -232,8 +232,12 @@ Return JSON array with moderation results."""
                 
                 # Handle both array and object with array
                 if isinstance(results_data, dict):
+                    # Check if it's a single comment result (has 'id' and 'hide' keys)
+                    if 'id' in results_data and 'hide' in results_data:
+                        print(f"   [AI] Single comment result returned as dict, wrapping in list")
+                        results_data = [results_data]
                     # Try different possible keys
-                    if 'results' in results_data:
+                    elif 'results' in results_data:
                         results_data = results_data['results']
                     elif 'comments' in results_data:
                         results_data = results_data['comments']
