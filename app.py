@@ -1130,27 +1130,38 @@ def settings_page():
         
         # Merge with existing config (preserve keys set programmatically)
         config = load_config()
+        
+        # For secret fields: only update if user typed a new value
+        # (empty means "keep existing")
+        secret_fields = {
+            'facebook_access_token': request.form.get('facebook_access_token', ''),
+            'resend_api_key': request.form.get('resend_api_key', ''),
+            'openai_api_key': request.form.get('openai_api_key', ''),
+        }
+        
         config.update({
             'google_sheet_id': request.form.get('google_sheet_id', ''),
             'google_credentials_file': request.form.get('google_credentials_file', 'credentials.json'),
             'read_from_date': read_from_date_iso,  # Store ISO format from date picker
             'facebook_page_id': request.form.get('facebook_page_id', ''),
-            'facebook_access_token': request.form.get('facebook_access_token', ''),
             'posting_windows': [w.strip() for w in request.form.get('posting_windows', '').split(',') if w.strip()],
             'skip_shabbat': request.form.get('skip_shabbat') == 'on',
             'skip_jewish_holidays': request.form.get('skip_jewish_holidays') == 'on',
             'notifications_enabled': request.form.get('notifications_enabled') == 'on',
-            'resend_api_key': request.form.get('resend_api_key', ''),
             'resend_from_email': request.form.get('resend_from_email', ''),
             'notification_emails': [e.strip() for e in request.form.get('notification_emails', '').split(',') if e.strip()],
             'pending_threshold': int(request.form.get('pending_threshold', 20)),
             'app_url': request.form.get('app_url', ''),
             # Comments filter settings
             'comments_filter_enabled': request.form.get('comments_filter_enabled') == 'on',
-            'openai_api_key': request.form.get('openai_api_key', ''),
             'daily_api_limit': int(request.form.get('daily_api_limit', 1000)),
             'batch_size': int(request.form.get('batch_size', 50)),
         })
+        
+        # Only overwrite secrets if user provided a new value
+        for key, value in secret_fields.items():
+            if value.strip():
+                config[key] = value.strip()
         
         save_config(config)
         init_handlers()  # Reinitialize with new config
@@ -1161,6 +1172,15 @@ def settings_page():
     # GET request
     config = load_config()
     current_number = db.get_current_post_number()
+    
+    # Mask secret keys — never send real values to HTML
+    secret_keys = ['facebook_access_token', 'resend_api_key', 'openai_api_key']
+    for key in secret_keys:
+        if config.get(key):
+            config[key + '_set'] = True
+            config[key] = ''  # Don't send real value to template
+        else:
+            config[key + '_set'] = False
     
     return render_template('settings.html', config=config, current_number=current_number)
 

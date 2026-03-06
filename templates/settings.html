@@ -39,7 +39,11 @@
                         </div>
                         <div class="mb-3">
                             <label class="form-label">Access Token</label>
-                            <input type="password" name="facebook_access_token" class="form-control" value="{{config.facebook_access_token or ''}}">
+                            <input type="password" name="facebook_access_token" class="form-control" 
+                                   placeholder="{% if config.facebook_access_token_set %}מפתח מוגדר ✓ (השאר ריק לשמור){% else %}הזן Access Token{% endif %}">
+                            {% if config.facebook_access_token_set %}
+                            <small class="text-success"><i class="bi bi-check-circle"></i> מוגדר</small>
+                            {% endif %}
                         </div>
                     </div>
                 </div>
@@ -86,8 +90,10 @@
                         <div class="mb-3">
                             <label class="form-label">Resend API Key</label>
                             <input type="password" name="resend_api_key" class="form-control" 
-                                   placeholder="re_..."
-                                   value="{{config.resend_api_key or ''}}">
+                                   placeholder="{% if config.resend_api_key_set %}מפתח מוגדר ✓ (השאר ריק לשמור){% else %}re_...{% endif %}">
+                            {% if config.resend_api_key_set %}
+                            <small class="text-success"><i class="bi bi-check-circle"></i> מוגדר</small>
+                            {% endif %}
                         </div>
                         <div class="mb-3">
                             <label class="form-label">From Email (דומיין מאומת ב-Resend)</label>
@@ -129,8 +135,10 @@
                         <div class="mb-3">
                             <label class="form-label">OpenAI API Key</label>
                             <input type="password" name="openai_api_key" class="form-control" 
-                                   value="{{config.openai_api_key or ''}}"
-                                   placeholder="sk-...">
+                                   placeholder="{% if config.openai_api_key_set %}מפתח מוגדר ✓ (השאר ריק לשמור){% else %}sk-...{% endif %}">
+                            {% if config.openai_api_key_set %}
+                            <small class="text-success"><i class="bi bi-check-circle"></i> מוגדר</small>
+                            {% endif %}
                         </div>
                         <div class="mb-3">
                             <label class="form-label">מכסת API יומית</label>
