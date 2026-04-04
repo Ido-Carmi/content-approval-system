@@ -1407,22 +1407,31 @@ def webhook_receive():
     try:
         data = request.get_json()
         
+        # Debug: log everything we receive
+        print(f"\n📩 WEBHOOK RECEIVED:")
+        print(f"   Raw data: {json.dumps(data, indent=2, default=str)[:500]}")
+        
         if not data or data.get('object') != 'page':
+            print(f"   ⚠️ Skipped: object={data.get('object') if data else 'None'}")
             return 'OK', 200
         
         config = load_config()
         
         for entry in data.get('entry', []):
             for change in entry.get('changes', []):
-                if change.get('field') != 'feed':
-                    continue
-                
+                field = change.get('field')
                 value = change.get('value', {})
                 item = value.get('item')
                 verb = value.get('verb')
                 
+                print(f"   Change: field={field}, item={item}, verb={verb}")
+                
+                if field != 'feed':
+                    continue
+                
                 # Only process new comments
                 if item != 'comment' or verb != 'add':
+                    print(f"   ⚠️ Skipped: not a new comment")
                     continue
                 
                 comment_id = value.get('comment_id')
