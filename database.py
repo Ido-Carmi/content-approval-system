@@ -134,7 +134,7 @@ class Database:
             )
         ''')
         
-        # AI examples table - permanent curated examples (max 5 per category)
+        # AI examples table - permanent curated examples (max 10 per category)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS ai_examples (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -151,6 +151,20 @@ class Database:
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS idx_examples_category 
             ON ai_examples(category)
+        ''')
+        
+        # Training data table - saves ALL marked comments for future AI training
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS comment_training_data (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                comment_id TEXT NOT NULL,
+                post_id TEXT,
+                comment_text TEXT NOT NULL,
+                admin_label TEXT NOT NULL,
+                ai_prediction TEXT,
+                ai_explanation TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
         ''')
         
         conn.commit()
@@ -1103,7 +1117,7 @@ class Database:
         return deleted
     
     def get_comments_grouped_by_post(self, filter_status: Optional[str] = None, days: int = 7) -> Dict:
-        """Get comments grouped by post for better display"""
+        """Get comments grouped by post for better display. Flagged comments and posts show first."""
         comments = self.get_all_comments(filter_status, days)
         
         grouped = {}
@@ -1118,7 +1132,21 @@ class Database:
                 }
             grouped[post_id]['comments'].append(comment)
         
-        return grouped
+        # Sort comments within each post: hidden/flagged first
+        for post_data in grouped.values():
+            post_data['comments'].sort(
+                key=lambda c: (0 if c.get('status') == 'hidden' else 1, c.get('created_at', ''))
+            )
+            # Track if post has any flagged comments
+            post_data['has_flagged'] = any(c.get('status') == 'hidden' for c in post_data['comments'])
+        
+        # Sort posts: posts with flagged comments first
+        sorted_grouped = dict(sorted(
+            grouped.items(),
+            key=lambda item: (0 if item[1]['has_flagged'] else 1, -(item[1].get('post_number') or 0))
+        ))
+        
+        return sorted_grouped
 
     def log_ai_feedback(self, comment_id: str, feedback_type: str, correct_reason: str = None) -> bool:
         """
@@ -1207,7 +1235,7 @@ class Database:
     def add_ai_example(self, category: str, comment_text: str, original_ai_prediction: str = None, explanation: str = None) -> bool:
         """
         Add example to permanent AI training set
-        Maintains max 5 examples per category using diversity-based replacement
+        Maintains max 10 examples per category using diversity-based replacement
         
         Categories:
         - false_positive_political, false_positive_hate
@@ -1237,8 +1265,8 @@ class Database:
             
             count = cursor.fetchone()['count']
             
-            # If at limit (5), find most similar and replace it
-            if count >= 5:
+            # If at limit (10), find most similar and replace it
+            if count >= 10:
                 # Get all current examples
                 cursor.execute('''
                     SELECT id, comment_text FROM ai_examples 
@@ -1343,4 +1371,56 @@ class Database:
         conn.close()
         
         return success
+    
+    def save_training_data(self, comment_id: str, post_id: str, comment_text: str, 
+                          admin_label: str, ai_prediction: str = None, ai_explanation: str = None) -> bool:
+        """Save a marked comment to the training data table (keeps all, no limit)"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                INSERT INTO comment_training_data 
+                (comment_id, post_id, comment_text, admin_label, ai_prediction, ai_explanation)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (comment_id, post_id, comment_text, admin_label, ai_prediction, ai_explanation))
+            
+            conn.commit()
+            conn.close()
+            print(f"📊 Saved training data: {admin_label} for {comment_id[:30]}...")
+            return True
+        except Exception as e:
+            print(f"❌ Error saving training data: {e}")
+            return False
+    
+    def get_training_data_stats(self) -> Dict:
+        """Get stats on saved training data"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT admin_label, COUNT(*) as count 
+            FROM comment_training_data 
+            GROUP BY admin_label
+        ''')
+        
+        stats = {row['admin_label']: row['count'] for row in cursor.fetchall()}
+        stats['total'] = sum(stats.values())
+        conn.close()
+        return stats
+    
+    def get_unreviewed_comment_count(self) -> int:
+        """Get count of comments not yet dismissed (needing review)"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cutoff = (datetime.now() - timedelta(days=7)).isoformat()
+        cursor.execute('''
+            SELECT COUNT(*) as count FROM hidden_comments 
+            WHERE created_at > ? AND dismissed_at IS NULL
+        ''', (cutoff,))
+        
+        count = cursor.fetchone()['count']
+        conn.close()
+        return count
 

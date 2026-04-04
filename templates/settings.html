@@ -154,6 +154,24 @@
                                    min="10" max="100">
                             <small class="text-muted">מספר תגובות לעיבוד בכל קריאת API (30 מומלץ)</small>
                         </div>
+                        <hr>
+                        <div class="mb-3">
+                            <label class="form-label">סף התראת תגובות</label>
+                            <input type="number" name="comment_notification_threshold" class="form-control" 
+                                   value="{{config.comment_notification_threshold or 0}}"
+                                   min="0">
+                            <small class="text-muted">שלח אימייל כשתגובות ממתינות עוברות מספר זה (0 = כבוי)</small>
+                        </div>
+                        <hr>
+                        <div class="mb-3">
+                            <label class="form-label">Webhook Verify Token</label>
+                            <input type="text" name="webhook_verify_token" class="form-control" 
+                                   value="{{config.webhook_verify_token or ''}}"
+                                   placeholder="טוקן אימות ל-Facebook Webhooks">
+                            <small class="text-muted">
+                                Callback URL: <code>https://confessions.party/webhook</code>
+                            </small>
+                        </div>
                     </div>
                 </div>
             </div>

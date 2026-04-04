@@ -1156,6 +1156,8 @@ def settings_page():
             'comments_filter_enabled': request.form.get('comments_filter_enabled') == 'on',
             'daily_api_limit': int(request.form.get('daily_api_limit', 1000)),
             'batch_size': int(request.form.get('batch_size', 50)),
+            'comment_notification_threshold': int(request.form.get('comment_notification_threshold', 0)),
+            'webhook_verify_token': request.form.get('webhook_verify_token', ''),
         })
         
         # Only overwrite secrets if user provided a new value
@@ -1349,6 +1351,9 @@ def scan_comments_now():
             config['last_comment_scan'] = datetime.now(israel_tz).strftime('%Y-%m-%d %H:%M:%S')
             save_config(config)
             
+            # Check if comment notification needed
+            check_comment_notification()
+            
             print("✅ Manual scan completed")
             print("="*60 + "\n")
             
@@ -1374,6 +1379,134 @@ def scan_status():
 
 # Initialize scan status
 scan_in_progress = False
+
+# ============================================================================
+# FACEBOOK WEBHOOKS - Real-time comment delivery
+# ============================================================================
+
+@app.route('/webhook', methods=['GET'])
+def webhook_verify():
+    """Facebook webhook verification (one-time setup)"""
+    config = load_config()
+    verify_token = config.get('webhook_verify_token', '')
+    
+    mode = request.args.get('hub.mode')
+    token = request.args.get('hub.verify_token')
+    challenge = request.args.get('hub.challenge')
+    
+    if mode == 'subscribe' and token == verify_token and verify_token:
+        print(f"✅ Webhook verified successfully")
+        return challenge, 200
+    else:
+        print(f"❌ Webhook verification failed (token mismatch)")
+        return 'Forbidden', 403
+
+@app.route('/webhook', methods=['POST'])
+def webhook_receive():
+    """Receive real-time comment events from Facebook"""
+    try:
+        data = request.get_json()
+        
+        if not data or data.get('object') != 'page':
+            return 'OK', 200
+        
+        config = load_config()
+        
+        for entry in data.get('entry', []):
+            for change in entry.get('changes', []):
+                if change.get('field') != 'feed':
+                    continue
+                
+                value = change.get('value', {})
+                item = value.get('item')
+                verb = value.get('verb')
+                
+                # Only process new comments
+                if item != 'comment' or verb != 'add':
+                    continue
+                
+                comment_id = value.get('comment_id')
+                post_id = value.get('post_id')
+                message = value.get('message', '')
+                sender_name = value.get('sender_name', 'Unknown')
+                sender_id = value.get('sender_id', '')
+                created_time = value.get('created_time', '')
+                parent_id = value.get('parent_id', '')  # For reply comments
+                
+                if not comment_id or not message:
+                    continue
+                
+                print(f"\n📩 Webhook: New comment on post {post_id}")
+                print(f"   From: {sender_name}")
+                print(f"   Text: {message[:100]}...")
+                if parent_id and parent_id != post_id:
+                    print(f"   Reply to: {parent_id}")
+                
+                # Build comment data matching scanner format
+                comment_data = {
+                    'comment_id': comment_id,
+                    'post_id': post_id,
+                    'comment_text': message,
+                    'author_name': sender_name,
+                    'author_id': str(sender_id),
+                    'created_at': str(created_time),
+                    'is_hidden': False,
+                    'parent_id': parent_id if parent_id != post_id else None
+                }
+                
+                # Check if comments filter is enabled
+                if config.get('comments_filter_enabled') and config.get('openai_api_key'):
+                    # Filter with AI in background
+                    def async_filter(cd=comment_data, cfg=config):
+                        try:
+                            from ai_comment_filter import CommentFilter
+                            ai_filter = CommentFilter(cfg['openai_api_key'], db)
+                            results = ai_filter.filter_comments_batch([cd], batch_size=1)
+                            
+                            if results:
+                                result = results[0]
+                                cd['should_hide'] = result['should_hide']
+                                cd['filter_reason'] = result['reason']
+                                cd['ai_explanation'] = result['explanation']
+                                
+                                db.add_comment(cd)
+                                
+                                if result['should_hide']:
+                                    from facebook_comments_handler import FacebookCommentsHandler
+                                    fb = FacebookCommentsHandler(cfg['facebook_access_token'], cfg['facebook_page_id'])
+                                    fb.hide_comment(comment_id)
+                                    print(f"   🚫 Hidden by AI: {result['reason']}")
+                                else:
+                                    print(f"   ✅ AI: clean")
+                            else:
+                                cd['should_hide'] = False
+                                cd['filter_reason'] = 'clean'
+                                cd['ai_explanation'] = ''
+                                db.add_comment(cd)
+                                
+                        except Exception as e:
+                            print(f"❌ Webhook AI filter error: {e}")
+                            cd['should_hide'] = False
+                            cd['filter_reason'] = 'clean'
+                            cd['ai_explanation'] = f'Error: {e}'
+                            db.add_comment(cd)
+                            db.queue_comment(cd)
+                    
+                    thread = threading.Thread(target=async_filter, daemon=True)
+                    thread.start()
+                else:
+                    # No AI filter - just save
+                    comment_data['should_hide'] = False
+                    comment_data['filter_reason'] = 'clean'
+                    comment_data['ai_explanation'] = ''
+                    db.add_comment(comment_data)
+        
+        return 'OK', 200
+        
+    except Exception as e:
+        print(f"❌ Webhook error: {e}")
+        traceback.print_exc()
+        return 'OK', 200  # Always return 200 to Facebook
 
 # ============================================================================
 # COMMENT ACTION HELPERS
@@ -1423,7 +1556,7 @@ _LABEL_DESCRIPTIONS = {
 def _mark_and_delete_comment(comment_id, label):
     """
     Shared logic for mark-political, mark-hate, mark-spam routes.
-    Deletes comment from Facebook, adds AI training example, dismisses from DB.
+    Deletes comment from Facebook, adds AI training example, saves training data, dismisses from DB.
     """
     def async_action():
         try:
@@ -1446,6 +1579,16 @@ def _mark_and_delete_comment(comment_id, label):
                 comment_text=comment['comment_text'],
                 original_ai_prediction=ai_said,
                 explanation=f"{description} - admin marked for deletion"
+            )
+            
+            # Save to training data (keeps all, no limit)
+            db.save_training_data(
+                comment_id=comment_id,
+                post_id=comment.get('post_id', ''),
+                comment_text=comment['comment_text'],
+                admin_label=label,
+                ai_prediction=ai_said,
+                ai_explanation=comment.get('ai_explanation', '')
             )
             
             db.dismiss_comment(comment_id)
@@ -1477,7 +1620,7 @@ def mark_comment_hate(comment_id):
 
 @app.route('/comment/<comment_id>/mark-ok', methods=['POST'])
 def mark_comment_ok(comment_id):
-    """Mark comment as OK - unhides on Facebook + adds to examples"""
+    """Mark comment as OK - unhides on Facebook + adds to examples + saves training data"""
     
     def async_action():
         try:
@@ -1497,6 +1640,16 @@ def mark_comment_ok(comment_id):
             
             if success:
                 ai_said = comment['filter_reason']
+                
+                # Save training data (always)
+                db.save_training_data(
+                    comment_id=comment_id,
+                    post_id=comment.get('post_id', ''),
+                    comment_text=comment['comment_text'],
+                    admin_label='ok',
+                    ai_prediction=ai_said,
+                    ai_explanation=comment.get('ai_explanation', '')
+                )
                 
                 if ai_said == 'clean':
                     # AI said clean and it is clean - just dismiss
@@ -1526,6 +1679,25 @@ def mark_comment_ok(comment_id):
 def mark_comment_spam(comment_id):
     """Mark comment as spam - deletes from Facebook + adds to examples"""
     return _mark_and_delete_comment(comment_id, 'spam')
+
+@app.route('/comment/<comment_id>/delete', methods=['POST'])
+def delete_comment_only(comment_id):
+    """Just delete comment from Facebook without adding to any training list"""
+    def async_action():
+        try:
+            fb = _get_fb_handler()
+            if not fb:
+                return
+            
+            fb.delete_comment(comment_id)
+            db.dismiss_comment(comment_id)
+            print(f"🗑️ Deleted comment (no training): {comment_id}")
+            
+        except Exception as e:
+            print(f"❌ Error deleting comment: {e}")
+    
+    _run_async(async_action)
+    return '', 200
 
 @app.route('/comment/<comment_id>/dismiss', methods=['POST'])
 def dismiss_comment(comment_id):
@@ -2002,6 +2174,62 @@ def send_notification_email(subject, body, recipients):
         print(f"❌ Resend email error: {e}")
         traceback.print_exc()
 
+def check_comment_notification():
+    """
+    Check if unreviewed comments exceed threshold and send notification.
+    Only sends once — sets a flag that resets when count drops below threshold.
+    """
+    try:
+        config = load_config()
+        
+        if not config.get('notifications_enabled', False):
+            return
+        
+        threshold = config.get('comment_notification_threshold', 0)
+        if threshold <= 0:
+            return
+        
+        count = db.get_unreviewed_comment_count()
+        
+        if count >= threshold:
+            # Only send if we haven't already sent for this spike
+            if not config.get('comment_notification_sent', False):
+                notification_emails = config.get('notification_emails', [])
+                app_url = config.get('app_url', '')
+                
+                subject = f"🗨️ {count} תגובות ממתינות לבדיקה"
+                body = f"""
+                <html>
+                <body style="font-family: Arial, sans-serif; padding: 20px;">
+                    <h2 style="color: #dc3545;">🗨️ תגובות ממתינות לבדיקה</h2>
+                    <p>יש <strong>{count} תגובות</strong> שממתינות לבדיקה (סף: {threshold}).</p>
+                    <p style="margin-top: 30px;">
+                        <a href="{app_url}/comments" 
+                           style="background-color: #007bff; color: white; padding: 12px 24px; 
+                                  text-decoration: none; border-radius: 5px; display: inline-block;">
+                            צפה בתגובות
+                        </a>
+                    </p>
+                </body>
+                </html>
+                """
+                
+                send_notification_email(subject, body, notification_emails)
+                
+                # Mark as sent
+                config['comment_notification_sent'] = True
+                save_config(config)
+                print(f"📧 Comment notification sent ({count} >= {threshold})")
+        else:
+            # Reset flag when count drops below threshold
+            if config.get('comment_notification_sent', False):
+                config['comment_notification_sent'] = False
+                save_config(config)
+                print(f"✅ Comment count ({count}) below threshold ({threshold}), notification reset")
+    
+    except Exception as e:
+        print(f"❌ Comment notification check error: {e}")
+
 def comments_scan_job():
     """
     Hourly job to scan and filter comments
@@ -2036,6 +2264,9 @@ def comments_scan_job():
         israel_tz = pytz.timezone('Asia/Jerusalem')
         config['last_comment_scan'] = datetime.now(israel_tz).strftime('%Y-%m-%d %H:%M:%S')
         save_config(config)
+        
+        # Check if comment notification needed
+        check_comment_notification()
         
     except ImportError as e:
         print(f"⚠️  Comments scanner not available: {e}")

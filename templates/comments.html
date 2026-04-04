@@ -1,6 +1,6 @@
 {% extends "base.html" %}
-{% block title %}סינון תגובות{% endblock %}
-{% block page_title %}<div class="text-center">🗨️ סינון תגובות</div>{% endblock %}
+{% block title %}ניהול תגובות{% endblock %}
+{% block page_title %}<div class="text-center">🗨️ ניהול תגובות</div>{% endblock %}
 
 {% block content %}
 <style>
@@ -174,7 +174,7 @@
                 id="scan-btn"
                 onclick="startScan()">
             <i class="bi bi-arrow-clockwise" id="scan-icon"></i> 
-            <span id="scan-text">סריקת תגובות</span>
+            <span id="scan-text">סרוק תגובות חדשות</span>
         </button>
         
         {% if grouped_comments %}
@@ -290,7 +290,7 @@ function checkScanStatus() {
 {% if not grouped_comments %}
 <div class="alert alert-info text-center py-5">
     <h4><i class="bi bi-info-circle"></i> אין תגובות להצגה</h4>
-    <p class="mb-0">כל התגובות סוננו או שאין תגובות חדשות מאז הסריקה האחרונה.</p>
+    <p class="mb-0">לא נמצאו תגובות מ-7 הימים האחרונים.</p>
 </div>
 
 <!-- Comments Grouped by Post -->
@@ -364,11 +364,21 @@ function checkScanStatus() {
             <!-- AI Explanation -->
             {% if comment.ai_explanation %}
             <div class="ai-note">
-                <i class="bi bi-robot"></i> <strong>AI חשב:</strong> {{ comment.filter_reason or 'clean' }} - {{ comment.ai_explanation }}
+                <i class="bi bi-robot"></i> <strong>AI:</strong> 
+                {% if comment.filter_reason == 'political' %}
+                    <span class="badge bg-primary">🏛️ פוליטי</span>
+                {% elif comment.filter_reason == 'hate' %}
+                    <span class="badge bg-danger">⚠️ שנאה</span>
+                {% elif comment.filter_reason == 'spam' %}
+                    <span class="badge bg-warning text-dark">🚫 ספאם</span>
+                {% else %}
+                    <span class="badge bg-success">✓ תקין</span>
+                {% endif %}
+                — {{ comment.ai_explanation }}
             </div>
             {% endif %}
             
-            <!-- 3-Button Action System -->
+            <!-- Action Buttons -->
             <div class="mt-3">
                 <div class="btn-group" role="group">
                     <button class="btn btn-danger" 
@@ -398,6 +408,13 @@ function checkScanStatus() {
                             hx-swap="outerHTML swap:300ms"
                             title="הצגה בפייסבוק + הוספה לדוגמאות תקין">
                         ✓ תקין
+                    </button>
+                    <button class="btn btn-outline-secondary" 
+                            hx-post="{{ url_for('delete_comment_only', comment_id=comment.comment_id) }}"
+                            hx-target="#comment-{{ comment.id }}"
+                            hx-swap="outerHTML swap:300ms"
+                            title="מחיקה מפייסבוק בלבד (ללא שמירה לדוגמאות)">
+                        🗑️
                     </button>
                 </div>
             </div>
