@@ -1,12 +1,14 @@
-from flask import Flask, render_template, request, redirect, url_for, jsonify, flash
+from flask import Flask, render_template, request, redirect, url_for, jsonify, flash, session
 from pathlib import Path
 import json
 import threading
 import traceback
 import time
 import schedule
+import os
 from datetime import datetime, timedelta
 import pytz
+from werkzeug.security import generate_password_hash, check_password_hash
 
 # Import your existing handlers
 from database import Database
@@ -16,7 +18,20 @@ from sheets_handler import SheetsHandler
 from notifications import NotificationHandler
 
 app = Flask(__name__)
-app.secret_key = 'your-secret-key-change-this-in-production'
+
+# Persistent secret key — generate once, save to config
+def _get_or_create_secret_key():
+    from config import load_config, save_config
+    config = load_config()
+    key = config.get('flask_secret_key')
+    if not key:
+        key = os.urandom(24).hex()
+        config['flask_secret_key'] = key
+        save_config(config)
+    return key
+
+app.secret_key = _get_or_create_secret_key()
+app.permanent_session_lifetime = timedelta(days=30)
 
 # Disable static file caching for development
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
@@ -64,6 +79,77 @@ def init_handlers():
 
 # Initialize on startup
 init_handlers()
+
+# ============================================================================
+# AUTHENTICATION
+# ============================================================================
+
+# Routes that don't require login
+PUBLIC_ROUTES = {'login', 'setup_password', 'webhook_verify', 'webhook_receive', 'favicon', 'static'}
+
+@app.before_request
+def require_login():
+    """Check login for all routes except public ones"""
+    if request.endpoint in PUBLIC_ROUTES:
+        return
+    if not session.get('logged_in'):
+        return redirect(url_for('login'))
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    """Login page"""
+    config = load_config()
+    
+    # If no password set, redirect to setup
+    if not config.get('admin_password_hash'):
+        return redirect(url_for('setup_password'))
+    
+    if request.method == 'POST':
+        password = request.form.get('password', '')
+        remember = request.form.get('remember') == 'on'
+        
+        if check_password_hash(config['admin_password_hash'], password):
+            session['logged_in'] = True
+            if remember:
+                session.permanent = True
+            return redirect(url_for('review_page'))
+        else:
+            flash('סיסמה שגויה', 'error')
+    
+    return render_template('login.html')
+
+@app.route('/logout')
+def logout():
+    """Logout"""
+    session.clear()
+    return redirect(url_for('login'))
+
+@app.route('/setup-password', methods=['GET', 'POST'])
+def setup_password():
+    """First-time password setup"""
+    config = load_config()
+    
+    # If password already set, only allow change when logged in
+    if config.get('admin_password_hash') and not session.get('logged_in'):
+        return redirect(url_for('login'))
+    
+    if request.method == 'POST':
+        password = request.form.get('password', '')
+        confirm = request.form.get('confirm', '')
+        
+        if len(password) < 4:
+            flash('סיסמה חייבת להיות לפחות 4 תווים', 'error')
+        elif password != confirm:
+            flash('הסיסמאות לא תואמות', 'error')
+        else:
+            config['admin_password_hash'] = generate_password_hash(password)
+            save_config(config)
+            session['logged_in'] = True
+            session.permanent = True
+            flash('✅ סיסמה נקבעה בהצלחה', 'success')
+            return redirect(url_for('review_page'))
+    
+    return render_template('setup_password.html', is_change=bool(config.get('admin_password_hash')))
 
 def calculate_textarea_height(text: str) -> int:
     """Calculate optimal height for textarea based on actual content"""

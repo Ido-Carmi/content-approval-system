@@ -104,6 +104,13 @@
                 <a href="{{ url_for('settings_page') }}" class="list-group-item list-group-item-action {% if request.endpoint == 'settings_page' %}active{% endif %}">
                     <i class="bi bi-gear"></i> הגדרות
                 </a>
+                <hr class="my-1 mx-3">
+                <a href="{{ url_for('setup_password') }}" class="list-group-item list-group-item-action">
+                    <i class="bi bi-key"></i> שנה סיסמה
+                </a>
+                <a href="{{ url_for('logout') }}" class="list-group-item list-group-item-action text-danger">
+                    <i class="bi bi-box-arrow-right"></i> התנתק
+                </a>
             </div>
         </div>
 
