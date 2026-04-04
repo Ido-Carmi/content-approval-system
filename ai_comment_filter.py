@@ -239,6 +239,9 @@ Return JSON array with moderation results."""
                     # Try different possible keys
                     elif 'results' in results_data:
                         results_data = results_data['results']
+                    elif 'result' in results_data:
+                        result_val = results_data['result']
+                        results_data = result_val if isinstance(result_val, list) else [result_val]
                     elif 'comments' in results_data:
                         results_data = results_data['comments']
                     elif 'moderation' in results_data:
