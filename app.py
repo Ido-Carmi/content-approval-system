@@ -1144,7 +1144,6 @@ def settings_page():
             'google_credentials_file': request.form.get('google_credentials_file', 'credentials.json'),
             'read_from_date': read_from_date_iso,  # Store ISO format from date picker
             'facebook_page_id': request.form.get('facebook_page_id', ''),
-            'posting_windows': [w.strip() for w in request.form.get('posting_windows', '').split(',') if w.strip()],
             'skip_shabbat': request.form.get('skip_shabbat') == 'on',
             'skip_jewish_holidays': request.form.get('skip_jewish_holidays') == 'on',
             'notifications_enabled': request.form.get('notifications_enabled') == 'on',
@@ -1158,12 +1157,34 @@ def settings_page():
             'batch_size': int(request.form.get('batch_size', 50)),
             'comment_notification_threshold': int(request.form.get('comment_notification_threshold', 0)),
             'webhook_verify_token': request.form.get('webhook_verify_token', ''),
+            'webhook_batch_size': int(request.form.get('webhook_batch_size', 10)),
+            'webhook_batch_timeout_minutes': int(request.form.get('webhook_batch_timeout_minutes', 5)),
         })
         
         # Only overwrite secrets if user provided a new value
         for key, value in secret_fields.items():
             if value.strip():
                 config[key] = value.strip()
+        
+        # Parse dynamic tiers from textarea
+        tiers_text = request.form.get('dynamic_tiers', '')
+        if tiers_text.strip():
+            dynamic_tiers = []
+            for line in tiers_text.strip().split('\n'):
+                line = line.strip()
+                if not line or '|' not in line:
+                    continue
+                parts = line.split('|')
+                try:
+                    max_posts = int(parts[0].strip())
+                    windows = [w.strip() for w in parts[1].strip().split(',') if w.strip()]
+                    if windows:
+                        dynamic_tiers.append({'max_posts': max_posts, 'windows': windows})
+                except ValueError:
+                    continue
+            if dynamic_tiers:
+                dynamic_tiers.sort(key=lambda t: t['max_posts'])
+                config['dynamic_tiers'] = dynamic_tiers
         
         save_config(config)
         init_handlers()  # Reinitialize with new config
@@ -1380,6 +1401,119 @@ def scan_status():
 # Initialize scan status
 scan_in_progress = False
 
+# Webhook comment queue — comments wait here until batch processed
+webhook_queue = []
+webhook_queue_lock = threading.Lock()
+first_queued_time = None  # When first comment entered the current queue
+
+def process_webhook_batch():
+    """Process queued webhook comments with AI in a single batch."""
+    global first_queued_time
+    
+    with webhook_queue_lock:
+        if not webhook_queue:
+            return
+        batch = list(webhook_queue)
+        webhook_queue.clear()
+        first_queued_time = None
+    
+    config = load_config()
+    
+    if not config.get('comments_filter_enabled') or not config.get('openai_api_key'):
+        # No AI — save all as clean
+        for cd in batch:
+            cd['should_hide'] = False
+            cd['filter_reason'] = 'clean'
+            cd['ai_explanation'] = ''
+            db.add_comment(cd)
+        print(f"📝 Saved {len(batch)} comments without AI filter")
+        return
+    
+    print(f"\n🤖 Batch processing {len(batch)} webhook comments with AI...")
+    
+    try:
+        from ai_comment_filter import CommentFilter
+        ai_filter = CommentFilter(config['openai_api_key'], db)
+        results = ai_filter.filter_comments_batch(batch, batch_size=30)
+        
+        # Match results to comments
+        result_map = {r['comment_id']: r for r in results}
+        
+        hidden_count = 0
+        for cd in batch:
+            result = result_map.get(cd['comment_id'])
+            if result:
+                cd['should_hide'] = result['should_hide']
+                cd['filter_reason'] = result['reason']
+                cd['ai_explanation'] = result['explanation']
+            else:
+                cd['should_hide'] = False
+                cd['filter_reason'] = 'clean'
+                cd['ai_explanation'] = ''
+            
+            db.add_comment(cd)
+            
+            if cd['should_hide']:
+                hidden_count += 1
+                try:
+                    from facebook_comments_handler import FacebookCommentsHandler
+                    fb = FacebookCommentsHandler(config['facebook_access_token'], config['facebook_page_id'])
+                    fb.hide_comment(cd['comment_id'])
+                    print(f"   🚫 Hidden: {cd['comment_id'][:30]}... ({cd['filter_reason']})")
+                except Exception as e:
+                    print(f"   ❌ Error hiding: {e}")
+        
+        print(f"✅ Batch complete: {len(batch)} comments, {hidden_count} hidden")
+        
+        # Check comment notification
+        check_comment_notification()
+        
+        # Save last webhook time
+        config = load_config()
+        config['last_webhook_comment_time'] = datetime.now(pytz.timezone('Asia/Jerusalem')).isoformat()
+        save_config(config)
+        
+    except Exception as e:
+        print(f"❌ Batch processing error: {e}")
+        traceback.print_exc()
+        # Queue all for retry
+        for cd in batch:
+            db.queue_comment(cd)
+
+def webhook_batch_checker():
+    """Background thread: process batch when enough comments or enough time since first queued."""
+    
+    while True:
+        time.sleep(30)  # Check every 30 seconds
+        
+        try:
+            config = load_config()
+            batch_size = config.get('webhook_batch_size', 10)
+            batch_timeout = config.get('webhook_batch_timeout_minutes', 5)
+            
+            with webhook_queue_lock:
+                queue_size = len(webhook_queue)
+                queued_since = first_queued_time
+            
+            if queue_size == 0:
+                continue
+            
+            if queue_size >= batch_size:
+                print(f"⏰ Batch trigger: {queue_size} comments >= {batch_size} threshold")
+                process_webhook_batch()
+            elif queued_since:
+                minutes_waiting = (datetime.now() - queued_since).total_seconds() / 60
+                if minutes_waiting >= batch_timeout:
+                    print(f"⏰ Batch trigger: {minutes_waiting:.0f} min since first comment ({queue_size} in queue)")
+                    process_webhook_batch()
+                
+        except Exception as e:
+            print(f"❌ Batch checker error: {e}")
+
+# Start batch checker thread
+batch_thread = threading.Thread(target=webhook_batch_checker, daemon=True)
+batch_thread.start()
+
 # ============================================================================
 # FACEBOOK WEBHOOKS - Real-time comment delivery
 # ============================================================================
@@ -1463,52 +1597,15 @@ def webhook_receive():
                     'parent_id': parent_id if parent_id != post_id else None
                 }
                 
-                # Check if comments filter is enabled
-                if config.get('comments_filter_enabled') and config.get('openai_api_key'):
-                    # Filter with AI in background
-                    def async_filter(cd=comment_data, cfg=config):
-                        try:
-                            from ai_comment_filter import CommentFilter
-                            ai_filter = CommentFilter(cfg['openai_api_key'], db)
-                            results = ai_filter.filter_comments_batch([cd], batch_size=1)
-                            
-                            if results:
-                                result = results[0]
-                                cd['should_hide'] = result['should_hide']
-                                cd['filter_reason'] = result['reason']
-                                cd['ai_explanation'] = result['explanation']
-                                
-                                db.add_comment(cd)
-                                
-                                if result['should_hide']:
-                                    from facebook_comments_handler import FacebookCommentsHandler
-                                    fb = FacebookCommentsHandler(cfg['facebook_access_token'], cfg['facebook_page_id'])
-                                    fb.hide_comment(comment_id)
-                                    print(f"   🚫 Hidden by AI: {result['reason']}")
-                                else:
-                                    print(f"   ✅ AI: clean")
-                            else:
-                                cd['should_hide'] = False
-                                cd['filter_reason'] = 'clean'
-                                cd['ai_explanation'] = ''
-                                db.add_comment(cd)
-                                
-                        except Exception as e:
-                            print(f"❌ Webhook AI filter error: {e}")
-                            cd['should_hide'] = False
-                            cd['filter_reason'] = 'clean'
-                            cd['ai_explanation'] = f'Error: {e}'
-                            db.add_comment(cd)
-                            db.queue_comment(cd)
-                    
-                    thread = threading.Thread(target=async_filter, daemon=True)
-                    thread.start()
-                else:
-                    # No AI filter - just save
-                    comment_data['should_hide'] = False
-                    comment_data['filter_reason'] = 'clean'
-                    comment_data['ai_explanation'] = ''
-                    db.add_comment(comment_data)
+                # Add to batch queue (processed by background thread)
+                with webhook_queue_lock:
+                    global first_queued_time
+                    if not webhook_queue:
+                        first_queued_time = datetime.now()
+                    webhook_queue.append(comment_data)
+                    queue_size = len(webhook_queue)
+                
+                print(f"   📥 Queued for batch ({queue_size} in queue)")
         
         return 'OK', 200
         
@@ -2352,8 +2449,39 @@ def start_scheduler():
     # Also run notifications check every 6 hours
     schedule.every(6).hours.do(check_and_send_notifications)
     
-    # Comments scanner - run every hour
-    schedule.every().hour.do(comments_scan_job)
+    # Run startup comment scan (catches comments missed while server was down)
+    def startup_comment_scan():
+        try:
+            config = load_config()
+            if not config.get('comments_filter_enabled') or not config.get('facebook_access_token'):
+                return
+            
+            last_webhook = config.get('last_webhook_comment_time')
+            if last_webhook:
+                print(f"📡 Startup scan: fetching comments since last webhook ({last_webhook})")
+            else:
+                print(f"📡 Startup scan: no webhook history, fetching last 2 hours")
+            
+            from comments_scanner import create_hourly_job
+            job = create_hourly_job(db, config)
+            job()
+            
+            # Save scan time
+            config = load_config()
+            israel_tz = pytz.timezone('Asia/Jerusalem')
+            config['last_comment_scan'] = datetime.now(israel_tz).strftime('%Y-%m-%d %H:%M:%S')
+            save_config(config)
+            
+            print("✅ Startup comment scan completed")
+        except Exception as e:
+            print(f"⚠️  Startup comment scan failed: {e}")
+    
+    # Run startup scan in background after 5 seconds (let app fully start first)
+    def delayed_startup_scan():
+        time.sleep(5)
+        startup_comment_scan()
+    
+    threading.Thread(target=delayed_startup_scan, daemon=True).start()
     
     # Start background scheduler thread
     scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
@@ -2363,8 +2491,9 @@ def start_scheduler():
     print("✅ Background scheduler started:")
     print(f"   - Midnight sync at {midnight_local:02d}:00 server time (00:00 Israel)")
     print(f"   - Notifications check every 6 hours")
-    print(f"   - Comments scanner every hour")
     print(f"   - Old comments cleanup at {cleanup_local:02d}:00 server time (02:00 Israel)")
+    print(f"   - Webhook batch processor running (queue-based)")
+    print(f"   - Startup comment scan triggered")
     print(f"   - Scheduler thread running in background")
     print("=" * 80)
 

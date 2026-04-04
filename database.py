@@ -495,30 +495,44 @@ class Database:
         }
     
     def get_next_post_number(self) -> int:
-        """Get and increment the post number"""
+        """Get and increment the post number. Never returns an already-used number."""
         conn = self.get_connection()
         cursor = conn.cursor()
         
+        # Get counter value
         cursor.execute('SELECT current_number FROM post_numbers WHERE id = 1')
-        current = cursor.fetchone()['current_number']
+        counter = cursor.fetchone()['current_number']
         
-        cursor.execute('UPDATE post_numbers SET current_number = current_number + 1 WHERE id = 1')
+        # Get highest post number ever assigned
+        cursor.execute('SELECT MAX(post_number) as max_num FROM entries WHERE post_number IS NOT NULL')
+        result = cursor.fetchone()
+        max_used = result['max_num'] if result['max_num'] else 0
+        
+        # Use whichever is higher
+        next_number = max(counter, max_used + 1)
+        
+        # Update counter to next_number + 1
+        cursor.execute('UPDATE post_numbers SET current_number = ? WHERE id = 1', (next_number + 1,))
         
         conn.commit()
         conn.close()
         
-        return current
+        return next_number
     
     def get_current_post_number(self) -> int:
-        """Get current post number without incrementing"""
+        """Get current post number without incrementing. Accounts for highest used number."""
         conn = self.get_connection()
         cursor = conn.cursor()
         
         cursor.execute('SELECT current_number FROM post_numbers WHERE id = 1')
-        current = cursor.fetchone()['current_number']
+        counter = cursor.fetchone()['current_number']
+        
+        cursor.execute('SELECT MAX(post_number) as max_num FROM entries WHERE post_number IS NOT NULL')
+        result = cursor.fetchone()
+        max_used = result['max_num'] if result['max_num'] else 0
         
         conn.close()
-        return current
+        return max(counter, max_used + 1)
     
     def reset_post_number(self, number: int = 1):
         """Reset post number to specified value"""

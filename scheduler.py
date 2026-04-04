@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, time
 import pytz
 from typing import List, Dict, Optional
-from config import load_config
+from config import load_config, save_config
 import threading
 
 class Scheduler:
@@ -76,6 +76,65 @@ class Scheduler:
             windows.append(time(hour, minute))
         
         return sorted(windows)
+    
+    # Default window sets for each posting frequency
+    DEFAULT_TIERS = [
+        {'max_posts': 5, 'windows': ['14:00']},
+        {'max_posts': 10, 'windows': ['10:00', '19:00']},
+        {'max_posts': 15, 'windows': ['09:00', '14:00', '19:00']},
+        {'max_posts': 20, 'windows': ['09:00', '12:00', '16:00', '20:00']},
+        {'max_posts': 999, 'windows': ['08:00', '11:00', '14:00', '17:00', '20:00']},
+    ]
+    
+    def get_dynamic_tiers(self):
+        """Get dynamic tiers from config, or use defaults"""
+        config = load_config()
+        tiers = config.get('dynamic_tiers', self.DEFAULT_TIERS)
+        return sorted(tiers, key=lambda t: t['max_posts'])
+    
+    def calculate_posts_per_day(self, scheduled_count: int) -> int:
+        """Calculate how many posts per day based on scheduled post count"""
+        tiers = self.get_dynamic_tiers()
+        for tier in tiers:
+            if scheduled_count <= tier['max_posts']:
+                return len(tier['windows'])
+        # Fallback to last tier
+        return len(tiers[-1]['windows']) if tiers else 1
+    
+    def get_windows_for_count(self, scheduled_count: int) -> list:
+        """Get the posting windows for a given scheduled post count"""
+        tiers = self.get_dynamic_tiers()
+        for tier in tiers:
+            if scheduled_count <= tier['max_posts']:
+                return tier['windows']
+        return tiers[-1]['windows'] if tiers else ['14:00']
+    
+    def update_dynamic_windows(self):
+        """
+        Recalculate posting windows based on number of scheduled posts.
+        Called after each new post is scheduled.
+        """
+        try:
+            # Count currently scheduled posts on Facebook
+            scheduled_times = self.get_scheduled_times_from_facebook()
+            scheduled_count = len(scheduled_times)
+            
+            new_windows = self.get_windows_for_count(scheduled_count)
+            
+            # Save to config
+            config = load_config()
+            old_windows = config.get('posting_windows', [])
+            config['posting_windows'] = new_windows
+            save_config(config)
+            
+            posts_per_day = len(new_windows)
+            if old_windows != new_windows:
+                print(f"📊 Dynamic windows updated: {scheduled_count} scheduled → {posts_per_day}/day → {new_windows}")
+            else:
+                print(f"📊 Dynamic windows unchanged: {scheduled_count} scheduled → {posts_per_day}/day")
+                
+        except Exception as e:
+            print(f"⚠️  Error updating dynamic windows: {e}")
     
     def is_shabbat(self, date: datetime.date) -> bool:
         """Check if a date is Friday or Saturday (Shabbat)"""
@@ -211,6 +270,9 @@ class Scheduler:
             )
             
             print(f"[LOCK RELEASED] Entry {entry_id} scheduled successfully")
+            
+            # Recalculate posting windows based on new scheduled count
+            self.update_dynamic_windows()
             
             return {
                 'scheduled_time': scheduled_time.strftime("%d/%m/%Y %H:%M"),
