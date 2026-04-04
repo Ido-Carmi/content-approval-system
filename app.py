@@ -206,7 +206,6 @@ def approve_entry(entry_id):
 def deny_entry(entry_id):
     """Deny an entry"""
     db.deny_entry(entry_id, 'admin')
-    flash('❌ נדחה', 'info')
     
     # If HTMX request, return empty (removes the card)
     if request.headers.get('HX-Request'):
@@ -271,15 +270,19 @@ def sync_now():
 
 @app.route('/scheduled')
 def scheduled_page():
-    """View scheduled posts - ALWAYS syncs with Facebook"""
+    """View scheduled posts - renders immediately, content loads async"""
+    return render_template('scheduled.html', posts=None, had_orphans=False, loading=True)
+
+@app.route('/scheduled-content')
+def scheduled_content():
+    """Fetch scheduled posts content (called via HTMX after page loads)"""
     print("=" * 80)
-    print("SCHEDULED PAGE - SYNCING WITH FACEBOOK")
+    print("SCHEDULED CONTENT - SYNCING WITH FACEBOOK")
     print("=" * 80)
     
     if not facebook_handler:
         print("ERROR: Facebook handler is None")
-        flash('❌ Facebook לא מחובר', 'error')
-        return redirect(url_for('review_page'))
+        return '<div class="alert alert-danger text-center py-3">❌ Facebook לא מחובר — הגדר בהגדרות</div>'
     
     try:
         # Track if we made changes
@@ -648,16 +651,15 @@ def scheduled_page():
             print("   ⚠️  Orphaned entries were found and deleted")
         print("=" * 80)
         
-        return render_template('scheduled.html', 
+        return render_template('scheduled_content.html', 
                              posts=posts_data, 
                              had_orphans=had_orphans)
         
     except Exception as e:
-        print(f"\nERROR in scheduled_page: {e}")
+        print(f"\nERROR in scheduled_content: {e}")
         traceback.print_exc()
         print("=" * 80)
-        flash(f'❌ שגיאה: {str(e)}', 'error')
-        return redirect(url_for('review_page'))
+        return f'<div class="alert alert-danger text-center py-3">❌ שגיאה: {str(e)}</div>'
 
 @app.route('/test-js')
 def test_js_page():

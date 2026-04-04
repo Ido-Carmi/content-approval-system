@@ -197,94 +197,18 @@
 }
 </style>
 
-<!-- Header with post count - matches card width -->
-<div class="d-flex justify-content-center">
-    <div class="alert alert-primary mb-3 py-2 px-3" style="width: 100%; max-width: 900px; min-width: 700px; text-align: center; font-size: 1.1rem;">
-        <i class="bi bi-calendar-check"></i>
-        <strong>{{ posts|length if posts else 0 }}</strong> פוסטים מתוזמנים בפייסבוק
+<!-- Content loaded via HTMX -->
+<div id="scheduled-content-area" 
+     hx-get="/scheduled-content" 
+     hx-trigger="load" 
+     hx-swap="innerHTML">
+    <!-- Loading state -->
+    <div class="text-center py-5">
+        <div class="spinner-border text-primary mb-3" style="width: 3rem; height: 3rem;" role="status"></div>
+        <h5>טוען פוסטים מתוזמנים...</h5>
+        <p class="text-muted">מסנכרן עם פייסבוק</p>
     </div>
 </div>
-
-{% if not posts %}
-<div class="alert alert-info text-center py-5">
-    <h4>אין פוסטים מתוזמנים</h4>
-    <p class="mb-0">אשר וידויים חדשים כדי לתזמן פוסטים</p>
-</div>
-{% else %}
-<div id="scheduled-list">
-    {% for item in posts %}
-    <div class="scheduled-card" id="sched-{{ item.entry.id }}">
-        <div class="card">
-            <div class="card-header bg-primary text-white">
-                <div class="d-flex justify-content-between align-items-center flex-wrap">
-                    <div class="d-flex align-items-center gap-2">
-                        <i class="bi bi-calendar-event"></i>
-                        <span class="time-display">{{ item.display_time }}</span>
-                        <span class="day-display">{{ item.weekday }}</span>
-                    </div>
-                    <span class="badge bg-light text-dark">#{{ item.entry.post_number }}</span>
-                </div>
-            </div>
-            <div class="card-body">
-                <textarea id="text-{{ item.entry.id }}" 
-                          class="form-control mb-2"
-                          readonly
-                          style="height: {{ item.height }}px; overflow-y: hidden; resize: none;">{{ item.fb_post.message }}</textarea>
-                
-                <div class="d-flex gap-2 align-items-start">
-                    <!-- Reorder Buttons (Up/Down) -->
-                    <div class="reorder-buttons">
-                        {% if not loop.first %}
-                        <button type="button" 
-                                class="btn btn-sm btn-secondary swap-up-btn"
-                                data-entry-id="{{ item.entry.id }}"
-                                title="העבר למעלה">
-                            <i class="bi bi-arrow-up"></i>
-                        </button>
-                        {% endif %}
-                        {% if not loop.last %}
-                        <button type="button" 
-                                class="btn btn-sm btn-secondary swap-down-btn"
-                                data-entry-id="{{ item.entry.id }}"
-                                title="העבר למטה">
-                            <i class="bi bi-arrow-down"></i>
-                        </button>
-                        {% endif %}
-                    </div>
-                    
-                    <!-- Action Buttons -->
-                    <div class="flex-grow-1 d-flex gap-2">
-                        <!-- Edit Button -->
-                        <button type="button" 
-                                class="btn btn-info flex-fill edit-btn"
-                                id="edit-{{ item.entry.id }}"
-                                data-entry-id="{{ item.entry.id }}">
-                            <i class="bi bi-pencil"></i> ערוך
-                        </button>
-                        
-                        <!-- Save Button (hidden initially) -->
-                        <button type="button" 
-                                class="btn btn-success flex-fill save-btn"
-                                id="save-{{ item.entry.id }}"
-                                style="display: none;"
-                                data-entry-id="{{ item.entry.id }}">
-                            <i class="bi bi-check-lg"></i> שמור
-                        </button>
-                        
-                        <!-- Return to Pending Button -->
-                        <button type="button" 
-                                class="btn btn-warning flex-fill unschedule-btn"
-                                data-entry-id="{{ item.entry.id }}">
-                            <i class="bi bi-arrow-counterclockwise"></i> החזר
-                        </button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-    {% endfor %}
-</div>
-{% endif %}
 
 <!-- Loading Overlay - Center of screen -->
 <div id="loading-overlay" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 9999; display: none; align-items: center; justify-content: center;">
@@ -324,15 +248,16 @@ const loadingOverlay = document.getElementById('loading-overlay');
 const loadingIndicator = document.getElementById('loading-indicator');
 const loadingText = document.getElementById('loading-text');
 const loadingSubtext = document.getElementById('loading-subtext');
-loadingOverlay.style.display = 'flex';
 
-console.log('========================================');
-console.log('SCHEDULED PAGE SCRIPT LOADING...');
-console.log('========================================');
+// Setup buttons after HTMX loads content
+document.body.addEventListener('htmx:afterSwap', function(event) {
+    if (event.detail.target.id === 'scheduled-content-area') {
+        console.log('Content loaded via HTMX, setting up buttons...');
+        setupButtons();
+    }
+});
 
-// Use event delegation for all buttons
-document.addEventListener('DOMContentLoaded', function() {
-    console.log('DOM Content Loaded - Setting up event listeners');
+function setupButtons() {
     
     // Setup edit buttons
     document.querySelectorAll('.edit-btn').forEach(function(btn) {
@@ -385,6 +310,11 @@ document.addEventListener('DOMContentLoaded', function() {
     });
     
     console.log('✅ All event listeners set up successfully');
+}
+
+// Also try on DOMContentLoaded in case content is already there
+document.addEventListener('DOMContentLoaded', function() {
+    setupButtons();
 });
 
 // Enable editing for a specific post
@@ -603,9 +533,6 @@ window.addEventListener('load', function() {
     }
 });
 
-console.log('=== SCHEDULED PAGE LOADED ===');
-console.log('All functions initialized');
-
 // Helper functions for loading indicator
 function showLoading(message, subtext = '') {
     loadingOverlay.style.display = 'flex';
@@ -641,14 +568,5 @@ function hideLoading() {
         }, 300);
     }, 1500);
 }
-
-// Check if orphans were detected
-{% if had_orphans %}
-console.log('⚠️  Orphaned posts detected - showing update notification');
-showSuccess('הפוסטים עודכנו!', 'פוסטים שנמחקו בפייסבוק הוסרו והפוסטים הבאים עודכנו', true);
-{% else %}
-// No changes detected, hide indicator
-hideLoading();
-{% endif %}
 </script>
 {% endblock %}

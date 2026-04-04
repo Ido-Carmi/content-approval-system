@@ -243,7 +243,10 @@ class Scheduler:
             self.scheduled_times_cache = None
             self.cache_timestamp = None
             
-            # Get next available slot with fresh data
+            # Recalculate posting windows BEFORE finding slot
+            self.update_dynamic_windows()
+            
+            # Get next available slot with fresh data and correct windows
             scheduled_time = self.get_next_available_slot()
             
             # Double-check the slot is still empty (in case of race condition)
