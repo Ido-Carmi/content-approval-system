@@ -242,10 +242,7 @@ class Scheduler:
             # Clear cache to force fresh data from Facebook
             self.scheduled_times_cache = None
             self.cache_timestamp = None
-            
-            # Recalculate posting windows BEFORE finding slot
-            self.update_dynamic_windows()
-            
+
             # Get next available slot with fresh data and correct windows
             scheduled_time = self.get_next_available_slot()
             
@@ -273,10 +270,7 @@ class Scheduler:
             )
             
             print(f"[LOCK RELEASED] Entry {entry_id} scheduled successfully")
-            
-            # Recalculate posting windows based on new scheduled count
-            self.update_dynamic_windows()
-            
+
             return {
                 'scheduled_time': scheduled_time.strftime("%d/%m/%Y %H:%M"),
                 'facebook_post_id': result['id']

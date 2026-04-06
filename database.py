@@ -372,6 +372,19 @@ class Database:
         conn.commit()
         conn.close()
     
+    def were_posts_approved_since(self, since_timestamp: str) -> bool:
+        """Check if any posts were approved (and scheduled) since the given timestamp"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT COUNT(*) FROM entries
+            WHERE status IN ('scheduled', 'published')
+            AND approved_at >= ?
+        ''', (since_timestamp,))
+        count = cursor.fetchone()[0]
+        conn.close()
+        return count > 0
+
     def get_denied_entries(self) -> List[Dict]:
         """Get denied entries from last 24 hours"""
         conn = self.get_connection()

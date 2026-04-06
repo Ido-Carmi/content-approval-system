@@ -2246,7 +2246,23 @@ def midnight_sync_job():
         else:
             print("⚠️ Sheets handler not initialized")
         
-        # 2. Cleanup old entries
+        # 2. Update dynamic posting windows if posts were approved today
+        if scheduler:
+            try:
+                israel_tz = pytz.timezone('Asia/Jerusalem')
+                today_midnight = datetime.now(israel_tz).replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                )
+                since_str = today_midnight.strftime('%Y-%m-%d %H:%M:%S')
+                if db.were_posts_approved_since(since_str):
+                    print(f"📊 Posts were approved today — recalculating posting windows...")
+                    scheduler.update_dynamic_windows()
+                else:
+                    print(f"📊 No posts approved today — skipping window recalculation")
+            except Exception as e:
+                print(f"❌ Dynamic windows update error: {e}")
+
+        # 3. Cleanup old entries
         try:
             print(f"🧹 Cleaning up old database entries...")
             deleted = db.cleanup_old_entries()
@@ -2254,7 +2270,7 @@ def midnight_sync_job():
         except Exception as e:
             print(f"❌ Cleanup error: {e}")
         
-        # 3. Check and send notifications
+        # 4. Check and send notifications
         try:
             print(f"📧 Checking notifications...")
             check_and_send_notifications()
