@@ -2,6 +2,8 @@ from flask import Flask, render_template, request, redirect, url_for, jsonify, f
 import threading
 import traceback
 import os
+import logging
+from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
 import pytz
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -18,6 +20,15 @@ app = Flask(__name__)
 # ============================================================================
 # APP SETUP
 # ============================================================================
+
+os.makedirs('logs', exist_ok=True)
+_file_handler = RotatingFileHandler('logs/app.log', maxBytes=5 * 1024 * 1024, backupCount=3)
+_file_handler.setLevel(logging.WARNING)
+_file_handler.setFormatter(logging.Formatter(
+    '%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]'
+))
+app.logger.addHandler(_file_handler)
+app.logger.setLevel(logging.WARNING)
 
 def _get_or_create_secret_key():
     config = load_config()
@@ -42,11 +53,25 @@ routes_comments.register(app)
 def favicon():
     return '', 204
 
+@app.route('/health')
+def health_check():
+    try:
+        conn = extensions.db.get_connection()
+        conn.execute('SELECT 1')
+        conn.close()
+        return jsonify({'status': 'ok'}), 200
+    except Exception as e:
+        return jsonify({'status': 'error', 'detail': str(e)}), 500
+
 # ============================================================================
 # AUTHENTICATION
 # ============================================================================
 
-PUBLIC_ROUTES = {'login', 'setup_password', 'webhook_verify', 'webhook_receive', 'favicon', 'static'}
+PUBLIC_ROUTES = {'login', 'setup_password', 'webhook_verify', 'webhook_receive', 'favicon', 'static', 'health_check'}
+
+def _get_client_ip():
+    """Get real client IP — nginx sets X-Real-IP after Cloudflare processing."""
+    return request.headers.get('X-Real-IP') or request.remote_addr
 
 @app.before_request
 def require_login():
@@ -54,21 +79,54 @@ def require_login():
         return
     if not session.get('logged_in'):
         return redirect(url_for('login'))
+    # Session IP binding — reject sessions that moved to a different IP
+    if session.get('login_ip') and session['login_ip'] != _get_client_ip():
+        session.clear()
+        flash('פג תוקף הסשן (שינוי כתובת IP). אנא התחבר מחדש.', 'error')
+        return redirect(url_for('login'))
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     config = load_config()
     if not config.get('admin_password_hash'):
         return redirect(url_for('setup_password'))
+
+    # Brute-force lockout check
+    locked_until_str = config.get('login_locked_until')
+    if locked_until_str:
+        locked_until = datetime.fromisoformat(locked_until_str)
+        if datetime.now() < locked_until:
+            remaining = int((locked_until - datetime.now()).total_seconds() / 60) + 1
+            flash(f'חשבון נעול עקב ניסיונות כושלים. נסה שוב בעוד {remaining} דקות.', 'error')
+            return render_template('login.html')
+        else:
+            config['login_locked_until'] = None
+            config['login_attempts'] = 0
+            save_config(config)
+
     if request.method == 'POST':
         password = request.form.get('password', '')
         remember = request.form.get('remember') == 'on'
         if check_password_hash(config['admin_password_hash'], password):
+            config['login_attempts'] = 0
+            config['login_locked_until'] = None
+            save_config(config)
             session['logged_in'] = True
+            session['login_ip'] = _get_client_ip()
             if remember:
                 session.permanent = True
             return redirect(url_for('review_page'))
-        flash('סיסמה שגויה', 'error')
+        # Failed attempt
+        attempts = config.get('login_attempts', 0) + 1
+        config['login_attempts'] = attempts
+        if attempts >= 10:
+            config['login_locked_until'] = (datetime.now() + timedelta(minutes=15)).isoformat()
+            config['login_attempts'] = 0
+            save_config(config)
+            flash('יותר מדי ניסיונות כושלים. החשבון נעול למשך 15 דקות.', 'error')
+        else:
+            save_config(config)
+            flash(f'סיסמה שגויה ({attempts}/10)', 'error')
     return render_template('login.html')
 
 @app.route('/logout')
@@ -92,6 +150,7 @@ def setup_password():
             config['admin_password_hash'] = generate_password_hash(password)
             save_config(config)
             session['logged_in'] = True
+            session['login_ip'] = _get_client_ip()
             session.permanent = True
             flash('✅ סיסמה נקבעה בהצלחה', 'success')
             return redirect(url_for('review_page'))
