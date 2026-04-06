@@ -39,10 +39,20 @@
                         </div>
                         <div class="mb-3">
                             <label class="form-label">Access Token</label>
-                            <input type="password" name="facebook_access_token" class="form-control" 
+                            <input type="password" name="facebook_access_token" class="form-control"
                                    placeholder="{% if config.facebook_access_token_set %}מפתח מוגדר ✓ (השאר ריק לשמור){% else %}הזן Access Token{% endif %}">
                             {% if config.facebook_access_token_set %}
                             <small class="text-success"><i class="bi bi-check-circle"></i> מוגדר</small>
+                            {% endif %}
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">App Secret <small class="text-muted">(לבדיקת תפוגת Token)</small></label>
+                            <input type="password" name="facebook_app_secret" class="form-control"
+                                   placeholder="{% if config.facebook_app_secret_set %}מפתח מוגדר ✓ (השאר ריק לשמור){% else %}הזן App Secret (אופציונלי){% endif %}">
+                            {% if config.facebook_app_secret_set %}
+                            <small class="text-success"><i class="bi bi-check-circle"></i> מוגדר — בדיקת תפוגה פעילה</small>
+                            {% else %}
+                            <small class="text-muted">ללא App Secret, רק תקינות הטוקן נבדקת (לא תאריך תפוגה)</small>
                             {% endif %}
                         </div>
                     </div>

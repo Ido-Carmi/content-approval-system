@@ -102,6 +102,21 @@ class Database:
                 last_retry TEXT
             )
         ''')
+
+        # Dead-letter queue: comments that exceeded max retries
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS failed_comments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                comment_id TEXT UNIQUE NOT NULL,
+                post_id TEXT NOT NULL,
+                comment_text TEXT NOT NULL,
+                author_name TEXT,
+                retry_count INTEGER DEFAULT 0,
+                error_reason TEXT,
+                failed_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                comment_data TEXT NOT NULL
+            )
+        ''')
         
         # Post tracking for sliding window monitoring
         cursor.execute('''
@@ -927,13 +942,38 @@ class Database:
             return False
     
     def get_queued_comments(self) -> List[Dict]:
-        """Get all queued comments for retry"""
+        """Get all queued comments for retry. Auto-promotes exhausted retries to failed_comments."""
         import json
         conn = self.get_connection()
         cursor = conn.cursor()
-        
+
+        # Promote exhausted retries to dead-letter queue
+        cursor.execute('SELECT * FROM comment_queue WHERE retry_count >= 5')
+        exhausted = cursor.fetchall()
+        for row in exhausted:
+            try:
+                data = json.loads(row['comment_data'])
+                cursor.execute('''
+                    INSERT OR IGNORE INTO failed_comments
+                    (comment_id, post_id, comment_text, author_name, retry_count, error_reason, comment_data)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    row['comment_id'],
+                    row['post_id'],
+                    data.get('comment_text', ''),
+                    data.get('author_name', ''),
+                    row['retry_count'],
+                    'Exceeded 5 retries',
+                    row['comment_data']
+                ))
+            except Exception:
+                pass
+        if exhausted:
+            cursor.execute('DELETE FROM comment_queue WHERE retry_count >= 5')
+        conn.commit()
+
         cursor.execute('''
-            SELECT * FROM comment_queue 
+            SELECT * FROM comment_queue
             WHERE retry_count < 5
             ORDER BY queued_at ASC
         ''')
@@ -976,6 +1016,49 @@ class Database:
         conn.close()
         return success
     
+    # Dead-letter queue methods
+    def get_failed_comments(self) -> List[Dict]:
+        """Get all comments in the dead-letter queue."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM failed_comments ORDER BY failed_at DESC')
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def requeue_failed_comment(self, comment_id: str) -> bool:
+        """Move a failed comment back to comment_queue for retry."""
+        import json
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM failed_comments WHERE comment_id = ?', (comment_id,))
+        row = cursor.fetchone()
+        if not row:
+            conn.close()
+            return False
+        try:
+            cursor.execute('''
+                INSERT OR REPLACE INTO comment_queue (comment_id, post_id, comment_data, retry_count)
+                VALUES (?, ?, ?, 0)
+            ''', (row['comment_id'], row['post_id'], row['comment_data']))
+            cursor.execute('DELETE FROM failed_comments WHERE comment_id = ?', (comment_id,))
+            conn.commit()
+            return True
+        except Exception:
+            return False
+        finally:
+            conn.close()
+
+    def dismiss_failed_comment(self, comment_id: str) -> bool:
+        """Remove a comment from the dead-letter queue without retrying."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM failed_comments WHERE comment_id = ?', (comment_id,))
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return success
+
     # Post tracking methods
     def track_post(self, post_id: str, post_number: int, published_at: str) -> bool:
         """Add post tracking (only if not exists - preserves last_fetch_time)"""

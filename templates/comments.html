@@ -151,7 +151,68 @@
 }
 </style>
 
-<!-- Stats Cards -->
+<!-- Dead-letter queue alert -->
+{% if failed_comments %}
+<div class="card mb-3 border-danger">
+    <div class="card-header bg-danger text-white d-flex justify-content-between align-items-center"
+         data-bs-toggle="collapse" data-bs-target="#failedCommentsPanel" style="cursor:pointer;">
+        <span>
+            <i class="bi bi-exclamation-triangle-fill"></i>
+            <strong>{{ failed_comments|length }} תגובות נכשלו לעיבוד</strong>
+            <small class="ms-2 opacity-75">לחץ להרחבה</small>
+        </span>
+        <i class="bi bi-chevron-down"></i>
+    </div>
+    <div id="failedCommentsPanel" class="collapse">
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-sm mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>תגובה</th>
+                            <th>מחבר</th>
+                            <th>ניסיונות</th>
+                            <th>שגיאה</th>
+                            <th>תאריך</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for fc in failed_comments %}
+                        <tr id="failed-row-{{ fc.comment_id }}">
+                            <td style="max-width:300px;">
+                                <small>{{ fc.comment_text[:120] }}{% if fc.comment_text|length > 120 %}…{% endif %}</small>
+                            </td>
+                            <td><small>{{ fc.author_name or '—' }}</small></td>
+                            <td><span class="badge bg-warning text-dark">{{ fc.retry_count }}</span></td>
+                            <td><small class="text-muted">{{ fc.error_reason or '—' }}</small></td>
+                            <td><small class="text-muted">{{ fc.failed_at[:16] if fc.failed_at else '—' }}</small></td>
+                            <td class="text-nowrap">
+                                <button class="btn btn-sm btn-outline-primary me-1"
+                                        hx-post="{{ url_for('retry_failed_comment', comment_id=fc.comment_id) }}"
+                                        hx-target="#failed-row-{{ fc.comment_id }}"
+                                        hx-swap="outerHTML"
+                                        title="החזר לתור הניסיון">
+                                    <i class="bi bi-arrow-clockwise"></i>
+                                </button>
+                                <button class="btn btn-sm btn-outline-secondary"
+                                        hx-post="{{ url_for('dismiss_failed_comment', comment_id=fc.comment_id) }}"
+                                        hx-target="#failed-row-{{ fc.comment_id }}"
+                                        hx-swap="outerHTML"
+                                        title="בטל">
+                                    <i class="bi bi-x"></i>
+                                </button>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
 <!-- Filter Tabs + Scan Button -->
 <div class="card mb-3">
     <div class="card-body">
