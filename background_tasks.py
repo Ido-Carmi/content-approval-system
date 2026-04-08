@@ -94,6 +94,12 @@ def midnight_sync_job():
         except Exception as e:
             print(f"❌ Cleanup error: {e}")
 
+        # 4b. Cleanup old post_tracking entries (>30 days inactive)
+        try:
+            extensions.db.cleanup_old_post_tracking(days=30)
+        except Exception as e:
+            print(f"❌ post_tracking cleanup error: {e}")
+
         # 5. Check and send notifications
         try:
             print("📧 Checking notifications...")
@@ -395,10 +401,12 @@ def comments_scan_job():
 
 
 def cleanup_old_comments_job():
-    """Delete comments older than 7 days."""
+    """Delete comments older than comment_retention_days."""
     try:
-        print(f"\n{'='*60}\n🧹 Cleaning up old comments (>7 days)\n{'='*60}")
-        deleted = extensions.db.cleanup_old_comments(days=7)
+        config = load_config()
+        days = config.get('comment_retention_days', 7)
+        print(f"\n{'='*60}\n🧹 Cleaning up old comments (>{days} days)\n{'='*60}")
+        deleted = extensions.db.cleanup_old_comments(days=days)
         print(f"{'✅' if deleted > 0 else 'ℹ️ '} Cleaned up {deleted} old comments")
     except Exception as e:
         print(f"❌ Cleanup error: {e}")

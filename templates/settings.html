@@ -185,10 +185,17 @@
                         <hr>
                         <div class="mb-3">
                             <label class="form-label">סף התראת תגובות</label>
-                            <input type="number" name="comment_notification_threshold" class="form-control" 
+                            <input type="number" name="comment_notification_threshold" class="form-control"
                                    value="{{config.comment_notification_threshold or 0}}"
                                    min="0">
                             <small class="text-muted">שלח אימייל כשתגובות ממתינות עוברות מספר זה (0 = כבוי)</small>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">שמור תגובות (ימים)</label>
+                            <input type="number" name="comment_retention_days" class="form-control"
+                                   value="{{config.comment_retention_days or 7}}"
+                                   min="1" max="90">
+                            <small class="text-muted">כמה ימים להציג ולשמור תגובות בדף הניטור (ברירת מחדל: 7)</small>
                         </div>
                         <hr>
                         <div class="mb-3">

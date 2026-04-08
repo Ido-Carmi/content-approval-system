@@ -950,6 +950,7 @@ class Database:
         # Promote exhausted retries to dead-letter queue
         cursor.execute('SELECT * FROM comment_queue WHERE retry_count >= 5')
         exhausted = cursor.fetchall()
+        promoted_ids = []
         for row in exhausted:
             try:
                 data = json.loads(row['comment_data'])
@@ -966,10 +967,12 @@ class Database:
                     'Exceeded 5 retries',
                     row['comment_data']
                 ))
-            except Exception:
-                pass
-        if exhausted:
-            cursor.execute('DELETE FROM comment_queue WHERE retry_count >= 5')
+                promoted_ids.append(row['comment_id'])
+            except Exception as e:
+                print(f"⚠️  Failed to promote comment {row['comment_id']} to dead-letter: {e}")
+        # Only delete from retry queue entries that were successfully promoted
+        for cid in promoted_ids:
+            cursor.execute('DELETE FROM comment_queue WHERE comment_id = ?', (cid,))
         conn.commit()
 
         cursor.execute('''
@@ -1204,26 +1207,43 @@ class Database:
         
         return success
     
-    def cleanup_old_dismissed_comments(self) -> int:
-        """Remove dismissed comments older than 2 hours"""
+    def cleanup_old_post_tracking(self, days: int = 30) -> int:
+        """Remove post_tracking entries older than N days with no recent comment activity."""
         conn = self.get_connection()
         cursor = conn.cursor()
-        
-        two_hours_ago = (datetime.now() - timedelta(hours=2)).isoformat()
-        
+        cutoff = (datetime.now() - timedelta(days=days)).isoformat()
         cursor.execute('''
-            DELETE FROM hidden_comments 
-            WHERE dismissed_at IS NOT NULL 
-            AND dismissed_at < ?
-        ''', (two_hours_ago,))
-        
+            DELETE FROM post_tracking
+            WHERE published_at < ?
+              AND (last_comment_at IS NULL OR last_comment_at < ?)
+        ''', (cutoff, cutoff))
         deleted = cursor.rowcount
         conn.commit()
         conn.close()
-        
         if deleted > 0:
-            print(f"🗑️  Cleaned up {deleted} dismissed comments older than 2 hours")
+            print(f"🗑️  Cleaned up {deleted} old post_tracking entries (>{days} days inactive)")
+        return deleted
+
+    def cleanup_old_dismissed_comments(self, days: int = 7) -> int:
+        """Remove dismissed comments older than N days (should match comment retention window)."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
         
+        cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+
+        cursor.execute('''
+            DELETE FROM hidden_comments
+            WHERE dismissed_at IS NOT NULL
+              AND dismissed_at < ?
+        ''', (cutoff,))
+
+        deleted = cursor.rowcount
+        conn.commit()
+        conn.close()
+
+        if deleted > 0:
+            print(f"🗑️  Cleaned up {deleted} dismissed comments older than {days} days")
+
         return deleted
     
     def get_comments_grouped_by_post(self, filter_status: Optional[str] = None, days: int = 7) -> Dict:

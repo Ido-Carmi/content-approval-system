@@ -211,7 +211,8 @@ def review_page():
 
 @app.route('/approve/<int:entry_id>', methods=['POST'])
 def approve_entry(entry_id):
-    edited_text = request.form.get('text', '') or request.get_json().get('text', '')
+    json_body = request.get_json(silent=True) or {}
+    edited_text = request.form.get('text', '') or json_body.get('text', '')
     extensions.db.approve_entry(entry_id, edited_text, 'admin')
 
     conn = extensions.db.get_connection()
@@ -335,7 +336,7 @@ def scheduled_content():
             print(f"   Deleted post numbers: {deleted_numbers}")
             for entry in entries_to_remove:
                 cursor.execute('DELETE FROM entries WHERE id = ?', (entry['id'],))
-            cursor.execute(f'UPDATE post_numbers SET current_number = current_number - {len(entries_to_remove)} WHERE id = 1')
+            cursor.execute('UPDATE post_numbers SET current_number = current_number - ? WHERE id = 1', (len(entries_to_remove),))
             conn.commit()
             conn.close()
             db_entries = extensions.db.get_scheduled_entries()
@@ -812,6 +813,7 @@ def settings_page():
             'daily_api_limit':                int(request.form.get('daily_api_limit', 1000)),
             'batch_size':                     int(request.form.get('batch_size', 50)),
             'comment_notification_threshold': int(request.form.get('comment_notification_threshold', 0)),
+            'comment_retention_days':         int(request.form.get('comment_retention_days', 7)),
             'webhook_verify_token':           request.form.get('webhook_verify_token', ''),
             'webhook_batch_size':             int(request.form.get('webhook_batch_size', 10)),
             'webhook_batch_timeout_minutes':  int(request.form.get('webhook_batch_timeout_minutes', 5)),

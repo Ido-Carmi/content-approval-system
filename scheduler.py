@@ -275,11 +275,6 @@ class Scheduler:
                 'scheduled_time': scheduled_time.strftime("%d/%m/%Y %H:%M"),
                 'facebook_post_id': result['id']
             }
-        
-        return {
-            'scheduled_time': scheduled_time.strftime("%d/%m/%Y %H:%M"),
-            'facebook_post_id': result['id']
-        }
     
     def reschedule_post(self, entry_id: int, new_time: datetime) -> bool:
         """

@@ -8,18 +8,12 @@ from typing import List, Dict
 import time
 
 class CommentsScanner:
-    def __init__(self, db, facebook_handler, ai_filter):
-        """
-        Initialize Comments Scanner
-        
-        Args:
-            db: Database instance
-            facebook_handler: FacebookCommentsHandler instance
-            ai_filter: CommentFilter instance
-        """
+    def __init__(self, db, facebook_handler, ai_filter, retention_days: int = 7, lookback_hours: int = 48):
         self.db = db
         self.facebook = facebook_handler
         self.ai_filter = ai_filter
+        self.retention_days = retention_days
+        self.lookback_hours = lookback_hours
     
     def scan_and_filter_comments(self) -> Dict:
         """
@@ -221,10 +215,11 @@ class CommentsScanner:
         else:
             print(f"   ⚠️  Facebook returned 0 comments")
         
-        # Client-side time filter: discard comments older than 48 hours.
-        # No hourly scan runs — only startup + manual. 48h catches comments
-        # the webhook missed during downtime. DB deduplicates by comment_id.
-        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=48)
+        # Client-side time filter. lookback_hours is 48h for normal scans,
+        # longer for deep scans. DB deduplicates by comment_id so no risk of
+        # re-showing dismissed comments (as long as dismissed records are kept
+        # for at least retention_days days).
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=self.lookback_hours)
         before_time_filter = len(comments)
         
         filtered_comments = []
@@ -250,8 +245,9 @@ class CommentsScanner:
             print(f"   [Time Filter] Removed {time_filtered_out} comments older than 1.5 hours")
         
         
-        # Clean up old dismissed comments (older than 2 hours)
-        self.db.cleanup_old_dismissed_comments()
+        # Clean up dismissed comments older than the retention window
+        retention_days = self.retention_days
+        self.db.cleanup_old_dismissed_comments(days=retention_days)
         
         # Filter out already-dismissed comments
         dismissed_ids = set()
@@ -325,7 +321,6 @@ class CommentsScanner:
         
         # Last resort: fetch from Facebook
         try:
-            response = self.facebook.base_url
             import requests
             url = f"https://graph.facebook.com/v18.0/{post_id}"
             params = {
@@ -442,44 +437,34 @@ class CommentsScanner:
         return hidden_count
 
 
-def create_hourly_job(db, config):
-    """
-    Create and return the hourly comment scanning job
-    
-    Args:
-        db: Database instance
-        config: Configuration dict with API keys
-    
-    Returns:
-        Function to run hourly
-    """
+def create_hourly_job(db, config, lookback_hours: int = 48):
+    """Create and return a comment scanning job."""
     from facebook_comments_handler import FacebookCommentsHandler
     from ai_comment_filter import CommentFilter
-    
-    # Initialize handlers
+
     facebook = FacebookCommentsHandler(
         access_token=config.get('facebook_access_token'),
         page_id=config.get('facebook_page_id')
     )
-    
     ai_filter = CommentFilter(
         api_key=config.get('openai_api_key'),
-        db=db  # Pass database for few-shot learning
+        db=db
     )
-    
+    retention_days = config.get('comment_retention_days', 7)
     scanner = CommentsScanner(
         db=db,
         facebook_handler=facebook,
-        ai_filter=ai_filter
+        ai_filter=ai_filter,
+        retention_days=retention_days,
+        lookback_hours=lookback_hours,
     )
-    
+
     def job():
-        """Hourly job function"""
         try:
             scanner.scan_and_filter_comments()
         except Exception as e:
-            print(f"❌ Hourly comment scan error: {e}")
+            print(f"❌ Comment scan error: {e}")
             import traceback
             traceback.print_exc()
-    
+
     return job

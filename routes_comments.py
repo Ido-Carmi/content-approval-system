@@ -50,9 +50,9 @@ def _get_comment(comment_id):
     conn = extensions.db.get_connection()
     cursor = conn.cursor()
     cursor.execute('SELECT * FROM hidden_comments WHERE comment_id = ?', (comment_id,))
-    comment = cursor.fetchone()
+    row = cursor.fetchone()
     conn.close()
-    return comment
+    return dict(row) if row else None
 
 
 def _run_async(fn):
@@ -250,10 +250,12 @@ def register(app):
     @app.route('/comments')
     def comments_page():
         filter_status = request.args.get('filter', 'all')
+        config = load_config()
+        retention_days = config.get('comment_retention_days', 7)
         try:
             grouped_comments = extensions.db.get_comments_grouped_by_post(
                 filter_status=filter_status if filter_status != 'all' else None,
-                days=7
+                days=retention_days
             )
         except Exception as e:
             print(f"❌ comments_page error: {e}")
@@ -261,7 +263,7 @@ def register(app):
             grouped_comments = {}
 
         try:
-            stats = extensions.db.get_comments_stats(days=7)
+            stats = extensions.db.get_comments_stats(days=retention_days)
         except Exception:
             stats = {'total': 0, 'hidden': 0, 'shown': 0}
 
@@ -274,7 +276,7 @@ def register(app):
                                grouped_comments=grouped_comments,
                                stats=stats,
                                filter_status=filter_status,
-                               last_scan=load_config().get('last_comment_scan', ''),
+                               last_scan=config.get('last_comment_scan', ''),
                                failed_comments=failed_comments)
 
     # ---- Manual scan ----
@@ -322,6 +324,48 @@ def register(app):
     @app.route('/scan-status', methods=['GET'])
     def scan_status():
         return jsonify({'scanning': extensions.scan_in_progress})
+
+    # ---- Deep scan ----
+
+    @app.route('/deep-scan-comments', methods=['POST'])
+    def deep_scan_comments():
+        """Scan back N days instead of the default 48h window."""
+        if extensions.scan_in_progress:
+            return jsonify({'error': 'סריקה כבר רצה'}), 409
+
+        extensions.scan_in_progress = True
+
+        def async_deep_scan():
+            try:
+                config = load_config()
+                if not config.get('facebook_access_token'):
+                    print("⚠️  Missing Facebook access token")
+                    return
+
+                retention_days = config.get('comment_retention_days', 7)
+                lookback_hours = retention_days * 24
+                print(f"\n{'='*60}\n🔍 DEEP SCAN: looking back {retention_days} days ({lookback_hours}h)\n{'='*60}")
+
+                from comments_scanner import create_hourly_job
+                job = create_hourly_job(extensions.db, config, lookback_hours=lookback_hours)
+                job()
+
+                config = load_config()
+                israel_tz = pytz.timezone('Asia/Jerusalem')
+                config['last_comment_scan'] = datetime.now(israel_tz).strftime('%Y-%m-%d %H:%M:%S')
+                save_config(config)
+
+                check_comment_notification()
+                print(f"✅ Deep scan completed\n{'='*60}")
+
+            except Exception as e:
+                print(f"❌ Deep scan error: {e}")
+                traceback.print_exc()
+            finally:
+                extensions.scan_in_progress = False
+
+        threading.Thread(target=async_deep_scan, daemon=True).start()
+        return '', 200
 
     # ---- Webhook ----
 
@@ -425,33 +469,35 @@ def register(app):
                 if not comment:
                     return
 
+                unhide_failed = False
                 if comment['status'] == 'hidden':
-                    success = fb.unhide_comment(comment_id)
-                else:
-                    success = True
+                    if fb.unhide_comment(comment_id):
+                        extensions.db.update_comment_status(comment_id, 'shown')
+                    else:
+                        unhide_failed = True
+                        print(f"⚠️  unhide failed for {comment_id} — comment stays hidden on Facebook")
 
-                if success:
-                    ai_said = comment['filter_reason']
-                    extensions.db.save_training_data(
-                        comment_id=comment_id,
-                        post_id=comment.get('post_id', ''),
-                        comment_text=comment['comment_text'],
-                        admin_label='ok',
-                        ai_prediction=ai_said,
-                        ai_explanation=comment.get('ai_explanation', '')
-                    )
-                    if ai_said == 'clean':
-                        extensions.db.dismiss_comment(comment_id)
-                        print(f"✅ Marked as OK (already clean): {comment_id}")
-                        return
+                ai_said = comment['filter_reason']
+                extensions.db.save_training_data(
+                    comment_id=comment_id,
+                    post_id=comment.get('post_id', ''),
+                    comment_text=comment['comment_text'],
+                    admin_label='ok',
+                    ai_prediction=ai_said,
+                    ai_explanation=comment.get('ai_explanation', '')
+                )
+                if ai_said and ai_said != 'clean':
                     extensions.db.add_ai_example(
                         category=f'false_positive_{ai_said}',
                         comment_text=comment['comment_text'],
                         original_ai_prediction=ai_said,
                         explanation="False positive - actually acceptable"
                     )
-                    extensions.db.dismiss_comment(comment_id)
-                    print(f"✅ Marked as OK and unhidden: {comment_id}")
+                extensions.db.dismiss_comment(comment_id)
+                if unhide_failed:
+                    print(f"⚠️  Dismissed from review but NOT shown on Facebook: {comment_id}")
+                else:
+                    print(f"✅ Marked as OK and shown on Facebook: {comment_id}")
 
             except Exception as e:
                 print(f"❌ Error marking OK: {e}")

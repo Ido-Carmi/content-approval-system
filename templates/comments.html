@@ -231,11 +231,18 @@
             </a>
         </div>
         
-        <button class="btn btn-primary float-start" 
+        <button class="btn btn-primary float-start"
                 id="scan-btn"
                 onclick="startScan()">
-            <i class="bi bi-arrow-clockwise" id="scan-icon"></i> 
+            <i class="bi bi-arrow-clockwise" id="scan-icon"></i>
             <span id="scan-text">סרוק תגובות חדשות</span>
+        </button>
+        <button class="btn btn-outline-secondary float-start ms-2"
+                id="deep-scan-btn"
+                onclick="startDeepScan()"
+                title="סריקה מלאה אחורה עד מספר הימים שהוגדר בהגדרות">
+            <i class="bi bi-search" id="deep-scan-icon"></i>
+            <span id="deep-scan-text">סריקה עמוקה</span>
         </button>
         
         {% if grouped_comments %}
@@ -345,13 +352,39 @@ function checkScanStatus() {
             }
         });
 }
+
+function startDeepScan() {
+    const btn = document.getElementById('deep-scan-btn');
+    const regularBtn = document.getElementById('scan-btn');
+    btn.disabled = true;
+    regularBtn.disabled = true;
+    document.getElementById('deep-scan-icon').className = 'bi bi-hourglass-split';
+    document.getElementById('deep-scan-text').textContent = 'סורק...';
+    document.getElementById('scan-status-inline').style.display = 'block';
+    document.getElementById('scan-message').textContent = 'סריקה עמוקה...';
+    document.getElementById('scan-detail').textContent = 'מחפש תגובות מהימים האחרונים שפוספסו';
+
+    fetch('{{ url_for("deep_scan_comments") }}', { method: 'POST' })
+        .then(() => {
+            scanStartTime = Date.now();
+            scanInterval = setInterval(checkScanStatus, 1000);
+        })
+        .catch(err => {
+            console.error('Deep scan error:', err);
+            btn.disabled = false;
+            regularBtn.disabled = false;
+            document.getElementById('deep-scan-icon').className = 'bi bi-search';
+            document.getElementById('deep-scan-text').textContent = 'סריקה עמוקה';
+            document.getElementById('scan-status-inline').style.display = 'none';
+        });
+}
 </script>
 
 <!-- No Comments -->
 {% if not grouped_comments %}
 <div class="alert alert-info text-center py-5">
     <h4><i class="bi bi-info-circle"></i> אין תגובות להצגה</h4>
-    <p class="mb-0">לא נמצאו תגובות מ-7 הימים האחרונים.</p>
+    <p class="mb-0">לא נמצאו תגובות בטווח הזמן המוגדר.</p>
 </div>
 
 <!-- Comments Grouped by Post -->
