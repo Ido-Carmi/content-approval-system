@@ -221,10 +221,10 @@ class CommentsScanner:
         else:
             print(f"   ⚠️  Facebook returned 0 comments")
         
-        # Client-side time filter: discard comments older than 1.5 hours
-        # Facebook's 'since' parameter is unreliable, so we filter here
-        # Use UTC because Facebook returns UTC timestamps (+0000)
-        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=1.5)
+        # Client-side time filter: discard comments older than 48 hours.
+        # No hourly scan runs — only startup + manual. 48h catches comments
+        # the webhook missed during downtime. DB deduplicates by comment_id.
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=48)
         before_time_filter = len(comments)
         
         filtered_comments = []

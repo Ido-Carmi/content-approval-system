@@ -15,55 +15,50 @@ class FacebookCommentsHandler:
         self.page_id = page_id
         self.base_url = "https://graph.facebook.com/v18.0"
     
-    def fetch_post_comments(self, post_id: str, limit: int = 100) -> List[Dict]:
+    def fetch_post_comments(self, post_id: str, limit: int = 100, max_pages: int = 5) -> List[Dict]:
         """
-        Fetch comments from a specific post
-        
+        Fetch comments from a specific post, paginating up to max_pages.
+
         Note: Facebook's 'since' parameter is unreliable and ignored.
         Client-side time filtering is done in comments_scanner.py instead.
-        
-        Args:
-            post_id: Facebook post ID
-            limit: Max comments to fetch
-        
-        Returns:
-            List of comment dictionaries
+        Hidden comments are included so the admin can see what Facebook hid.
         """
         url = f"{self.base_url}/{post_id}/comments"
-        
         params = {
             'access_token': self.access_token,
             'fields': 'id,message,from,created_time,is_hidden',
-            'limit': limit
+            'limit': limit,
+            'filter': 'stream',  # includes hidden comments
         }
-        
+
+        formatted_comments = []
+        page = 0
+
         try:
-            response = requests.get(url, params=params, timeout=30)
-            response.raise_for_status()
-            
-            data = response.json()
-            comments = data.get('data', [])
-            
-            # Format comments
-            formatted_comments = []
-            for comment in comments:
-                # Skip already hidden comments on Facebook
-                if comment.get('is_hidden', False):
-                    continue
-                
-                formatted_comments.append({
-                    'comment_id': comment['id'],
-                    'post_id': post_id,
-                    'comment_text': comment.get('message', ''),
-                    'author_name': comment.get('from', {}).get('name', 'Unknown'),
-                    'author_id': comment.get('from', {}).get('id', ''),
-                    'created_at': comment.get('created_time', ''),
-                    'is_hidden': comment.get('is_hidden', False)
-                })
-            
-            print(f"✅ Fetched {len(formatted_comments)} new comments from post {post_id}")
+            while url and page < max_pages:
+                response = requests.get(url, params=params, timeout=30)
+                response.raise_for_status()
+                data = response.json()
+
+                for comment in data.get('data', []):
+                    formatted_comments.append({
+                        'comment_id': comment['id'],
+                        'post_id': post_id,
+                        'comment_text': comment.get('message', ''),
+                        'author_name': comment.get('from', {}).get('name', 'Unknown'),
+                        'author_id': comment.get('from', {}).get('id', ''),
+                        'created_at': comment.get('created_time', ''),
+                        'is_hidden': comment.get('is_hidden', False),
+                    })
+
+                # Follow pagination cursor
+                url = data.get('paging', {}).get('next')
+                params = {}  # next URL already contains all params
+                page += 1
+
+            print(f"✅ Fetched {len(formatted_comments)} comments from post {post_id} ({page} page(s))")
             return formatted_comments
-            
+
         except requests.exceptions.RequestException as e:
             print(f"❌ Error fetching comments from post {post_id}: {e}")
             return []
