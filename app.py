@@ -812,6 +812,7 @@ def settings_page():
             'comments_filter_enabled':        request.form.get('comments_filter_enabled') == 'on',
             'daily_api_limit':                int(request.form.get('daily_api_limit', 1000)),
             'batch_size':                     int(request.form.get('batch_size', 50)),
+            'comment_flagged_notification_threshold': int(request.form.get('comment_flagged_notification_threshold', 0)),
             'comment_notification_threshold': int(request.form.get('comment_notification_threshold', 0)),
             'comment_retention_days':         int(request.form.get('comment_retention_days', 7)),
             'webhook_verify_token':           request.form.get('webhook_verify_token', ''),

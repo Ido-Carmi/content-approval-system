@@ -107,6 +107,22 @@ def midnight_sync_job():
         except Exception as e:
             print(f"❌ Notification error: {e}")
 
+        # 6. Nightly comment scan (48h lookback — catches anything webhooks missed)
+        try:
+            config = load_config()
+            if config.get('comments_filter_enabled') and config.get('facebook_access_token') and config.get('openai_api_key'):
+                print("🔍 Nightly comment scan (48h safety net)...")
+                from comments_scanner import create_hourly_job
+                job = create_hourly_job(extensions.db, config)
+                job()
+                config = load_config()
+                israel_tz = pytz.timezone('Asia/Jerusalem')
+                config['last_comment_scan'] = datetime.now(israel_tz).strftime('%Y-%m-%d %H:%M:%S')
+                save_config(config)
+                print("✅ Nightly comment scan complete")
+        except Exception as e:
+            print(f"❌ Nightly comment scan error: {e}")
+
         print("=" * 80)
         print(f"✅ MIDNIGHT SYNC COMPLETE: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print("=" * 80)
@@ -317,8 +333,10 @@ def send_notification_email(subject, body, recipients):
 
 def check_comment_notification():
     """
-    Send email when unreviewed comment count exceeds threshold.
-    Sends once per spike — resets when count drops back below threshold.
+    Send email when comment counts exceed configured thresholds.
+    Two independent thresholds — each sends once per spike and resets when count drops.
+      - comment_flagged_notification_threshold: flagged (hidden) comments only
+      - comment_notification_threshold:         all undismissed comments (flagged + clean)
     """
     try:
         config = load_config()
@@ -326,20 +344,54 @@ def check_comment_notification():
         if not config.get('notifications_enabled', False):
             return
 
-        threshold = config.get('comment_notification_threshold', 0)
-        if threshold <= 0:
+        emails = config.get('notification_emails', [])
+        if not emails:
             return
 
-        count = extensions.db.get_unreviewed_comment_count()
         app_url = config.get('app_url', '')
+        changed = False
 
-        if count >= threshold:
-            if not config.get('comment_notification_sent', False):
-                subject = f"🗨️ {count} תגובות ממתינות לבדיקה"
-                body = f"""<html>
-<body style="font-family: Arial, sans-serif; padding: 20px;">
-    <h2 style="color: #dc3545;">🗨️ תגובות ממתינות לבדיקה</h2>
-    <p>יש <strong>{count} תגובות</strong> שממתינות לבדיקה (סף: {threshold}).</p>
+        # --- Threshold 1: flagged comments only ---
+        flagged_threshold = config.get('comment_flagged_notification_threshold', 0)
+        if flagged_threshold > 0:
+            flagged_count = extensions.db.get_unreviewed_flagged_count()
+            if flagged_count >= flagged_threshold:
+                if not config.get('comment_flagged_notification_sent', False):
+                    subject = f"🚨 {flagged_count} תגובות מסומנות ממתינות לבדיקה"
+                    body = f"""<html>
+<body style="font-family: Arial, sans-serif; padding: 20px; direction: rtl;">
+    <h2 style="color: #dc3545;">🚨 תגובות מסומנות ממתינות לבדיקה</h2>
+    <p>יש <strong>{flagged_count} תגובות מסומנות</strong> (פוליטי / שנאה / ספאם) שממתינות לבדיקה (סף: {flagged_threshold}).</p>
+    <p style="margin-top: 30px;">
+        <a href="{app_url}/comments?filter=hidden"
+           style="background-color: #dc3545; color: white; padding: 12px 24px;
+                  text-decoration: none; border-radius: 5px; display: inline-block;">
+            צפה בתגובות המסומנות
+        </a>
+    </p>
+</body>
+</html>"""
+                    send_notification_email(subject, body, emails)
+                    config['comment_flagged_notification_sent'] = True
+                    changed = True
+                    print(f"📧 Flagged comment notification sent ({flagged_count} >= {flagged_threshold})")
+            else:
+                if config.get('comment_flagged_notification_sent', False):
+                    config['comment_flagged_notification_sent'] = False
+                    changed = True
+                    print(f"✅ Flagged count ({flagged_count}) below threshold ({flagged_threshold}), notification reset")
+
+        # --- Threshold 2: all undismissed comments ---
+        total_threshold = config.get('comment_notification_threshold', 0)
+        if total_threshold > 0:
+            total_count = extensions.db.get_unreviewed_comment_count()
+            if total_count >= total_threshold:
+                if not config.get('comment_notification_sent', False):
+                    subject = f"🗨️ {total_count} תגובות ממתינות לבדיקה"
+                    body = f"""<html>
+<body style="font-family: Arial, sans-serif; padding: 20px; direction: rtl;">
+    <h2 style="color: #fd7e14;">🗨️ תגובות ממתינות לבדיקה</h2>
+    <p>יש <strong>{total_count} תגובות</strong> (כולל תקינות) שממתינות לבדיקה (סף: {total_threshold}).</p>
     <p style="margin-top: 30px;">
         <a href="{app_url}/comments"
            style="background-color: #007bff; color: white; padding: 12px 24px;
@@ -349,15 +401,18 @@ def check_comment_notification():
     </p>
 </body>
 </html>"""
-                send_notification_email(subject, body, config.get('notification_emails', []))
-                config['comment_notification_sent'] = True
-                save_config(config)
-                print(f"📧 Comment notification sent ({count} >= {threshold})")
-        else:
-            if config.get('comment_notification_sent', False):
-                config['comment_notification_sent'] = False
-                save_config(config)
-                print(f"✅ Comment count ({count}) below threshold ({threshold}), notification reset")
+                    send_notification_email(subject, body, emails)
+                    config['comment_notification_sent'] = True
+                    changed = True
+                    print(f"📧 Total comment notification sent ({total_count} >= {total_threshold})")
+            else:
+                if config.get('comment_notification_sent', False):
+                    config['comment_notification_sent'] = False
+                    changed = True
+                    print(f"✅ Total count ({total_count}) below threshold ({total_threshold}), notification reset")
+
+        if changed:
+            save_config(config)
 
     except Exception as e:
         print(f"❌ Comment notification check error: {e}")
@@ -490,8 +545,7 @@ def start_scheduler():
             config = load_config()
             if not config.get('comments_filter_enabled') or not config.get('facebook_access_token'):
                 return
-            last_webhook = config.get('last_webhook_comment_time')
-            print(f"📡 Startup scan: {'since ' + last_webhook if last_webhook else 'last 2 hours'}")
+            print(f"📡 Startup scan: last 48 hours")
             from comments_scanner import create_hourly_job
             job = create_hourly_job(extensions.db, config)
             job()
@@ -515,7 +569,7 @@ def start_scheduler():
 
     print("=" * 80)
     print("✅ Background scheduler started:")
-    print(f"   - Midnight sync at {midnight_local:02d}:00 server time (00:00 Israel)")
+    print(f"   - Midnight sync + nightly comment scan (48h) at {midnight_local:02d}:00 server time (00:00 Israel)")
     print(f"   - Notifications check every 6 hours")
     print(f"   - Old comments cleanup at {cleanup_local:02d}:00 server time (02:00 Israel)")
     print(f"   - Webhook batch processor running (queue-based)")

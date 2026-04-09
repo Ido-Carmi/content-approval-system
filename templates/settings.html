@@ -184,11 +184,18 @@
                         </div>
                         <hr>
                         <div class="mb-3">
-                            <label class="form-label">סף התראת תגובות</label>
+                            <label class="form-label">סף התראה — תגובות מסומנות בלבד</label>
+                            <input type="number" name="comment_flagged_notification_threshold" class="form-control"
+                                   value="{{config.comment_flagged_notification_threshold or 0}}"
+                                   min="0">
+                            <small class="text-muted">שלח אימייל כשתגובות <strong>מסומנות</strong> (פוליטי/שנאה/ספאם) עוברות מספר זה (0 = כבוי)</small>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">סף התראה — כלל התגובות (מסומנות + תקינות)</label>
                             <input type="number" name="comment_notification_threshold" class="form-control"
                                    value="{{config.comment_notification_threshold or 0}}"
                                    min="0">
-                            <small class="text-muted">שלח אימייל כשתגובות ממתינות עוברות מספר זה (0 = כבוי)</small>
+                            <small class="text-muted">שלח אימייל כשסך כל התגובות הממתינות עוברות מספר זה (0 = כבוי)</small>
                         </div>
                         <div class="mb-3">
                             <label class="form-label">שמור תגובות (ימים)</label>

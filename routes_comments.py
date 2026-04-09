@@ -59,6 +59,48 @@ def _run_async(fn):
     threading.Thread(target=fn, daemon=True).start()
 
 
+def _enrich_webhook_comments(comments):
+    """
+    Fill in post_number and post_text for a batch of webhook comments.
+    Looks up post_tracking first, then entries table as fallback.
+    Modifies comments in-place.
+    """
+    post_ids = list({c['post_id'] for c in comments})
+    post_meta = {}  # post_id -> {post_number, post_text}
+
+    conn = extensions.db.get_connection()
+    cursor = conn.cursor()
+    for post_id in post_ids:
+        cursor.execute(
+            'SELECT post_number, post_text FROM post_tracking WHERE post_id = ?', (post_id,)
+        )
+        row = cursor.fetchone()
+        if row and (row['post_number'] or row['post_text']):
+            post_meta[post_id] = {
+                'post_number': row['post_number'],
+                'post_text': (row['post_text'] or '')[:200],
+            }
+        else:
+            # Fallback: entries table
+            cursor.execute(
+                'SELECT post_number, text FROM entries WHERE facebook_post_id = ? LIMIT 1', (post_id,)
+            )
+            row = cursor.fetchone()
+            if row:
+                post_meta[post_id] = {
+                    'post_number': row['post_number'],
+                    'post_text': (row['text'] or '')[:200],
+                }
+    conn.close()
+
+    for c in comments:
+        meta = post_meta.get(c['post_id'], {})
+        if 'post_number' not in c or c.get('post_number') is None:
+            c['post_number'] = meta.get('post_number')
+        if not c.get('post_text'):
+            c['post_text'] = meta.get('post_text', '')
+
+
 def _mark_and_delete_comment(comment_id, label):
     """Shared logic: delete from Facebook + save AI training data + dismiss."""
     def async_action():
@@ -161,11 +203,17 @@ def process_webhook_batch():
 
     print(f"\n🤖 Batch processing {len(batch)} webhook comments with AI...")
 
+    # Enrich each comment with post_number and post_text from DB before saving
+    _enrich_webhook_comments(batch)
+
     try:
         from ai_comment_filter import CommentFilter
         ai_filter = CommentFilter(config['openai_api_key'], extensions.db)
         results = ai_filter.filter_comments_batch(batch, batch_size=30)
         result_map = {r['comment_id']: r for r in results}
+
+        from facebook_comments_handler import FacebookCommentsHandler
+        fb = FacebookCommentsHandler(config['facebook_access_token'], config['facebook_page_id'])
 
         hidden_count = 0
         for cd in batch:
@@ -184,8 +232,6 @@ def process_webhook_batch():
             if cd['should_hide']:
                 hidden_count += 1
                 try:
-                    from facebook_comments_handler import FacebookCommentsHandler
-                    fb = FacebookCommentsHandler(config['facebook_access_token'], config['facebook_page_id'])
                     fb.hide_comment(cd['comment_id'])
                     print(f"   🚫 Hidden: {cd['comment_id'][:30]}... ({cd['filter_reason']})")
                 except Exception as e:
@@ -418,13 +464,21 @@ def register(app):
                     print(f"\n📩 New comment on post {post_id} from {sender_name}")
                     print(f"   Text: {message[:100]}...")
 
+                    # Facebook webhook sends created_time as Unix timestamp (int).
+                    # Convert to ISO so SQLite date comparisons work correctly.
+                    try:
+                        from datetime import timezone as _tz
+                        created_at_iso = datetime.fromtimestamp(int(created_time), tz=_tz.utc).strftime('%Y-%m-%dT%H:%M:%S+00:00')
+                    except (ValueError, TypeError):
+                        created_at_iso = str(created_time)
+
                     comment_data = {
                         'comment_id': comment_id,
                         'post_id': post_id,
                         'comment_text': message,
                         'author_name': sender_name,
                         'author_id': str(sender_id),
-                        'created_at': str(created_time),
+                        'created_at': created_at_iso,
                         'is_hidden': False,
                         'parent_id': parent_id if parent_id != post_id else None
                     }
@@ -596,9 +650,10 @@ def register(app):
     @app.route('/comments/mark-all-ok', methods=['POST'])
     def mark_all_comments_ok():
         filter_status = request.form.get('filter_status')
+        retention_days = load_config().get('comment_retention_days', 7)
         grouped = extensions.db.get_comments_grouped_by_post(
             filter_status=filter_status if filter_status != 'all' else None,
-            days=7
+            days=retention_days
         )
         comment_ids = [c['comment_id'] for p in grouped.values() for c in p['comments']]
         if not comment_ids:
@@ -610,9 +665,10 @@ def register(app):
     @app.route('/comments/post/<post_id>/mark-all-ok', methods=['POST'])
     def mark_post_comments_ok(post_id):
         filter_status = request.form.get('filter_status', 'all')
+        retention_days = load_config().get('comment_retention_days', 7)
         grouped = extensions.db.get_comments_grouped_by_post(
             filter_status=filter_status if filter_status != 'all' else None,
-            days=7
+            days=retention_days
         )
         post_data = grouped.get(post_id)
         if not post_data:

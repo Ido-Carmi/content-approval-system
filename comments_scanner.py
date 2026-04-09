@@ -242,7 +242,7 @@ class CommentsScanner:
         comments = filtered_comments
         time_filtered_out = before_time_filter - len(comments)
         if time_filtered_out > 0:
-            print(f"   [Time Filter] Removed {time_filtered_out} comments older than 1.5 hours")
+            print(f"   [Time Filter] Removed {time_filtered_out} comments older than {self.lookback_hours} hours")
         
         
         # Clean up dismissed comments older than the retention window

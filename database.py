@@ -1228,7 +1228,7 @@ class Database:
         """Remove dismissed comments older than N days (should match comment retention window)."""
         conn = self.get_connection()
         cursor = conn.cursor()
-        
+
         cutoff = (datetime.now() - timedelta(days=days)).isoformat()
 
         cursor.execute('''
@@ -1236,13 +1236,22 @@ class Database:
             WHERE dismissed_at IS NOT NULL
               AND dismissed_at < ?
         ''', (cutoff,))
-
         deleted = cursor.rowcount
+
+        # Also clean up failed_comments older than N days
+        cursor.execute('''
+            DELETE FROM failed_comments
+            WHERE failed_at < ?
+        ''', (cutoff,))
+        failed_deleted = cursor.rowcount
+
         conn.commit()
         conn.close()
 
         if deleted > 0:
             print(f"🗑️  Cleaned up {deleted} dismissed comments older than {days} days")
+        if failed_deleted > 0:
+            print(f"🗑️  Cleaned up {failed_deleted} failed comments older than {days} days")
 
         return deleted
     
@@ -1540,16 +1549,31 @@ class Database:
         return stats
     
     def get_unreviewed_comment_count(self) -> int:
-        """Get count of comments not yet dismissed (needing review)"""
+        """Get count of all comments not yet dismissed (flagged + clean)"""
         conn = self.get_connection()
         cursor = conn.cursor()
-        
+
         cutoff = (datetime.now() - timedelta(days=7)).isoformat()
         cursor.execute('''
-            SELECT COUNT(*) as count FROM hidden_comments 
+            SELECT COUNT(*) as count FROM hidden_comments
             WHERE created_at > ? AND dismissed_at IS NULL
         ''', (cutoff,))
-        
+
+        count = cursor.fetchone()['count']
+        conn.close()
+        return count
+
+    def get_unreviewed_flagged_count(self) -> int:
+        """Get count of flagged (hidden) comments not yet dismissed"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        cutoff = (datetime.now() - timedelta(days=7)).isoformat()
+        cursor.execute('''
+            SELECT COUNT(*) as count FROM hidden_comments
+            WHERE created_at > ? AND dismissed_at IS NULL AND status = 'hidden'
+        ''', (cutoff,))
+
         count = cursor.fetchone()['count']
         conn.close()
         return count
