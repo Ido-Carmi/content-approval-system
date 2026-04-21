@@ -558,6 +558,7 @@ def scheduled_content():
 
 @app.route('/unschedule/<int:entry_id>', methods=['POST'])
 def unschedule_entry(entry_id):
+    from concurrent.futures import ThreadPoolExecutor
     print("=" * 80)
     print(f"UNSCHEDULE ENTRY {entry_id}")
     print("=" * 80)
@@ -572,12 +573,14 @@ def unschedule_entry(entry_id):
         unscheduled_number = unscheduled_entry['post_number']
         unscheduled_time = unscheduled_entry['scheduled_time']
 
+        # Step 1: delete removed post from Facebook
         if extensions.facebook_handler and unscheduled_entry.get('facebook_post_id'):
             try:
                 extensions.facebook_handler.delete_scheduled_post(unscheduled_entry['facebook_post_id'])
             except Exception as e:
                 print(f"ERROR deleting from Facebook: {e}")
 
+        # Step 2: mark entry as pending in DB
         conn = extensions.db.get_connection()
         cursor = conn.cursor()
         cursor.execute('''
@@ -588,34 +591,60 @@ def unschedule_entry(entry_id):
         conn.commit()
         conn.close()
 
+        # Step 3: pre-compute new numbers and times for all following posts.
+        # Times chain: each post slides into the timeslot of the removed post.
         following_entries = sorted(
             [e for e in entries if e.get('post_number', 999) > unscheduled_number],
             key=lambda x: x['post_number']
         )
 
-        previous_time_str = unscheduled_time
         timezone = pytz.timezone('Asia/Jerusalem')
-
+        updates = []
+        prev_time = unscheduled_time
         for entry in following_entries:
-            old_number = entry['post_number']
-            new_number = old_number - 1
-            current_time_str = entry['scheduled_time']
-            new_time_str = previous_time_str
+            updates.append({
+                'entry': entry,
+                'new_number': entry['post_number'] - 1,
+                'new_time_str': prev_time,
+            })
+            prev_time = entry['scheduled_time']
+
+        # Step 4: call Facebook API for all posts IN PARALLEL (max 5 at a time)
+        # to avoid N sequential HTTP calls timing out the request.
+        def fb_update(upd):
+            entry = upd['entry']
             try:
-                new_time_dt = datetime.fromisoformat(new_time_str.replace('+02:00', '').replace('+03:00', ''))
+                new_time_dt = datetime.fromisoformat(
+                    upd['new_time_str'].replace('+02:00', '').replace('+03:00', '')
+                )
                 new_time_dt = timezone.localize(new_time_dt)
-                new_text = f"#{new_number} {entry['text']}"
-                extensions.facebook_handler.update_scheduled_post(entry['facebook_post_id'], new_text, new_time_dt)
-                conn = extensions.db.get_connection()
-                cursor = conn.cursor()
-                cursor.execute('UPDATE entries SET post_number = ?, scheduled_time = ? WHERE id = ?',
-                               (new_number, new_time_str, entry['id']))
-                conn.commit()
-                conn.close()
-                previous_time_str = current_time_str
+                new_text = f"#{upd['new_number']} {entry['text']}"
+                extensions.facebook_handler.update_scheduled_post(
+                    entry['facebook_post_id'], new_text, new_time_dt
+                )
+                return (entry['id'], upd['new_number'], upd['new_time_str'], None)
             except Exception as e:
                 print(f"  ✗ Error shifting post {entry['id']}: {e}")
                 traceback.print_exc()
+                return (entry['id'], upd['new_number'], upd['new_time_str'], str(e))
+
+        if updates and extensions.facebook_handler:
+            with ThreadPoolExecutor(max_workers=5) as pool:
+                results = list(pool.map(fb_update, updates))
+
+            # Step 5: update DB in a single transaction for all succeeded posts
+            conn = extensions.db.get_connection()
+            try:
+                cursor = conn.cursor()
+                for (eid, new_num, new_time, err) in results:
+                    if err is None:
+                        cursor.execute(
+                            'UPDATE entries SET post_number = ?, scheduled_time = ? WHERE id = ?',
+                            (new_num, new_time, eid)
+                        )
+                conn.commit()
+            finally:
+                conn.close()
 
         extensions.db.decrement_post_counter()
         flash('✅ הוחזר להמתנה והפוסטים הבאים הוזזו', 'success')
