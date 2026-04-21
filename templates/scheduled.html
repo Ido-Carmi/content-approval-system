@@ -232,8 +232,8 @@
 <!-- Quick reschedule for today -->
 <div class="d-flex justify-content-center mb-3" id="reschedule-today-wrapper">
     <div class="card" style="width: 100%; max-width: 900px; min-width: 700px;">
-        <div class="card-header bg-secondary text-white d-flex justify-content-between align-items-center"
-             style="cursor:pointer;" data-bs-toggle="collapse" data-bs-target="#reschedule-today-body"
+        <div class="card-header text-white d-flex justify-content-between align-items-center"
+             style="cursor:pointer; background-color:#0d9488;" data-bs-toggle="collapse" data-bs-target="#reschedule-today-body"
              aria-expanded="false" aria-controls="reschedule-today-body">
             <span><i class="bi bi-sliders"></i> פיזור מהיר לפוסטים הבאים</span>
             <i class="bi bi-chevron-down" id="reschedule-chevron"
@@ -603,8 +603,6 @@ function swapPost(id, direction) {
 
 // Reschedule all to canonical dynamic-tier slots (same as midnight algorithm)
 function rescheduleCanonical(count) {
-    if (!confirm(`לפזר מחדש את כל ${count} הפוסטים לפי האלגוריתם האוטומטי?\nהתזמון הנוכחי יוחלף לפי חלונות הזמן הדינמיים.`)) return;
-
     showLoading('מחשב תזמון אוטומטי...', `מפזר ${count} פוסטים לפי האלגוריתם הדינמי`);
 
     fetch('/reschedule_canonical', { method: 'POST' })

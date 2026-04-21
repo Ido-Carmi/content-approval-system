@@ -638,14 +638,73 @@ def unschedule_all():
 
 @app.route('/reschedule_canonical', methods=['POST'])
 def reschedule_canonical():
-    """Redistribute all scheduled posts to canonical dynamic-tier slots (same as the midnight algorithm)."""
+    """Redistribute all scheduled posts to canonical dynamic-tier slots.
+    Safe version: generates only future slots, runs Facebook calls in parallel,
+    uses _fb_reschedule so orphaned entries get re-created instead of lost."""
+    from concurrent.futures import ThreadPoolExecutor
+    from datetime import timedelta as _td
+
     if not extensions.scheduler or not extensions.facebook_handler:
         return jsonify({'error': 'Scheduler not available'}), 500
     try:
         extensions.scheduler.update_dynamic_windows()
-        count = extensions.scheduler.reschedule_all_to_new_windows()
-        print(f"✅ Canonical reschedule: {count} posts redistributed")
-        return jsonify({'ok': True, 'updated': count})
+
+        entries = extensions.db.get_scheduled_entries()   # sorted by scheduled_time ASC
+        if not entries:
+            return jsonify({'ok': True, 'updated': 0})
+
+        n = len(entries)
+        windows  = extensions.scheduler.load_posting_windows()
+        tz       = extensions.scheduler.timezone
+        now      = datetime.now(tz)
+        min_time = now + _td(minutes=30)
+
+        # Build N future slots using the canonical window algorithm
+        slots = []
+        current_date = now.date()
+        while len(slots) < n:
+            if not extensions.scheduler.should_skip_date(current_date):
+                for w in windows:
+                    slot = tz.localize(datetime.combine(current_date, w))
+                    if slot > min_time:
+                        slots.append(slot)
+                        if len(slots) >= n:
+                            break
+            current_date += _td(days=1)
+            if (current_date - now.date()).days > 365:
+                break
+
+        slots = slots[:n]
+
+        def fb_update(args):
+            entry, new_time_dt = args
+            new_text   = f"#{entry['post_number']} {entry['text']}"
+            new_time_s = new_time_dt.strftime('%Y-%m-%d %H:%M:%S')
+            new_fb_id, err = _fb_reschedule(entry, new_text, new_time_dt)
+            return (entry['id'], new_time_s, new_fb_id, err)
+
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            results = list(pool.map(fb_update, zip(entries, slots)))
+
+        conn = extensions.db.get_connection()
+        try:
+            cursor = conn.cursor()
+            for (eid, new_time_s, new_fb_id, err) in results:
+                if new_fb_id:
+                    cursor.execute(
+                        'UPDATE entries SET scheduled_time = ?, facebook_post_id = ? WHERE id = ?',
+                        (new_time_s, new_fb_id, eid)
+                    )
+                elif err:
+                    print(f"  ✗ Canonical reschedule post {eid} failed: {err}")
+            conn.commit()
+        finally:
+            conn.close()
+
+        updated = sum(1 for r in results if r[2])
+        print(f"✅ Canonical reschedule: {updated}/{n} posts redistributed")
+        return jsonify({'ok': True, 'updated': updated})
+
     except Exception as e:
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
