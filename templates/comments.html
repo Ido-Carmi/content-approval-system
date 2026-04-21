@@ -11,12 +11,19 @@
     overflow: visible !important;
 }
 
-.post-sticky-header {
-    position: sticky;
+.post-float-bar {
+    display: none;
+    position: fixed;
     top: 0;
-    z-index: 100;
-    border-radius: 8px 8px 0 0;
-    overflow: hidden;
+    left: 0;
+    right: 0;
+    z-index: 500;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 0.6rem 1.5rem;
+    box-shadow: 0 3px 10px rgba(0,0,0,0.3);
+    align-items: center;
+    justify-content: space-between;
 }
 
 .post-header {
@@ -388,6 +395,16 @@ function startDeepScan() {
 }
 </script>
 
+<!-- Floating sticky bar (shown via JS when post header scrolls out of view) -->
+<div id="post-float-bar" class="post-float-bar">
+    <strong id="float-bar-title">📌 פוסט</strong>
+    <div id="float-bar-context" style="font-size:0.85rem; opacity:0.85; flex:1; margin: 0 1rem; overflow:hidden; white-space:nowrap; text-overflow:ellipsis;"></div>
+    <form method="POST" id="float-bar-form" action="">
+        <input type="hidden" name="filter_status" value="{{ filter_status }}">
+        <button type="submit" class="btn btn-sm btn-light">✓ הכל תקין</button>
+    </form>
+</div>
+
 <!-- No Comments -->
 {% if not grouped_comments %}
 <div class="alert alert-info text-center py-5">
@@ -531,6 +548,58 @@ function startDeepScan() {
 {% endif %}
 
 <script>
+// Floating bar: shows post header when it scrolls out of view
+(function() {
+    const floatBar = document.getElementById('post-float-bar');
+    const floatTitle = document.getElementById('float-bar-title');
+    const floatContext = document.getElementById('float-bar-context');
+    const floatForm = document.getElementById('float-bar-form');
+    if (!floatBar) return;
+
+    // Map postId -> {header el, context text, form action}
+    const postHeaders = {};
+    document.querySelectorAll('.post-card').forEach(card => {
+        const postId = card.dataset.postId;
+        const header = card.querySelector('.post-header');
+        const context = card.querySelector('.post-context');
+        const form = card.querySelector('form[action*="mark_post_comments_ok"]');
+        if (postId && header) {
+            postHeaders[postId] = {
+                header,
+                contextText: context ? context.textContent.trim() : '',
+                action: form ? form.action : ''
+            };
+        }
+    });
+
+    let activePostId = null;
+
+    const observer = new IntersectionObserver(entries => {
+        entries.forEach(entry => {
+            const card = entry.target.closest('.post-card');
+            if (!card) return;
+            const postId = card.dataset.postId;
+            const data = postHeaders[postId];
+            if (!data) return;
+
+            if (!entry.isIntersecting && entry.boundingClientRect.top < 0) {
+                // Header scrolled above viewport — show float bar for this post
+                activePostId = postId;
+                floatTitle.textContent = '📌 ' + data.header.querySelector('strong').textContent.trim();
+                floatContext.textContent = data.contextText;
+                floatForm.action = data.action;
+                floatBar.style.display = 'flex';
+            } else if (entry.isIntersecting && activePostId === postId) {
+                // Header back in view — hide float bar
+                activePostId = null;
+                floatBar.style.display = 'none';
+            }
+        });
+    }, { threshold: 0, rootMargin: '0px 0px 0px 0px' });
+
+    Object.values(postHeaders).forEach(data => observer.observe(data.header));
+})();
+
 // Collapse/expand posts
 function togglePost(postId) {
     var comments = document.getElementById('comments-' + postId);
