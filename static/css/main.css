@@ -1,6 +1,6 @@
 /* Sidebar Styles - Vibrant Blue */
 #wrapper {
-    overflow-x: hidden;
+    overflow-x: clip;
 }
 
 #sidebar-wrapper {
