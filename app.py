@@ -615,14 +615,17 @@ def unschedule_all():
         try:
             cursor = conn.cursor()
             cursor.execute(
-                'UPDATE entries SET status = "pending", post_number = NULL, facebook_post_id = NULL, scheduled_time = NULL WHERE status = "scheduled"'
+                'UPDATE entries SET status = "pending", post_number = NULL, facebook_post_id = NULL, scheduled_time = NULL WHERE status IN ("scheduled", "approved")'
             )
             # Reset counter to max published post_number + 1 so the next approval
             # gets the correct (lower) number, not the old high watermark.
             cursor.execute('SELECT MAX(post_number) as mx FROM entries WHERE post_number IS NOT NULL')
-            max_pub = cursor.fetchone()['mx'] or 0
-            cursor.execute('UPDATE post_numbers SET current_number = ? WHERE id = 1', (max_pub + 1,))
+            row = cursor.fetchone()
+            max_pub = row['mx'] if row and row['mx'] is not None else 0
+            new_counter = max_pub + 1
+            cursor.execute('UPDATE post_numbers SET current_number = ? WHERE id = 1', (new_counter,))
             conn.commit()
+            print(f"  Counter reset: max_published={max_pub}, new_counter={new_counter}")
         finally:
             conn.close()
 
