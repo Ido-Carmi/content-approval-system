@@ -584,21 +584,21 @@ def unschedule_all():
         with ThreadPoolExecutor(max_workers=5) as pool:
             list(pool.map(fb_delete, entries))
 
-        # Step 2: mark all as pending in a single DB transaction
+        # Step 2: mark all as pending and reset counter in a single DB transaction
         conn = extensions.db.get_connection()
         try:
             cursor = conn.cursor()
-            ids = [e['id'] for e in entries]
-            cursor.executemany(
-                'UPDATE entries SET status = ?, post_number = NULL, facebook_post_id = NULL, scheduled_time = NULL WHERE id = ?',
-                [('pending', eid) for eid in ids]
+            cursor.execute(
+                'UPDATE entries SET status = "pending", post_number = NULL, facebook_post_id = NULL, scheduled_time = NULL WHERE status = "scheduled"'
             )
+            # Reset counter to max published post_number + 1 so the next approval
+            # gets the correct (lower) number, not the old high watermark.
+            cursor.execute('SELECT MAX(post_number) as mx FROM entries WHERE post_number IS NOT NULL')
+            max_pub = cursor.fetchone()['mx'] or 0
+            cursor.execute('UPDATE post_numbers SET current_number = ? WHERE id = 1', (max_pub + 1,))
             conn.commit()
         finally:
             conn.close()
-
-        # Step 3: reset post counter to 1 (get_next_post_number will auto-adjust to max published + 1)
-        extensions.db.reset_post_number(1)
 
         count = len(entries)
         print(f"✅ Unscheduled all: {count} posts returned to pending")
@@ -606,6 +606,102 @@ def unschedule_all():
 
     except Exception as e:
         print(f"UNSCHEDULE ALL ERROR: {e}")
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/reschedule_today', methods=['POST'])
+def reschedule_today():
+    """Distribute the next N scheduled posts evenly in a custom time window today."""
+    from concurrent.futures import ThreadPoolExecutor
+    from datetime import timedelta as _td
+
+    data = request.get_json(silent=True) or {}
+    try:
+        start_minutes = int(data['start_minutes'])
+        end_minutes   = int(data['end_minutes'])
+        count         = max(1, min(20, int(data['count'])))
+    except (KeyError, ValueError, TypeError) as e:
+        return jsonify({'error': f'Bad parameters: {e}'}), 400
+
+    if end_minutes <= start_minutes:
+        return jsonify({'error': 'End time must be after start time'}), 400
+
+    try:
+        israel_tz = pytz.timezone('Asia/Jerusalem')
+        now       = datetime.now(israel_tz)
+        today     = now.date()
+
+        def make_dt(minutes):
+            h, m = divmod(minutes, 60)
+            return israel_tz.localize(datetime(today.year, today.month, today.day, h, m))
+
+        start_dt = make_dt(start_minutes)
+        end_dt   = make_dt(end_minutes)
+
+        # Facebook requires scheduling at least 10 minutes in the future; use 30 as safety margin.
+        min_dt = now + _td(minutes=30)
+        if start_dt < min_dt:
+            start_dt = min_dt
+        if end_dt < start_dt:
+            return jsonify({'error': 'Window is entirely in the past'}), 400
+
+        # Get the first `count` scheduled entries (sorted by scheduled_time ASC = soonest first)
+        all_entries = extensions.db.get_scheduled_entries()
+        entries = all_entries[:count]
+        if not entries:
+            return jsonify({'ok': True, 'updated': 0})
+
+        n = len(entries)
+        if n == 1:
+            target_times = [start_dt]
+        else:
+            span = (end_dt - start_dt).total_seconds()
+            target_times = [start_dt + _td(seconds=i * span / (n - 1)) for i in range(n)]
+
+        def fb_update(args):
+            entry, new_time_dt = args
+            try:
+                new_text   = f"#{entry['post_number']} {entry['text']}"
+                result     = extensions.facebook_handler.update_scheduled_post(
+                    entry['facebook_post_id'], new_text, new_time_dt
+                )
+                new_fb_id  = result['id']
+                new_time_s = new_time_dt.strftime('%Y-%m-%d %H:%M:%S')
+                return (entry['id'], new_time_s, new_fb_id, None, False)
+            except Exception as e:
+                err_str    = str(e)
+                is_orphan  = '(#10)' in err_str or 'does not exist' in err_str.lower()
+                new_time_s = new_time_dt.strftime('%Y-%m-%d %H:%M:%S')
+                print(f"  {'⚠' if is_orphan else '✗'} Post {entry['id']}: {e}")
+                return (entry['id'], new_time_s, None, err_str, is_orphan)
+
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            results = list(pool.map(fb_update, zip(entries, target_times)))
+
+        conn = extensions.db.get_connection()
+        try:
+            cursor = conn.cursor()
+            for (eid, new_time_s, new_fb_id, err, is_orphan) in results:
+                if err is None:
+                    cursor.execute(
+                        'UPDATE entries SET scheduled_time = ?, facebook_post_id = ? WHERE id = ?',
+                        (new_time_s, new_fb_id, eid)
+                    )
+                elif is_orphan:
+                    cursor.execute(
+                        'UPDATE entries SET scheduled_time = ?, facebook_post_id = NULL WHERE id = ?',
+                        (new_time_s, eid)
+                    )
+            conn.commit()
+        finally:
+            conn.close()
+
+        updated = sum(1 for r in results if r[3] is None or r[4])
+        print(f"✅ Reschedule today: {updated}/{n} posts updated")
+        return jsonify({'ok': True, 'updated': updated})
+
+    except Exception as e:
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 

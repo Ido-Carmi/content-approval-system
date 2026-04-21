@@ -114,6 +114,11 @@
 <!-- Mobile-responsive styles -->
 <style>
 @media (max-width: 768px) {
+    /* Quick reschedule card */
+    #reschedule-today-wrapper .card {
+        min-width: auto !important;
+        max-width: 100% !important;
+    }
     /* Remove min-width constraint on mobile */
     .scheduled-card {
         min-width: auto !important;
@@ -180,6 +185,9 @@
     }
 }
 
+/* Quick reschedule card — same max-width as scheduled cards */
+#reschedule-today-body .col-md-4 { min-width: 0; }
+
 /* Extra small devices (phones, less than 576px) */
 @media (max-width: 576px) {
     .scheduled-card .card-header {
@@ -220,6 +228,61 @@
 
 <!-- SortableJS for drag-and-drop reordering -->
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+
+<!-- Quick reschedule for today -->
+<div class="d-flex justify-content-center mb-3" id="reschedule-today-wrapper">
+    <div class="card" style="width: 100%; max-width: 900px; min-width: 700px;">
+        <div class="card-header bg-secondary text-white d-flex justify-content-between align-items-center"
+             style="cursor:pointer;" data-bs-toggle="collapse" data-bs-target="#reschedule-today-body"
+             aria-expanded="false" aria-controls="reschedule-today-body">
+            <span><i class="bi bi-sliders"></i> פיזור מהיר לפוסטים הבאים</span>
+            <i class="bi bi-chevron-down" id="reschedule-chevron"
+               style="transition:transform .2s;"></i>
+        </div>
+        <div class="collapse" id="reschedule-today-body">
+            <div class="card-body">
+                <div class="row g-3">
+                    <!-- Start time -->
+                    <div class="col-md-4">
+                        <label class="form-label fw-bold mb-1">
+                            שעת התחלה: <span id="start-time-display" class="text-primary fw-bold">--:--</span>
+                        </label>
+                        <input type="range" class="form-range" id="start-time-slider"
+                               min="0" max="1435" step="5" value="720"
+                               oninput="onStartTimeChange()">
+                    </div>
+                    <!-- End time -->
+                    <div class="col-md-4">
+                        <label class="form-label fw-bold mb-1">
+                            שעת סיום: <span id="end-time-display" class="text-primary fw-bold">--:--</span>
+                        </label>
+                        <input type="range" class="form-range" id="end-time-slider"
+                               min="5" max="1439" step="5" value="1380"
+                               oninput="onEndTimeChange()">
+                    </div>
+                    <!-- Post count -->
+                    <div class="col-md-4">
+                        <label class="form-label fw-bold mb-1">
+                            מספר פוסטים: <span id="post-count-display" class="text-primary fw-bold">5</span>
+                        </label>
+                        <input type="range" class="form-range" id="post-count-slider"
+                               min="1" max="20" step="1" value="5"
+                               oninput="onCountChange()">
+                    </div>
+                </div>
+                <!-- Preview -->
+                <div class="mt-3 p-2 bg-light rounded text-center" style="font-size:.95rem;">
+                    יפוזרו <strong id="preview-count">5</strong> פוסטים בין
+                    <strong id="preview-start">--:--</strong> ל-<strong id="preview-end">--:--</strong>
+                    <span id="preview-interval" class="text-muted"></span>
+                </div>
+                <button type="button" class="btn btn-primary w-100 mt-3" onclick="applyRescheduleToday()">
+                    <i class="bi bi-check-lg"></i> החל
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
 
 <!-- Content loaded via HTMX -->
 <div id="scheduled-content-area"
@@ -660,5 +723,118 @@ function hideLoading() {
         }, 300);
     }, 1500);
 }
+
+// ── Quick reschedule for today ────────────────────────────────────────────────
+
+function getIsraelMinutes() {
+    const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'Asia/Jerusalem',
+        hour: '2-digit', minute: '2-digit', hour12: false
+    }).formatToParts(new Date());
+    const h = parseInt(parts.find(p => p.type === 'hour').value);
+    const m = parseInt(parts.find(p => p.type === 'minute').value);
+    return h * 60 + m;
+}
+
+function minutesToTime(min) {
+    const h = Math.floor(min / 60) % 24;
+    const m = min % 60;
+    return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
+}
+
+function initRescheduleSliders() {
+    const nowMin   = getIsraelMinutes();
+    const startMin = Math.min(Math.ceil((nowMin + 1) / 5) * 5, 1430); // round up to next 5-min
+
+    const ss = document.getElementById('start-time-slider');
+    const es = document.getElementById('end-time-slider');
+    if (!ss || !es) return;
+
+    ss.min   = startMin;
+    ss.value = Math.max(startMin, parseInt(ss.value));
+    es.min   = parseInt(ss.value) + 5;
+    if (parseInt(es.value) <= parseInt(ss.value)) {
+        es.value = Math.min(parseInt(ss.value) + 180, 1439);
+    }
+    updateReschedulePreview();
+}
+
+function onStartTimeChange() {
+    const ss = document.getElementById('start-time-slider');
+    const es = document.getElementById('end-time-slider');
+    const sv = parseInt(ss.value);
+    es.min = sv + 5;
+    if (parseInt(es.value) <= sv) es.value = Math.min(sv + 60, 1439);
+    updateReschedulePreview();
+}
+
+function onEndTimeChange() {
+    const ss = document.getElementById('start-time-slider');
+    const es = document.getElementById('end-time-slider');
+    if (parseInt(es.value) <= parseInt(ss.value)) es.value = parseInt(ss.value) + 5;
+    updateReschedulePreview();
+}
+
+function onCountChange() {
+    updateReschedulePreview();
+}
+
+function updateReschedulePreview() {
+    const start = parseInt(document.getElementById('start-time-slider').value);
+    const end   = parseInt(document.getElementById('end-time-slider').value);
+    const count = parseInt(document.getElementById('post-count-slider').value);
+
+    document.getElementById('start-time-display').textContent = minutesToTime(start);
+    document.getElementById('end-time-display').textContent   = minutesToTime(end);
+    document.getElementById('post-count-display').textContent = count;
+    document.getElementById('preview-count').textContent      = count;
+    document.getElementById('preview-start').textContent      = minutesToTime(start);
+    document.getElementById('preview-end').textContent        = minutesToTime(end);
+
+    const intervalEl = document.getElementById('preview-interval');
+    if (count > 1) {
+        const gapMin = Math.round((end - start) / (count - 1));
+        intervalEl.textContent = ` (כל ~${gapMin} דקות)`;
+    } else {
+        intervalEl.textContent = '';
+    }
+}
+
+function applyRescheduleToday() {
+    const start = parseInt(document.getElementById('start-time-slider').value);
+    const end   = parseInt(document.getElementById('end-time-slider').value);
+    const count = parseInt(document.getElementById('post-count-slider').value);
+
+    if (end <= start) { alert('שעת הסיום חייבת להיות אחרי שעת ההתחלה'); return; }
+
+    showLoading('מפזר פוסטים...', `${count} פוסטים בין ${minutesToTime(start)} ל-${minutesToTime(end)}`);
+
+    fetch('/reschedule_today', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ start_minutes: start, end_minutes: end, count: count })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.ok) {
+            showSuccess(`עודכנו ${data.updated} פוסטים!`,
+                `מפוזרים בין ${minutesToTime(start)} ל-${minutesToTime(end)}`, true);
+        } else {
+            alert('שגיאה: ' + (data.error || 'unknown'));
+            window.location.reload();
+        }
+    })
+    .catch(err => { alert('שגיאה: ' + err.message); window.location.reload(); });
+}
+
+// Init sliders on load and when collapse opens
+document.addEventListener('DOMContentLoaded', initRescheduleSliders);
+document.getElementById('reschedule-today-body')?.addEventListener('shown.bs.collapse',
+    initRescheduleSliders);
+// Rotate chevron
+document.getElementById('reschedule-today-body')?.addEventListener('show.bs.collapse',
+    () => document.getElementById('reschedule-chevron').style.transform = 'rotate(180deg)');
+document.getElementById('reschedule-today-body')?.addEventListener('hide.bs.collapse',
+    () => document.getElementById('reschedule-chevron').style.transform = 'rotate(0deg)');
 </script>
 {% endblock %}
