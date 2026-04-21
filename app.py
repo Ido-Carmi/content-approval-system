@@ -556,6 +556,60 @@ def scheduled_content():
         print("=" * 80)
         return f'<div class="alert alert-danger text-center py-3">❌ שגיאה: {str(e)}</div>'
 
+@app.route('/unschedule_all', methods=['POST'])
+def unschedule_all():
+    """Return ALL scheduled posts to pending in one go."""
+    from concurrent.futures import ThreadPoolExecutor
+    print("=" * 80)
+    print("UNSCHEDULE ALL")
+    print("=" * 80)
+    try:
+        entries = extensions.db.get_scheduled_entries()
+        if not entries:
+            return jsonify({'ok': True, 'count': 0})
+
+        # Step 1: delete all from Facebook in parallel
+        def fb_delete(entry):
+            if not extensions.facebook_handler or not entry.get('facebook_post_id'):
+                return
+            try:
+                extensions.facebook_handler.delete_scheduled_post(entry['facebook_post_id'])
+            except Exception as e:
+                err_str = str(e)
+                if '(#10)' in err_str or 'does not exist' in err_str.lower():
+                    print(f"  ⚠ Post {entry['id']} already gone from Facebook")
+                else:
+                    print(f"  ✗ Error deleting post {entry['id']}: {e}")
+
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            list(pool.map(fb_delete, entries))
+
+        # Step 2: mark all as pending in a single DB transaction
+        conn = extensions.db.get_connection()
+        try:
+            cursor = conn.cursor()
+            ids = [e['id'] for e in entries]
+            cursor.executemany(
+                'UPDATE entries SET status = ?, post_number = NULL, facebook_post_id = NULL, scheduled_time = NULL WHERE id = ?',
+                [('pending', eid) for eid in ids]
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        # Step 3: reset post counter to 1 (get_next_post_number will auto-adjust to max published + 1)
+        extensions.db.reset_post_number(1)
+
+        count = len(entries)
+        print(f"✅ Unscheduled all: {count} posts returned to pending")
+        return jsonify({'ok': True, 'count': count})
+
+    except Exception as e:
+        print(f"UNSCHEDULE ALL ERROR: {e}")
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/unschedule/<int:entry_id>', methods=['POST'])
 def unschedule_entry(entry_id):
     from concurrent.futures import ThreadPoolExecutor

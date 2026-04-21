@@ -1,8 +1,15 @@
 <!-- Header with post count -->
 <div class="d-flex justify-content-center">
-    <div class="alert alert-primary mb-3 py-2 px-3" style="width: 100%; max-width: 900px; min-width: 700px; text-align: center; font-size: 1.1rem;">
-        <i class="bi bi-calendar-check"></i>
-        <strong>{{ posts|length if posts else 0 }}</strong> פוסטים מתוזמנים בפייסבוק
+    <div class="alert alert-primary mb-3 py-2 px-3 d-flex align-items-center justify-content-between gap-3" style="width: 100%; max-width: 900px; min-width: 700px; font-size: 1.1rem;">
+        <span>
+            <i class="bi bi-calendar-check"></i>
+            <strong>{{ posts|length if posts else 0 }}</strong> פוסטים מתוזמנים בפייסבוק
+        </span>
+        {% if posts %}
+        <button type="button" class="btn btn-danger btn-sm" onclick="unscheduleAll({{ posts|length }})">
+            <i class="bi bi-arrow-counterclockwise"></i> החזר הכל להמתנה
+        </button>
+        {% endif %}
     </div>
 </div>
 

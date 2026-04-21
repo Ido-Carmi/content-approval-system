@@ -543,6 +543,28 @@ function swapPost(id, direction) {
     });
 }
 
+// Unschedule ALL posts
+function unscheduleAll(count) {
+    if (!confirm(`האם אתה בטוח שברצונך להחזיר את כל ${count} הפוסטים להמתנה?\nפעולה זו תמחק את כל הפוסטים המתוזמנים מפייסבוק.`)) return;
+
+    showLoading('מחזיר הכל להמתנה...', `מוחק ${count} פוסטים מפייסבוק`);
+
+    fetch('/unschedule_all', { method: 'POST' })
+    .then(r => r.json())
+    .then(data => {
+        if (data.ok) {
+            showSuccess('הכל הוחזר להמתנה!', `${data.count} פוסטים הוחזרו`, true);
+        } else {
+            alert('שגיאה: ' + (data.error || 'unknown'));
+            window.location.reload();
+        }
+    })
+    .catch(err => {
+        alert('שגיאה: ' + err.message);
+        window.location.reload();
+    });
+}
+
 // Unschedule post (NO POPUP)
 function unschedulePost(id) {
     console.log('=== UNSCHEDULE POST ===');
