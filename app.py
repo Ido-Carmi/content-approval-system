@@ -614,18 +614,21 @@ def unschedule_all():
         conn = extensions.db.get_connection()
         try:
             cursor = conn.cursor()
+            # Read the MIN post_number before NULLing — that's the first freed slot
+            cursor.execute(
+                'SELECT MIN(post_number) as mn FROM entries WHERE status IN ("scheduled", "approved") AND post_number IS NOT NULL'
+            )
+            row = cursor.fetchone()
+            min_sched = row['mn'] if row and row['mn'] is not None else None
             cursor.execute(
                 'UPDATE entries SET status = "pending", post_number = NULL, facebook_post_id = NULL, scheduled_time = NULL WHERE status IN ("scheduled", "approved")'
             )
-            # Reset counter to max published post_number + 1 so the next approval
-            # gets the correct (lower) number, not the old high watermark.
-            cursor.execute('SELECT MAX(post_number) as mx FROM entries WHERE post_number IS NOT NULL')
-            row = cursor.fetchone()
-            max_pub = row['mx'] if row and row['mx'] is not None else 0
-            new_counter = max_pub + 1
-            cursor.execute('UPDATE post_numbers SET current_number = ? WHERE id = 1', (new_counter,))
+            if min_sched is not None:
+                cursor.execute('UPDATE post_numbers SET current_number = ? WHERE id = 1', (min_sched,))
+                print(f"  Counter reset to {min_sched} (first freed post number)")
+            else:
+                print("  No post numbers to free, counter unchanged")
             conn.commit()
-            print(f"  Counter reset: max_published={max_pub}, new_counter={new_counter}")
         finally:
             conn.close()
 
