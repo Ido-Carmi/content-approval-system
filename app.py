@@ -636,6 +636,21 @@ def unschedule_all():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/reschedule_canonical', methods=['POST'])
+def reschedule_canonical():
+    """Redistribute all scheduled posts to canonical dynamic-tier slots (same as the midnight algorithm)."""
+    if not extensions.scheduler or not extensions.facebook_handler:
+        return jsonify({'error': 'Scheduler not available'}), 500
+    try:
+        extensions.scheduler.update_dynamic_windows()
+        count = extensions.scheduler.reschedule_all_to_new_windows()
+        print(f"✅ Canonical reschedule: {count} posts redistributed")
+        return jsonify({'ok': True, 'updated': count})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/reschedule_today', methods=['POST'])
 def reschedule_today():
     """Distribute the next N scheduled posts evenly in a custom time window today."""

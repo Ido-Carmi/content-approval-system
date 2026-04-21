@@ -601,6 +601,25 @@ function swapPost(id, direction) {
     });
 }
 
+// Reschedule all to canonical dynamic-tier slots (same as midnight algorithm)
+function rescheduleCanonical(count) {
+    if (!confirm(`לפזר מחדש את כל ${count} הפוסטים לפי האלגוריתם האוטומטי?\nהתזמון הנוכחי יוחלף לפי חלונות הזמן הדינמיים.`)) return;
+
+    showLoading('מחשב תזמון אוטומטי...', `מפזר ${count} פוסטים לפי האלגוריתם הדינמי`);
+
+    fetch('/reschedule_canonical', { method: 'POST' })
+    .then(r => r.json())
+    .then(data => {
+        if (data.ok) {
+            showSuccess('התזמון עודכן!', `${data.updated} פוסטים פוזרו לפי האלגוריתם האוטומטי`, true);
+        } else {
+            alert('שגיאה: ' + (data.error || 'unknown'));
+            window.location.reload();
+        }
+    })
+    .catch(err => { alert('שגיאה: ' + err.message); window.location.reload(); });
+}
+
 // Unschedule ALL posts
 function unscheduleAll(count) {
     if (!confirm(`האם אתה בטוח שברצונך להחזיר את כל ${count} הפוסטים להמתנה?\nפעולה זו תמחק את כל הפוסטים המתוזמנים מפייסבוק.`)) return;

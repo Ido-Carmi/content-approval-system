@@ -6,9 +6,14 @@
             <strong>{{ posts|length if posts else 0 }}</strong> פוסטים מתוזמנים בפייסבוק
         </span>
         {% if posts %}
-        <button type="button" class="btn btn-danger btn-sm" onclick="unscheduleAll({{ posts|length }})">
-            <i class="bi bi-arrow-counterclockwise"></i> החזר הכל להמתנה
-        </button>
+        <div class="d-flex gap-2">
+            <button type="button" class="btn btn-secondary btn-sm" onclick="rescheduleCanonical({{ posts|length }})">
+                <i class="bi bi-magic"></i> תזמון אוטומטי
+            </button>
+            <button type="button" class="btn btn-danger btn-sm" onclick="unscheduleAll({{ posts|length }})">
+                <i class="bi bi-arrow-counterclockwise"></i> החזר הכל להמתנה
+            </button>
+        </div>
         {% endif %}
     </div>
 </div>
