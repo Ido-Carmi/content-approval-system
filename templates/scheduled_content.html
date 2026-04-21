@@ -14,11 +14,12 @@
 {% else %}
 <div id="scheduled-list">
     {% for item in posts %}
-    <div class="scheduled-card" id="sched-{{ item.entry.id }}">
+    <div class="scheduled-card" id="sched-{{ item.entry.id }}" data-entry-id="{{ item.entry.id }}">
         <div class="card">
             <div class="card-header bg-primary text-white">
                 <div class="d-flex justify-content-between align-items-center flex-wrap">
                     <div class="d-flex align-items-center gap-2">
+                        <i class="bi bi-grip-vertical drag-handle" title="גרור לסידור מחדש"></i>
                         <i class="bi bi-calendar-event"></i>
                         <span class="time-display">{{ item.display_time }}</span>
                         <span class="day-display">{{ item.weekday }}</span>

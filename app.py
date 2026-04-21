@@ -702,6 +702,89 @@ def edit_scheduled_post(entry_id):
 
     return redirect(url_for('scheduled_page'))
 
+@app.route('/reorder_posts', methods=['POST'])
+def reorder_posts():
+    """Reorder scheduled posts by drag-and-drop.
+    Body: {"order": [entry_id, entry_id, ...]} — full list in new desired order.
+    Redistributes existing time slots to the new positions and updates Facebook in parallel.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    if not extensions.facebook_handler:
+        return jsonify({'error': 'Facebook handler not available'}), 500
+
+    data = request.get_json(silent=True) or {}
+    new_order_ids = [int(x) for x in data.get('order', [])]
+    if not new_order_ids:
+        return jsonify({'error': 'No order provided'}), 400
+
+    try:
+        entries = sorted(extensions.db.get_scheduled_entries(), key=lambda x: x.get('post_number', 999))
+        entry_map = {e['id']: e for e in entries}
+
+        # Current time slots in order (keep the schedule, just reassign who goes where)
+        current_slots = [(e['post_number'], e['scheduled_time']) for e in entries]
+
+        timezone = pytz.timezone('Asia/Jerusalem')
+
+        def parse_time(s):
+            if 'T' in s:
+                return timezone.localize(datetime.fromisoformat(s.replace('+02:00', '').replace('+03:00', '')))
+            return timezone.localize(datetime.strptime(s, '%Y-%m-%d %H:%M:%S'))
+
+        # Build the list of changes: (entry, new_number, new_time_str, new_time_dt)
+        changes = []
+        for idx, eid in enumerate(new_order_ids):
+            entry = entry_map.get(eid)
+            if not entry:
+                continue
+            new_num, new_time_str = current_slots[idx]
+            if entry['post_number'] != new_num or entry['scheduled_time'] != new_time_str:
+                changes.append((entry, new_num, new_time_str, parse_time(new_time_str)))
+
+        print(f"🔀 Reorder: {len(new_order_ids)} posts, {len(changes)} need Facebook update")
+
+        # Update Facebook in parallel for changed entries only
+        def fb_update(args):
+            entry, new_num, new_time_str, new_time_dt = args
+            try:
+                new_text = f"#{new_num} {entry['text']}"
+                extensions.facebook_handler.update_scheduled_post(
+                    entry['facebook_post_id'], new_text, new_time_dt
+                )
+                return (entry['id'], new_num, new_time_str, None)
+            except Exception as e:
+                print(f"  ✗ Error updating post {entry['id']}: {e}")
+                return (entry['id'], new_num, new_time_str, str(e))
+
+        results = []
+        if changes:
+            with ThreadPoolExecutor(max_workers=5) as pool:
+                results = list(pool.map(fb_update, changes))
+
+        # Update DB in a single transaction
+        conn = extensions.db.get_connection()
+        try:
+            cursor = conn.cursor()
+            for (eid, new_num, new_time_str, err) in results:
+                if err is None:
+                    cursor.execute(
+                        'UPDATE entries SET post_number = ?, scheduled_time = ? WHERE id = ?',
+                        (new_num, new_time_str, eid)
+                    )
+            conn.commit()
+        finally:
+            conn.close()
+
+        failed = [r for r in results if r[3] is not None]
+        print(f"✅ Reorder complete: {len(results) - len(failed)} updated, {len(failed)} failed")
+        return jsonify({'ok': True, 'updated': len(results) - len(failed), 'failed': len(failed)})
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/swap_posts/<int:entry_id>/<direction>', methods=['POST'])
 def swap_posts(entry_id, direction):
     if not extensions.scheduler or not extensions.facebook_handler:

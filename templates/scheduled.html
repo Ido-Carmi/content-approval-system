@@ -64,6 +64,27 @@
     font-size: 0.8rem;
 }
 
+/* Drag handle */
+.drag-handle {
+    cursor: grab;
+    color: rgba(255,255,255,0.7);
+    font-size: 1.1rem;
+    padding: 0 4px;
+    transition: color 0.15s;
+}
+.drag-handle:hover { color: #fff; }
+.drag-handle:active { cursor: grabbing; }
+
+/* Sortable states */
+.sortable-ghost {
+    opacity: 0.35;
+    background: #cfe2ff !important;
+}
+.sortable-chosen .card {
+    box-shadow: 0 4px 20px rgba(13,110,253,0.4) !important;
+    transform: rotate(0.5deg);
+}
+
 /* Time display */
 .time-display {
     font-size: 0.95rem;
@@ -197,10 +218,13 @@
 }
 </style>
 
+<!-- SortableJS for drag-and-drop reordering -->
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+
 <!-- Content loaded via HTMX -->
-<div id="scheduled-content-area" 
-     hx-get="/scheduled-content" 
-     hx-trigger="load" 
+<div id="scheduled-content-area"
+     hx-get="/scheduled-content"
+     hx-trigger="load"
      hx-swap="innerHTML">
     <!-- Loading state -->
     <div class="text-center py-5">
@@ -309,7 +333,53 @@ function setupButtons() {
         });
     });
     
+    // Setup drag-and-drop reordering
+    initSortable();
+
     console.log('✅ All event listeners set up successfully');
+}
+
+function initSortable() {
+    const list = document.getElementById('scheduled-list');
+    if (!list || !window.Sortable) return;
+
+    Sortable.create(list, {
+        handle: '.drag-handle',
+        animation: 150,
+        ghostClass: 'sortable-ghost',
+        chosenClass: 'sortable-chosen',
+        onEnd: function(evt) {
+            if (evt.oldIndex === evt.newIndex) return;
+
+            // Collect new order of entry IDs
+            const cards = list.querySelectorAll('.scheduled-card[data-entry-id]');
+            const newOrder = Array.from(cards).map(c => parseInt(c.dataset.entryId));
+
+            showLoading('מסדר מחדש...', 'מעדכן פייסבוק');
+
+            fetch('/reorder_posts', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ order: newOrder })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.ok) {
+                    const msg = data.failed > 0
+                        ? `עודכנו ${data.updated}, ${data.failed} נכשלו`
+                        : 'הסדר עודכן';
+                    showSuccess('הפוסטים עודכנו!', msg, true);
+                } else {
+                    alert('שגיאה בסידור מחדש: ' + (data.error || 'unknown'));
+                    window.location.reload();
+                }
+            })
+            .catch(err => {
+                alert('שגיאה: ' + err.message);
+                window.location.reload();
+            });
+        }
+    });
 }
 
 // Also try on DOMContentLoaded in case content is already there
