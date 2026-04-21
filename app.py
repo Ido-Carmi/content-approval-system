@@ -4,7 +4,7 @@ import traceback
 import os
 import logging
 from logging.handlers import RotatingFileHandler
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import pytz
 from werkzeug.security import generate_password_hash, check_password_hash
 
@@ -325,7 +325,40 @@ def scheduled_content():
 
         print(f"   Found {len(fb_posts_by_number)} Facebook posts with post numbers")
 
-        entries_to_remove = [e for e in db_entries if e.get('post_number') and e['post_number'] not in fb_posts_by_number]
+        now_utc = datetime.utcnow()
+        # Only treat as orphaned if scheduled time is in the future — past entries are simply published
+        def _is_future_entry(e):
+            t = e.get('scheduled_time')
+            if not t:
+                return True
+            try:
+                dt = datetime.fromisoformat(str(t).replace('Z', '+00:00'))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt.replace(tzinfo=None) > now_utc + timedelta(minutes=5)
+            except Exception:
+                return True
+
+        entries_to_remove = [
+            e for e in db_entries
+            if e.get('post_number') and e['post_number'] not in fb_posts_by_number
+            and _is_future_entry(e)
+        ]
+        # Entries missing from Facebook but with a past scheduled time were published — mark them
+        entries_published = [
+            e for e in db_entries
+            if e.get('post_number') and e['post_number'] not in fb_posts_by_number
+            and not _is_future_entry(e)
+        ]
+        if entries_published:
+            conn = extensions.db.get_connection()
+            cursor = conn.cursor()
+            for e in entries_published:
+                cursor.execute("UPDATE entries SET status = 'published' WHERE id = ?", (e['id'],))
+            conn.commit()
+            conn.close()
+            db_entries = extensions.db.get_scheduled_entries()
+            print(f"   ✓ Marked {len(entries_published)} entries as published (past scheduled time)")
         had_orphans = len(entries_to_remove) > 0
 
         if entries_to_remove:
