@@ -457,9 +457,11 @@ def scheduled_content():
                 'height': calculate_textarea_height(fb_post['message']) if fb_post.get('message') else 80
             })
 
-        # Fill holes: move posts to earliest available slots
+        # Fill holes: move posts to earliest available slots.
+        # Only runs when had_orphans=True (a post was deleted and left a genuine gap).
+        # Skipping otherwise preserves any custom scheduling the user applied.
         print("\n5. Checking for holes in schedule...")
-        if extensions.scheduler and len(fb_posts) > 0:
+        if had_orphans and extensions.scheduler and len(fb_posts) > 0:
 
             def _parse_fb_time(time_str):
                 try:
