@@ -622,24 +622,37 @@ def unschedule_entry(entry_id):
                 extensions.facebook_handler.update_scheduled_post(
                     entry['facebook_post_id'], new_text, new_time_dt
                 )
-                return (entry['id'], upd['new_number'], upd['new_time_str'], None)
+                return (entry['id'], upd['new_number'], upd['new_time_str'], None, False)
             except Exception as e:
-                print(f"  ✗ Error shifting post {entry['id']}: {e}")
-                traceback.print_exc()
-                return (entry['id'], upd['new_number'], upd['new_time_str'], str(e))
+                err_str = str(e)
+                # "Object does not exist" (code 10) — post is gone from Facebook.
+                # Still update DB with correct number/time, clear facebook_post_id
+                # so the scheduled-content page's orphan detection can re-create it.
+                is_orphan = '(#10)' in err_str or 'does not exist' in err_str.lower()
+                if is_orphan:
+                    print(f"  ⚠ Post {entry['id']} missing from Facebook — updating DB, clearing post id")
+                else:
+                    print(f"  ✗ Error shifting post {entry['id']}: {e}")
+                    traceback.print_exc()
+                return (entry['id'], upd['new_number'], upd['new_time_str'], err_str, is_orphan)
 
         if updates and extensions.facebook_handler:
             with ThreadPoolExecutor(max_workers=5) as pool:
                 results = list(pool.map(fb_update, updates))
 
-            # Step 5: update DB in a single transaction for all succeeded posts
+            # Step 5: update DB in a single transaction for all succeeded/orphaned posts
             conn = extensions.db.get_connection()
             try:
                 cursor = conn.cursor()
-                for (eid, new_num, new_time, err) in results:
+                for (eid, new_num, new_time, err, is_orphan) in results:
                     if err is None:
                         cursor.execute(
                             'UPDATE entries SET post_number = ?, scheduled_time = ? WHERE id = ?',
+                            (new_num, new_time, eid)
+                        )
+                    elif is_orphan:
+                        cursor.execute(
+                            'UPDATE entries SET post_number = ?, scheduled_time = ?, facebook_post_id = NULL WHERE id = ?',
                             (new_num, new_time, eid)
                         )
                 conn.commit()
@@ -765,10 +778,15 @@ def reorder_posts():
                 extensions.facebook_handler.update_scheduled_post(
                     entry['facebook_post_id'], new_text, new_time_dt
                 )
-                return (entry['id'], new_num, new_time_str, None)
+                return (entry['id'], new_num, new_time_str, None, False)
             except Exception as e:
-                print(f"  ✗ Error updating post {entry['id']}: {e}")
-                return (entry['id'], new_num, new_time_str, str(e))
+                err_str = str(e)
+                is_orphan = '(#10)' in err_str or 'does not exist' in err_str.lower()
+                if is_orphan:
+                    print(f"  ⚠ Post {entry['id']} missing from Facebook — updating DB, clearing post id")
+                else:
+                    print(f"  ✗ Error updating post {entry['id']}: {e}")
+                return (entry['id'], new_num, new_time_str, err_str, is_orphan)
 
         results = []
         if changes:
@@ -779,18 +797,24 @@ def reorder_posts():
         conn = extensions.db.get_connection()
         try:
             cursor = conn.cursor()
-            for (eid, new_num, new_time_str, err) in results:
+            for (eid, new_num, new_time_str, err, is_orphan) in results:
                 if err is None:
                     cursor.execute(
                         'UPDATE entries SET post_number = ?, scheduled_time = ? WHERE id = ?',
+                        (new_num, new_time_str, eid)
+                    )
+                elif is_orphan:
+                    cursor.execute(
+                        'UPDATE entries SET post_number = ?, scheduled_time = ?, facebook_post_id = NULL WHERE id = ?',
                         (new_num, new_time_str, eid)
                     )
             conn.commit()
         finally:
             conn.close()
 
-        failed = [r for r in results if r[3] is not None]
-        print(f"✅ Reorder complete: {len(results) - len(failed)} updated, {len(failed)} failed")
+        failed = [r for r in results if r[3] is not None and not r[4]]
+        orphaned = [r for r in results if r[4]]
+        print(f"✅ Reorder complete: {len(results) - len(failed) - len(orphaned)} updated, {len(orphaned)} orphaned (cleared), {len(failed)} failed")
         return jsonify({'ok': True, 'updated': len(results) - len(failed), 'failed': len(failed)})
 
     except Exception as e:
