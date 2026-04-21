@@ -241,24 +241,18 @@
         </div>
         <div class="collapse" id="reschedule-today-body">
             <div class="card-body">
-                <div class="row g-3">
+                <div class="row g-3 align-items-end">
                     <!-- Start time -->
                     <div class="col-md-4">
-                        <label class="form-label fw-bold mb-1">
-                            שעת התחלה: <span id="start-time-display" class="text-primary fw-bold">--:--</span>
-                        </label>
-                        <input type="range" class="form-range" id="start-time-slider"
-                               min="0" max="1435" step="5" value="720"
-                               oninput="onStartTimeChange()">
+                        <label for="start-time-input" class="form-label fw-bold mb-1">שעת התחלה</label>
+                        <input type="time" class="form-control" id="start-time-input"
+                               step="300" oninput="onStartTimeChange()">
                     </div>
                     <!-- End time -->
                     <div class="col-md-4">
-                        <label class="form-label fw-bold mb-1">
-                            שעת סיום: <span id="end-time-display" class="text-primary fw-bold">--:--</span>
-                        </label>
-                        <input type="range" class="form-range" id="end-time-slider"
-                               min="5" max="1439" step="5" value="1380"
-                               oninput="onEndTimeChange()">
+                        <label for="end-time-input" class="form-label fw-bold mb-1">שעת סיום</label>
+                        <input type="time" class="form-control" id="end-time-input"
+                               max="23:59" step="300" oninput="onEndTimeChange()">
                     </div>
                     <!-- Post count -->
                     <div class="col-md-4">
@@ -742,36 +736,42 @@ function minutesToTime(min) {
     return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
 }
 
-function initRescheduleSliders() {
-    const nowMin   = getIsraelMinutes();
-    const startMin = Math.min(Math.ceil((nowMin + 1) / 5) * 5, 1430); // round up to next 5-min
+function timeToMinutes(hhmm) {
+    if (!hhmm) return null;
+    const [h, m] = hhmm.split(':').map(Number);
+    return h * 60 + m;
+}
 
-    const ss = document.getElementById('start-time-slider');
-    const es = document.getElementById('end-time-slider');
-    if (!ss || !es) return;
+function initRescheduleInputs() {
+    const nowMin  = getIsraelMinutes();
+    const minMin  = Math.min(Math.ceil((nowMin + 30) / 5) * 5, 1435); // at least 30 min from now
+    const minTime = minutesToTime(minMin);
 
-    ss.min   = startMin;
-    ss.value = Math.max(startMin, parseInt(ss.value));
-    es.min   = parseInt(ss.value) + 5;
-    if (parseInt(es.value) <= parseInt(ss.value)) {
-        es.value = Math.min(parseInt(ss.value) + 180, 1439);
+    const si = document.getElementById('start-time-input');
+    const ei = document.getElementById('end-time-input');
+    if (!si || !ei) return;
+
+    si.min = minTime;
+    // Default start = minTime, end = minTime + 3h (capped at 23:55)
+    if (!si.value || timeToMinutes(si.value) < minMin) si.value = minTime;
+    ei.min = si.value;
+    if (!ei.value || timeToMinutes(ei.value) <= timeToMinutes(si.value)) {
+        ei.value = minutesToTime(Math.min(timeToMinutes(si.value) + 180, 1435));
     }
     updateReschedulePreview();
 }
 
 function onStartTimeChange() {
-    const ss = document.getElementById('start-time-slider');
-    const es = document.getElementById('end-time-slider');
-    const sv = parseInt(ss.value);
-    es.min = sv + 5;
-    if (parseInt(es.value) <= sv) es.value = Math.min(sv + 60, 1439);
+    const si = document.getElementById('start-time-input');
+    const ei = document.getElementById('end-time-input');
+    ei.min = si.value;
+    if (si.value && ei.value && timeToMinutes(ei.value) <= timeToMinutes(si.value)) {
+        ei.value = minutesToTime(Math.min(timeToMinutes(si.value) + 60, 1435));
+    }
     updateReschedulePreview();
 }
 
 function onEndTimeChange() {
-    const ss = document.getElementById('start-time-slider');
-    const es = document.getElementById('end-time-slider');
-    if (parseInt(es.value) <= parseInt(ss.value)) es.value = parseInt(ss.value) + 5;
     updateReschedulePreview();
 }
 
@@ -780,19 +780,19 @@ function onCountChange() {
 }
 
 function updateReschedulePreview() {
-    const start = parseInt(document.getElementById('start-time-slider').value);
-    const end   = parseInt(document.getElementById('end-time-slider').value);
-    const count = parseInt(document.getElementById('post-count-slider').value);
+    const startVal = document.getElementById('start-time-input').value;
+    const endVal   = document.getElementById('end-time-input').value;
+    const count    = parseInt(document.getElementById('post-count-slider').value);
+    const start    = timeToMinutes(startVal);
+    const end      = timeToMinutes(endVal);
 
-    document.getElementById('start-time-display').textContent = minutesToTime(start);
-    document.getElementById('end-time-display').textContent   = minutesToTime(end);
     document.getElementById('post-count-display').textContent = count;
     document.getElementById('preview-count').textContent      = count;
-    document.getElementById('preview-start').textContent      = minutesToTime(start);
-    document.getElementById('preview-end').textContent        = minutesToTime(end);
+    document.getElementById('preview-start').textContent      = startVal || '--:--';
+    document.getElementById('preview-end').textContent        = endVal   || '--:--';
 
     const intervalEl = document.getElementById('preview-interval');
-    if (count > 1) {
+    if (start !== null && end !== null && end > start && count > 1) {
         const gapMin = Math.round((end - start) / (count - 1));
         intervalEl.textContent = ` (כל ~${gapMin} דקות)`;
     } else {
@@ -801,13 +801,16 @@ function updateReschedulePreview() {
 }
 
 function applyRescheduleToday() {
-    const start = parseInt(document.getElementById('start-time-slider').value);
-    const end   = parseInt(document.getElementById('end-time-slider').value);
-    const count = parseInt(document.getElementById('post-count-slider').value);
+    const startVal = document.getElementById('start-time-input').value;
+    const endVal   = document.getElementById('end-time-input').value;
+    const count    = parseInt(document.getElementById('post-count-slider').value);
+    const start    = timeToMinutes(startVal);
+    const end      = timeToMinutes(endVal);
 
-    if (end <= start) { alert('שעת הסיום חייבת להיות אחרי שעת ההתחלה'); return; }
+    if (!startVal || !endVal)  { alert('יש לבחור שעת התחלה וסיום'); return; }
+    if (end <= start)          { alert('שעת הסיום חייבת להיות אחרי שעת ההתחלה'); return; }
 
-    showLoading('מפזר פוסטים...', `${count} פוסטים בין ${minutesToTime(start)} ל-${minutesToTime(end)}`);
+    showLoading('מפזר פוסטים...', `${count} פוסטים בין ${startVal} ל-${endVal}`);
 
     fetch('/reschedule_today', {
         method: 'POST',
@@ -818,7 +821,7 @@ function applyRescheduleToday() {
     .then(data => {
         if (data.ok) {
             showSuccess(`עודכנו ${data.updated} פוסטים!`,
-                `מפוזרים בין ${minutesToTime(start)} ל-${minutesToTime(end)}`, true);
+                `מפוזרים בין ${startVal} ל-${endVal}`, true);
         } else {
             alert('שגיאה: ' + (data.error || 'unknown'));
             window.location.reload();
@@ -827,10 +830,10 @@ function applyRescheduleToday() {
     .catch(err => { alert('שגיאה: ' + err.message); window.location.reload(); });
 }
 
-// Init sliders on load and when collapse opens
-document.addEventListener('DOMContentLoaded', initRescheduleSliders);
+// Init on load and when collapse opens
+document.addEventListener('DOMContentLoaded', initRescheduleInputs);
 document.getElementById('reschedule-today-body')?.addEventListener('shown.bs.collapse',
-    initRescheduleSliders);
+    initRescheduleInputs);
 // Rotate chevron
 document.getElementById('reschedule-today-body')?.addEventListener('show.bs.collapse',
     () => document.getElementById('reschedule-chevron').style.transform = 'rotate(180deg)');
