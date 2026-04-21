@@ -246,13 +246,13 @@
                     <div class="col-md-4">
                         <label for="start-time-input" class="form-label fw-bold mb-1">שעת התחלה</label>
                         <input type="time" class="form-control" id="start-time-input"
-                               step="300" oninput="onStartTimeChange()">
+                               lang="he" step="300" oninput="onStartTimeChange()">
                     </div>
                     <!-- End time -->
                     <div class="col-md-4">
                         <label for="end-time-input" class="form-label fw-bold mb-1">שעת סיום</label>
                         <input type="time" class="form-control" id="end-time-input"
-                               max="23:59" step="300" oninput="onEndTimeChange()">
+                               lang="he" max="23:59" step="300" oninput="onEndTimeChange()">
                     </div>
                     <!-- Post count -->
                     <div class="col-md-4">
@@ -260,7 +260,7 @@
                             מספר פוסטים: <span id="post-count-display" class="text-primary fw-bold">5</span>
                         </label>
                         <input type="range" class="form-range" id="post-count-slider"
-                               min="1" max="20" step="1" value="5"
+                               min="2" max="20" step="1" value="5"
                                oninput="onCountChange()">
                     </div>
                 </div>
@@ -335,6 +335,7 @@ document.body.addEventListener('htmx:afterSwap', function(event) {
     if (event.detail.target.id === 'scheduled-content-area') {
         console.log('Content loaded via HTMX, setting up buttons...');
         setupButtons();
+        updateCountSliderMax();
     }
 });
 
@@ -828,6 +829,15 @@ function applyRescheduleToday() {
         }
     })
     .catch(err => { alert('שגיאה: ' + err.message); window.location.reload(); });
+}
+
+function updateCountSliderMax() {
+    const count = document.querySelectorAll('.scheduled-card[data-entry-id]').length;
+    const slider = document.getElementById('post-count-slider');
+    if (!slider || count < 2) return;
+    slider.max = count;
+    if (parseInt(slider.value) > count) slider.value = count;
+    updateReschedulePreview();
 }
 
 // Init on load and when collapse opens
