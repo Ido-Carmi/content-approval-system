@@ -719,11 +719,18 @@ def reorder_posts():
         return jsonify({'error': 'No order provided'}), 400
 
     try:
-        entries = sorted(extensions.db.get_scheduled_entries(), key=lambda x: x.get('post_number', 999))
+        # Sort by scheduled_time — this matches the visual order the user sees.
+        # Sorting by post_number instead would be wrong if times and numbers are
+        # out of sync (which happens after swap/unschedule operations).
+        entries = sorted(extensions.db.get_scheduled_entries(), key=lambda x: x['scheduled_time'])
         entry_map = {e['id']: e for e in entries}
 
-        # Current time slots in order (keep the schedule, just reassign who goes where)
-        current_slots = [(e['post_number'], e['scheduled_time']) for e in entries]
+        # Time slots in visual (time-ascending) order
+        time_slots = [e['scheduled_time'] for e in entries]
+
+        # Post numbers sorted independently — slot 0 always gets the lowest number.
+        # This is robust to any prior DB inconsistency between numbers and times.
+        post_numbers = sorted(e['post_number'] for e in entries if e['post_number'] is not None)
 
         timezone = pytz.timezone('Asia/Jerusalem')
 
@@ -732,17 +739,23 @@ def reorder_posts():
                 return timezone.localize(datetime.fromisoformat(s.replace('+02:00', '').replace('+03:00', '')))
             return timezone.localize(datetime.strptime(s, '%Y-%m-%d %H:%M:%S'))
 
-        # Build the list of changes: (entry, new_number, new_time_str, new_time_dt)
+        print(f"🔀 Reorder: {len(new_order_ids)} ids, {len(entries)} DB entries")
+        for i, e in enumerate(entries):
+            print(f"   slot {i}: id={e['id']} #={e['post_number']} t={e['scheduled_time']}")
+
+        # Build changes: entry at new position idx gets time_slots[idx] and post_numbers[idx]
         changes = []
         for idx, eid in enumerate(new_order_ids):
             entry = entry_map.get(eid)
-            if not entry:
+            if not entry or idx >= len(time_slots):
                 continue
-            new_num, new_time_str = current_slots[idx]
-            if entry['post_number'] != new_num or entry['scheduled_time'] != new_time_str:
+            new_time_str = time_slots[idx]
+            new_num = post_numbers[idx] if idx < len(post_numbers) else entry['post_number']
+            if entry['scheduled_time'] != new_time_str or entry['post_number'] != new_num:
                 changes.append((entry, new_num, new_time_str, parse_time(new_time_str)))
+                print(f"   change: id={entry['id']} #{entry['post_number']}→{new_num} {entry['scheduled_time']}→{new_time_str}")
 
-        print(f"🔀 Reorder: {len(new_order_ids)} posts, {len(changes)} need Facebook update")
+        print(f"   {len(changes)} posts need Facebook update")
 
         # Update Facebook in parallel for changed entries only
         def fb_update(args):
