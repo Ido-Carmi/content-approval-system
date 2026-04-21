@@ -16,7 +16,7 @@
     position: fixed;
     top: 0;
     left: 0;
-    right: 0;
+    right: 15rem;
     z-index: 500;
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     color: white;
@@ -24,6 +24,12 @@
     box-shadow: 0 3px 10px rgba(0,0,0,0.3);
     align-items: center;
     justify-content: space-between;
+}
+
+@media (max-width: 767px) {
+    .post-float-bar {
+        right: 0;
+    }
 }
 
 .post-header {
@@ -399,7 +405,7 @@ function startDeepScan() {
 <div id="post-float-bar" class="post-float-bar">
     <strong id="float-bar-title">📌 פוסט</strong>
     <div id="float-bar-context" style="font-size:0.85rem; opacity:0.85; flex:1; margin: 0 1rem; overflow:hidden; white-space:nowrap; text-overflow:ellipsis;"></div>
-    <form method="POST" id="float-bar-form" action="">
+    <form method="POST" id="float-bar-form" action="#">
         <input type="hidden" name="filter_status" value="{{ filter_status }}">
         <button type="submit" class="btn btn-sm btn-light">✓ הכל תקין</button>
     </form>
@@ -415,7 +421,7 @@ function startDeepScan() {
 <!-- Comments Grouped by Post -->
 {% else %}
 {% for post_id, post_data in grouped_comments.items() %}
-<div class="post-card" id="post-{{ post_id }}" data-post-id="{{ post_id }}">
+<div class="post-card" id="post-{{ post_id }}" data-post-id="{{ post_id }}" data-ok-action="{{ url_for('mark_post_comments_ok', post_id=post_id) }}">
     <!-- Sticky wrapper: header + context scroll with user inside this post -->
     <div class="post-sticky-header">
         <!-- Post Header (Clickable to collapse) -->
@@ -567,7 +573,7 @@ function startDeepScan() {
             postHeaders[postId] = {
                 header,
                 contextText: context ? context.textContent.trim() : '',
-                action: form ? form.action : ''
+                action: card.dataset.okAction || ''
             };
         }
     });
