@@ -8,6 +8,13 @@
     margin-bottom: 2rem;
     border: 1px solid #dee2e6;
     border-radius: 8px;
+}
+
+.post-sticky-header {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    border-radius: 8px 8px 0 0;
     overflow: hidden;
 }
 
@@ -391,24 +398,27 @@ function startDeepScan() {
 {% else %}
 {% for post_id, post_data in grouped_comments.items() %}
 <div class="post-card" id="post-{{ post_id }}" data-post-id="{{ post_id }}">
-    <!-- Post Header (Clickable to collapse) -->
-    <div class="post-header" onclick="togglePost('{{ post_id }}')">
-        <strong>📌 פוסט #{{ post_data.post_number or '?' }}</strong>
-        <span class="badge bg-light text-dark float-start" id="count-post-{{ post_id }}">
-            {{ post_data.comments|length }} תגובות
-        </span>
-        <i class="bi bi-chevron-down float-start me-2" id="chevron-{{ post_id }}"></i>
-        <form method="POST" action="{{ url_for('mark_post_comments_ok', post_id=post_id) }}" 
-              class="d-inline float-start me-2"
-              onclick="event.stopPropagation()">
-            <input type="hidden" name="filter_status" value="{{ filter_status }}">
-            <button type="submit" class="btn btn-sm btn-light">✓ הכל תקין</button>
-        </form>
-    </div>
-    
-    <!-- Post Context (Desktop & Mobile) -->
-    <div class="post-context post-collapse" id="context-{{ post_id }}">
-        <strong>הקשר:</strong> {{ post_data.post_text }}
+    <!-- Sticky wrapper: header + context scroll with user inside this post -->
+    <div class="post-sticky-header">
+        <!-- Post Header (Clickable to collapse) -->
+        <div class="post-header" onclick="togglePost('{{ post_id }}')">
+            <strong>📌 פוסט #{{ post_data.post_number or '?' }}</strong>
+            <span class="badge bg-light text-dark float-start" id="count-post-{{ post_id }}">
+                {{ post_data.comments|length }} תגובות
+            </span>
+            <i class="bi bi-chevron-down float-start me-2" id="chevron-{{ post_id }}"></i>
+            <form method="POST" action="{{ url_for('mark_post_comments_ok', post_id=post_id) }}"
+                  class="d-inline float-start me-2"
+                  onclick="event.stopPropagation()">
+                <input type="hidden" name="filter_status" value="{{ filter_status }}">
+                <button type="submit" class="btn btn-sm btn-light">✓ הכל תקין</button>
+            </form>
+        </div>
+
+        <!-- Post Context -->
+        <div class="post-context post-collapse" id="context-{{ post_id }}">
+            <strong>הקשר:</strong> {{ post_data.post_text }}
+        </div>
     </div>
     
     <!-- Comments List -->
