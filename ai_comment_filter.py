@@ -247,19 +247,29 @@ Return JSON array with moderation results."""
                     elif 'moderation' in results_data:
                         results_data = results_data['moderation']
                     else:
-                        # If dict doesn't have expected keys, might be a single-item dict
                         print(f"   [AI] Unexpected dict structure: {list(results_data.keys())[:5]}")
-                        # Try to find any list value
+                        # Try to find any list value first
+                        found_list = False
                         for key, value in results_data.items():
                             if isinstance(value, list):
                                 results_data = value
+                                found_list = True
                                 break
-                
+                        if not found_list:
+                            # Dict values might be individual result objects (indexed dict)
+                            values = list(results_data.values())
+                            if values and all(isinstance(v, dict) for v in values):
+                                print(f"   [AI] Treating dict values as result list ({len(values)} items)")
+                                results_data = values
+                            else:
+                                print(f"   [AI] Treating entire dict as single result")
+                                results_data = [results_data]
+
                 # Ensure we have a list
                 if not isinstance(results_data, list):
-                    print(f"   [AI] ERROR: Expected list, got {type(results_data)}")
+                    print(f"   [AI] ERROR: Expected list, got {type(results_data)} — returning empty")
                     print(f"   [AI] Data: {str(results_data)[:200]}")
-                    raise ValueError(f"Expected list of results, got {type(results_data)}")
+                    results_data = []
                 
                 # Convert to our format
                 results = []

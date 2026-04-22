@@ -139,49 +139,38 @@ class FacebookHandler:
         else:
             raise Exception(f"Facebook API error: {response.text}")
     
-    def update_scheduled_post(self, post_id: str, new_text: Optional[str] = None, 
+    def update_scheduled_post(self, post_id: str, new_text: Optional[str] = None,
                             new_time: Optional[datetime] = None) -> Dict:
         """
-        Update a scheduled post's content or time
-        
-        Args:
-            post_id: Facebook post ID
-            new_text: New post content (optional)
-            new_time: New scheduled time (optional)
-            
-        Returns:
-            Updated post info
+        Update a scheduled post's content or time.
+        Facebook doesn't support in-place edits — we delete and recreate.
+        When both new_text and new_time are provided the GET is skipped entirely.
         """
-        # Facebook doesn't allow direct update of scheduled posts
-        # We need to delete and recreate
-        
-        # Get current post data
-        url = f"{self.api_base}/{post_id}"
-        params = {
-            'access_token': self.access_token,
-            'fields': 'message,scheduled_publish_time'
-        }
-        response = requests.get(url, params=params)
-        
-        if response.status_code != 200:
-            raise Exception(f"Facebook API error: {response.text}")
-        
-        current_post = response.json()
-        
-        # Use new values or keep current
-        message = new_text if new_text else current_post.get('message', '')
-        
-        if new_time:
+        if new_text and new_time:
+            # Caller already has everything we need — skip the GET.
+            message = new_text
             scheduled_time = new_time
         else:
-            timestamp = int(current_post.get('scheduled_publish_time', 0))
-            israel_tz = pytz.timezone('Asia/Jerusalem')
-            scheduled_time = datetime.fromtimestamp(timestamp, tz=israel_tz)
-        
-        # Delete old post
+            # Fetch current post data to fill in whichever parameter is missing.
+            url = f"{self.api_base}/{post_id}"
+            params = {
+                'access_token': self.access_token,
+                'fields': 'message,scheduled_publish_time'
+            }
+            response = requests.get(url, params=params)
+            if response.status_code != 200:
+                raise Exception(f"Facebook API error: {response.text}")
+            current_post = response.json()
+            message = new_text if new_text else current_post.get('message', '')
+            if new_time:
+                scheduled_time = new_time
+            else:
+                timestamp = int(current_post.get('scheduled_publish_time', 0))
+                israel_tz = pytz.timezone('Asia/Jerusalem')
+                scheduled_time = datetime.fromtimestamp(timestamp, tz=israel_tz)
+
+        # Delete old post and recreate with updated values.
         self.delete_scheduled_post(post_id)
-        
-        # Create new scheduled post
         return self.schedule_post(message, scheduled_time)
     
     def test_connection(self) -> bool:

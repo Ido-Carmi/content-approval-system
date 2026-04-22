@@ -407,7 +407,11 @@ def scheduled_content():
                     if current_number and current_number != expected:
                         new_text = f"#{expected} {clean_message}"
                         try:
-                            extensions.facebook_handler.update_scheduled_post(fb_post['id'], new_text)
+                            # Parse scheduled_time so update_scheduled_post can skip the GET.
+                            _dt = datetime.fromisoformat(fb_post['scheduled_time'])
+                            if _dt.tzinfo is None:
+                                _dt = pytz.timezone('Asia/Jerusalem').localize(_dt)
+                            extensions.facebook_handler.update_scheduled_post(fb_post['id'], new_text, _dt)
                             fb_post['message'] = new_text
                             print(f"   Renumbered #{current_number} → #{expected}")
                         except Exception as e:
@@ -536,8 +540,9 @@ def scheduled_content():
 
                 if posts_to_update:
                     print(f"   Found holes! Moving {len(posts_to_update)} posts...")
-                    conn = extensions.db.get_connection()
-                    cursor = conn.cursor()
+                    # Do all Facebook API calls first (can be slow/failing) — then write to DB
+                    # so we never hold a write transaction open during network calls.
+                    db_updates = []
                     for fb_post, new_slot in posts_to_update:
                         message = fb_post.get('message', '')
                         post_number = None
@@ -547,14 +552,19 @@ def scheduled_content():
                             except Exception:
                                 pass
                         if post_number:
-                            cursor.execute('UPDATE entries SET scheduled_time = ? WHERE post_number = ?',
-                                           (new_slot.isoformat(), post_number))
                             try:
                                 extensions.facebook_handler.update_scheduled_post(fb_post['id'], message, new_slot)
+                                db_updates.append((new_slot.isoformat(), post_number))
                             except Exception as e:
                                 print(f"       ✗ Error: {e}")
-                    conn.commit()
-                    conn.close()
+                    if db_updates:
+                        conn = extensions.db.get_connection()
+                        cursor = conn.cursor()
+                        for slot_iso, pn in db_updates:
+                            cursor.execute('UPDATE entries SET scheduled_time = ? WHERE post_number = ?',
+                                           (slot_iso, pn))
+                        conn.commit()
+                        conn.close()
 
                     fb_posts = extensions.facebook_handler.get_scheduled_posts()
                     posts_data = []
