@@ -579,40 +579,52 @@ def scheduled_content():
                                 pass
                         if post_number:
                             try:
-                                extensions.facebook_handler.update_scheduled_post(fb_post['id'], message, new_slot)
-                                db_updates.append((new_slot.isoformat(), post_number))
+                                result = extensions.facebook_handler.update_scheduled_post(fb_post['id'], message, new_slot)
+                                new_fb_id = result.get('id') if result else None
+                                db_updates.append((new_slot.isoformat(), new_fb_id, post_number))
+                                print(f"       ✓ #{post_number}: moved → new FB ID {new_fb_id}")
                             except Exception as e:
                                 print(f"       ✗ Error: {e}")
                     if db_updates:
                         conn = extensions.db.get_connection()
                         cursor = conn.cursor()
-                        for slot_iso, pn in db_updates:
-                            cursor.execute('UPDATE entries SET scheduled_time = ? WHERE post_number = ?',
-                                           (slot_iso, pn))
+                        for slot_iso, new_fb_id, pn in db_updates:
+                            if new_fb_id:
+                                cursor.execute(
+                                    'UPDATE entries SET scheduled_time = ?, facebook_post_id = ? WHERE post_number = ?',
+                                    (slot_iso, new_fb_id, pn))
+                            else:
+                                cursor.execute('UPDATE entries SET scheduled_time = ? WHERE post_number = ?',
+                                               (slot_iso, pn))
                         conn.commit()
                         conn.close()
+                        print(f"   Updated {len(db_updates)} DB entries with new FB IDs after hole-fill")
 
                     fb_posts = extensions.facebook_handler.get_scheduled_posts()
+                    # Re-fetch db_entries so new FB IDs are visible
+                    db_entries = extensions.db.get_entries_by_status('scheduled')
                     posts_data = []
-                    for fb_post in fb_posts:
+                    for fb_post in sorted(fb_posts, key=lambda p: p['scheduled_time']):
                         message = fb_post.get('message', '')
-                        post_number = None
+                        fb_post_number = None
+                        clean_message = message
                         if message.startswith('#'):
                             try:
-                                post_number = int(message.split()[0][1:])
+                                fb_post_number = int(message.split()[0][1:])
+                                clean_message = message.split(' ', 1)[1] if ' ' in message else message
                             except Exception:
                                 pass
-                        if post_number:
-                            entry = next((e for e in db_entries if e.get('post_number') == post_number), None)
-                            if entry:
-                                dt = _parse_fb_time(fb_post['scheduled_time'])
-                                posts_data.append({
-                                    'fb_post': fb_post,
-                                    'entry': entry,
-                                    'weekday': get_hebrew_weekday(fb_post['scheduled_time']),
-                                    'display_time': dt.strftime('%H:%M %d/%m/%Y') if dt else fb_post['scheduled_time'],
-                                    'height': calculate_textarea_height(message) if message else 80
-                                })
+                        entry = None
+                        if fb_post_number:
+                            entry = next((e for e in db_entries if e.get('post_number') == fb_post_number), None)
+                        dt = _parse_fb_time(fb_post['scheduled_time'])
+                        posts_data.append({
+                            'fb_post': fb_post,
+                            'entry': entry,
+                            'weekday': get_hebrew_weekday(fb_post['scheduled_time']),
+                            'display_time': dt.strftime('%H:%M %d/%m/%Y') if dt else fb_post['scheduled_time'],
+                            'height': calculate_textarea_height(message) if message else 80
+                        })
                 else:
                     print("   ✓ No holes found")
 
