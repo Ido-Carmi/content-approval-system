@@ -382,8 +382,6 @@ def scheduled_content():
 
         if had_orphans and len(fb_posts_sorted) > 0:
             print("   Renumbering remaining posts to fill gaps...")
-            conn = extensions.db.get_connection()
-            cursor = conn.cursor()
 
             fb_post_numbers = sorted([
                 int(p['message'].split()[0][1:])
@@ -392,6 +390,7 @@ def scheduled_content():
                 and p['message'].split()[0][1:].isdigit()
             ])
 
+            renumber_results = []
             if fb_post_numbers:
                 lowest = fb_post_numbers[0]
                 for fb_post, expected in zip(fb_posts_sorted, range(lowest, lowest + len(fb_posts_sorted))):
@@ -407,18 +406,29 @@ def scheduled_content():
                     if current_number and current_number != expected:
                         new_text = f"#{expected} {clean_message}"
                         try:
-                            # Parse scheduled_time so update_scheduled_post can skip the GET.
                             _dt = datetime.fromisoformat(fb_post['scheduled_time'])
                             if _dt.tzinfo is None:
                                 _dt = pytz.timezone('Asia/Jerusalem').localize(_dt)
-                            extensions.facebook_handler.update_scheduled_post(fb_post['id'], new_text, _dt)
+                            result = extensions.facebook_handler.update_scheduled_post(fb_post['id'], new_text, _dt)
+                            new_fb_id = result['id']
                             fb_post['message'] = new_text
+                            fb_post['id'] = new_fb_id
+                            renumber_results.append((current_number, expected, new_fb_id))
                             print(f"   Renumbered #{current_number} → #{expected}")
                         except Exception as e:
                             print(f"   ✗ Error renumbering: {e}")
 
-            conn.commit()
-            conn.close()
+            if renumber_results:
+                conn = extensions.db.get_connection()
+                cursor = conn.cursor()
+                for old_num, new_num, new_fb_id in renumber_results:
+                    cursor.execute(
+                        'UPDATE entries SET post_number = ?, facebook_post_id = ? WHERE post_number = ?',
+                        (new_num, new_fb_id, old_num)
+                    )
+                conn.commit()
+                conn.close()
+                print(f"   Updated {len(renumber_results)} DB entries with new post IDs")
 
             print("   Re-fetching from Facebook...")
             fb_posts = extensions.facebook_handler.get_scheduled_posts()
