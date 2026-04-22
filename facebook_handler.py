@@ -93,28 +93,33 @@ class FacebookHandler:
             'fields': 'id,message,scheduled_publish_time,created_time'
         }
         
-        response = requests.get(url, params=params)
-        
-        if response.status_code == 200:
+        params['limit'] = 100  # fetch up to 100 per page; paginate for more
+
+        posts = []
+        israel_tz = pytz.timezone('Asia/Jerusalem')
+        next_url = url
+
+        while next_url:
+            response = requests.get(next_url, params=params if next_url == url else None)
+
+            if response.status_code != 200:
+                raise Exception(f"Facebook API error: {response.text}")
+
             data = response.json()
-            posts = []
-            
+
             for post in data.get('data', []):
-                # Convert Unix timestamp to datetime
                 timestamp = int(post.get('scheduled_publish_time', 0))
-                israel_tz = pytz.timezone('Asia/Jerusalem')
                 scheduled_dt = datetime.fromtimestamp(timestamp, tz=israel_tz)
-                
                 posts.append({
                     'id': post['id'],
                     'message': post.get('message', ''),
                     'scheduled_time': scheduled_dt.isoformat(),
                     'scheduled_time_display': scheduled_dt.strftime('%d/%m/%Y %H:%M')
                 })
-            
-            return posts
-        else:
-            raise Exception(f"Facebook API error: {response.text}")
+
+            next_url = data.get('paging', {}).get('next')
+
+        return posts
     
     def delete_scheduled_post(self, post_id: str) -> bool:
         """
