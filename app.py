@@ -566,9 +566,7 @@ def scheduled_content():
 
                 if posts_to_update:
                     print(f"   Found holes! Moving {len(posts_to_update)} posts...")
-                    # Do all Facebook API calls first (can be slow/failing) — then write to DB
-                    # so we never hold a write transaction open during network calls.
-                    db_updates = []
+                    moved_count = 0
                     for fb_post, new_slot in posts_to_update:
                         message = fb_post.get('message', '')
                         post_number = None
@@ -581,24 +579,24 @@ def scheduled_content():
                             try:
                                 result = extensions.facebook_handler.update_scheduled_post(fb_post['id'], message, new_slot)
                                 new_fb_id = result.get('id') if result else None
-                                db_updates.append((new_slot.isoformat(), new_fb_id, post_number))
                                 print(f"       ✓ #{post_number}: moved → new FB ID {new_fb_id}")
+                                # Update DB immediately so concurrent page loads see the new ID
+                                # and don't falsely detect this post as an orphan during a long hole-fill
+                                conn = extensions.db.get_connection()
+                                cursor = conn.cursor()
+                                if new_fb_id:
+                                    cursor.execute(
+                                        'UPDATE entries SET scheduled_time = ?, facebook_post_id = ? WHERE post_number = ?',
+                                        (new_slot.isoformat(), new_fb_id, post_number))
+                                else:
+                                    cursor.execute('UPDATE entries SET scheduled_time = ? WHERE post_number = ?',
+                                                   (new_slot.isoformat(), post_number))
+                                conn.commit()
+                                conn.close()
+                                moved_count += 1
                             except Exception as e:
                                 print(f"       ✗ Error: {e}")
-                    if db_updates:
-                        conn = extensions.db.get_connection()
-                        cursor = conn.cursor()
-                        for slot_iso, new_fb_id, pn in db_updates:
-                            if new_fb_id:
-                                cursor.execute(
-                                    'UPDATE entries SET scheduled_time = ?, facebook_post_id = ? WHERE post_number = ?',
-                                    (slot_iso, new_fb_id, pn))
-                            else:
-                                cursor.execute('UPDATE entries SET scheduled_time = ? WHERE post_number = ?',
-                                               (slot_iso, pn))
-                        conn.commit()
-                        conn.close()
-                        print(f"   Updated {len(db_updates)} DB entries with new FB IDs after hole-fill")
+                    print(f"   Updated {moved_count} DB entries with new FB IDs after hole-fill")
 
                     fb_posts = extensions.facebook_handler.get_scheduled_posts()
                     # Re-fetch db_entries so new FB IDs are visible
