@@ -43,6 +43,9 @@ app.secret_key = _get_or_create_secret_key()
 app.permanent_session_lifetime = timedelta(days=30)
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
 
+import time
+_last_renumber_time = None  # cooldown: prevent renumber cascade
+
 # Initialise handlers from config
 init_handlers()
 
@@ -380,7 +383,13 @@ def scheduled_content():
         print("\n4. Matching and syncing Facebook posts with database entries...")
         fb_posts_sorted = sorted(fb_posts, key=lambda p: p['scheduled_time'])
 
-        if had_orphans and len(fb_posts_sorted) > 0:
+        global _last_renumber_time
+        _renumber_cooldown_secs = 300  # 5 minutes
+        _now = time.time()
+        _cooldown_ok = (_last_renumber_time is None or (_now - _last_renumber_time) > _renumber_cooldown_secs)
+
+        if had_orphans and len(fb_posts_sorted) > 0 and _cooldown_ok:
+            _last_renumber_time = _now
             print("   Renumbering remaining posts to fill gaps...")
 
             fb_post_numbers = sorted([
@@ -433,6 +442,10 @@ def scheduled_content():
             print("   Re-fetching from Facebook...")
             fb_posts = extensions.facebook_handler.get_scheduled_posts()
             fb_posts_sorted = sorted(fb_posts, key=lambda p: p['scheduled_time'])
+
+        elif had_orphans and not _cooldown_ok:
+            secs_left = int(_renumber_cooldown_secs - (_now - _last_renumber_time))
+            print(f"   ⏳ Skipping renumber — cooldown active ({secs_left}s remaining)")
 
         posts_data = []
         for fb_post in fb_posts_sorted:
