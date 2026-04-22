@@ -521,7 +521,10 @@ def scheduled_content():
         # Only runs when had_orphans=True (a post was deleted and left a genuine gap).
         # Skipping otherwise preserves any custom scheduling the user applied.
         print("\n5. Checking for holes in schedule...")
-        if had_orphans and extensions.scheduler and len(fb_posts) > 0:
+        if had_orphans and not _cooldown_ok:
+            secs_left = int(_renumber_cooldown_secs - (time.time() - _last_renumber_time))
+            print(f"   ⏳ Skipping hole-fill — cooldown active ({secs_left}s remaining)")
+        elif had_orphans and _cooldown_ok and extensions.scheduler and len(fb_posts) > 0:
 
             def _parse_fb_time(time_str):
                 try:
