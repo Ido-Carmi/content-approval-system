@@ -85,15 +85,19 @@
                             <i class="bi bi-check-lg"></i> שמור
                         </button>
 
-                        <!-- Auto-comment Toggle -->
+                        <!-- Auto-comment slot buttons (1=blue, 2=orange, 3=green) -->
                         {% if item.entry %}
+                        {% set slot = item.entry.should_comment | int %}
+                        {% for s in [1, 2, 3] %}
                         <button type="button"
-                                class="btn {% if item.entry.should_comment %}btn-primary{% else %}btn-outline-secondary{% endif %} comment-toggle-btn"
+                                class="btn btn-sm comment-slot-btn {% if slot == s %}{{ ['btn-primary','btn-warning','btn-success'][s-1] }}{% else %}btn-outline-secondary{% endif %}"
                                 data-entry-id="{{ item.entry.id }}"
-                                data-active="{{ '1' if item.entry.should_comment else '0' }}"
-                                title="{% if item.entry.should_comment %}תגובה אוטומטית פעילה — לחץ לביטול{% else %}לחץ להפעלת תגובה אוטומטית{% endif %}">
-                            <i class="bi bi-chat-square{% if item.entry.should_comment %}-fill{% endif %}"></i>
+                                data-slot="{{ s }}"
+                                data-current="{{ slot }}"
+                                title="תגובה {{ s }}{% if slot == s %} — פעילה, לחץ לביטול{% endif %}">
+                            <i class="bi bi-chat-square{% if slot == s %}-fill{% endif %}"></i> {{ s }}
                         </button>
+                        {% endfor %}
                         {% endif %}
 
                         <!-- Return to Pending Button -->
@@ -112,31 +116,36 @@
 {% endif %}
 
 <script>
-document.querySelectorAll('.comment-toggle-btn').forEach(function(btn) {
+var SLOT_CLASSES = {1: 'btn-primary', 2: 'btn-warning', 3: 'btn-success'};
+
+document.querySelectorAll('.comment-slot-btn').forEach(function(btn) {
     btn.addEventListener('click', function() {
         var entryId = this.dataset.entryId;
-        var active  = this.dataset.active === '1';
-        var newVal  = active ? 0 : 1;
-        var self    = this;
+        var slot    = parseInt(this.dataset.slot);
+        var current = parseInt(this.dataset.current);
+        var newSlot = (current === slot) ? 0 : slot;  // clicking active slot → turn off
 
         fetch('/toggle-comment/' + entryId, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({value: newVal})
+            body: JSON.stringify({slot: newSlot})
         }).then(function(r) {
             if (!r.ok) throw new Error('server error');
-            self.dataset.active = newVal ? '1' : '0';
-            if (newVal) {
-                self.classList.remove('btn-outline-secondary');
-                self.classList.add('btn-primary');
-                self.querySelector('i').className = 'bi bi-chat-square-fill';
-                self.title = 'תגובה אוטומטית פעילה — לחץ לביטול';
-            } else {
-                self.classList.remove('btn-primary');
-                self.classList.add('btn-outline-secondary');
-                self.querySelector('i').className = 'bi bi-chat-square';
-                self.title = 'לחץ להפעלת תגובה אוטומטית';
-            }
+            // Update all 3 buttons for this entry
+            document.querySelectorAll('.comment-slot-btn[data-entry-id="' + entryId + '"]').forEach(function(b) {
+                var s = parseInt(b.dataset.slot);
+                b.dataset.current = newSlot;
+                b.classList.remove('btn-primary', 'btn-warning', 'btn-success', 'btn-outline-secondary');
+                if (newSlot === s) {
+                    b.classList.add(SLOT_CLASSES[s]);
+                    b.querySelector('i').className = 'bi bi-chat-square-fill';
+                    b.title = 'תגובה ' + s + ' — פעילה, לחץ לביטול';
+                } else {
+                    b.classList.add('btn-outline-secondary');
+                    b.querySelector('i').className = 'bi bi-chat-square';
+                    b.title = 'תגובה ' + s;
+                }
+            });
         }).catch(function(e) { console.error('toggle-comment failed', e); });
     });
 });

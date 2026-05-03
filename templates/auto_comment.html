@@ -4,47 +4,53 @@
 {% block page_title %}<div class="text-center">💬 תגובה אוטומטית</div>{% endblock %}
 
 {% block content %}
+{% set slot_colors = ['primary', 'warning', 'success'] %}
+{% set slot_labels = ['כחול', 'כתום', 'ירוק'] %}
+
 <div class="row justify-content-center">
     <div class="col-lg-7">
 
         <div class="card mb-4">
             <div class="card-header text-white" style="background: linear-gradient(135deg, #6f42c1 0%, #5a329a 100%);">
-                <h5 class="mb-0"><i class="bi bi-chat-square-text"></i> טקסט התגובה האוטומטית</h5>
+                <h5 class="mb-0"><i class="bi bi-chat-square-text"></i> טקסטים לתגובות האוטומטיות</h5>
             </div>
             <div class="card-body">
-                <p class="text-muted mb-3">
-                    תגובה זו תפורסם אוטומטית על כל פוסט שסומן ב-<i class="bi bi-chat-square-fill text-primary"></i>,
-                    כ-2 דקות לאחר שעת הפרסום שלו.
+                <p class="text-muted mb-4">
+                    סמן פוסטים מתוזמנים עם כפתורי
+                    <span class="badge bg-primary">1</span>
+                    <span class="badge bg-warning text-dark">2</span>
+                    <span class="badge bg-success">3</span>
+                    כדי לבחור איזו תגובה תפורסם עליהם כ-2 דקות אחרי הפרסום.
                 </p>
 
                 <form method="POST" action="{{ url_for('auto_comment_save') }}">
-                    <div class="mb-3">
-                        <textarea name="auto_comment_text"
+                    {% for i in range(3) %}
+                    {% set n = i + 1 %}
+                    <div class="mb-4">
+                        <label class="form-label fw-bold">
+                            <span class="badge bg-{{ slot_colors[i] }} {% if slot_colors[i] == 'warning' %}text-dark{% endif %} me-1">{{ n }}</span>
+                            תגובה {{ n }} ({{ slot_labels[i] }})
+                        </label>
+                        <textarea name="auto_comment_text_{{ n }}"
                                   class="form-control"
-                                  rows="5"
-                                  placeholder="כתוב כאן את התגובה שתפורסם אוטומטית...">{{ auto_comment_text }}</textarea>
-                    </div>
-                    <div class="d-flex gap-2">
-                        <button type="submit" class="btn btn-primary">
-                            <i class="bi bi-floppy"></i> שמור
-                        </button>
-                        {% if auto_comment_text %}
-                        <span class="text-success align-self-center small">
-                            <i class="bi bi-check-circle"></i> תגובה מוגדרת
-                        </span>
-                        {% else %}
-                        <span class="text-warning align-self-center small">
-                            <i class="bi bi-exclamation-circle"></i> אין תגובה מוגדרת — האוטומציה לא תפעל
-                        </span>
+                                  rows="3"
+                                  placeholder="כתוב כאן את התגובה {{ n }}...">{{ texts[i] }}</textarea>
+                        {% if not texts[i] %}
+                        <div class="form-text text-warning"><i class="bi bi-exclamation-circle"></i> לא מוגדר — פוסטים עם סימון {{ n }} לא יקבלו תגובה</div>
                         {% endif %}
                     </div>
+                    {% endfor %}
+
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-floppy"></i> שמור הכל
+                    </button>
                 </form>
             </div>
         </div>
 
         <div class="card">
             <div class="card-header text-white" style="background: linear-gradient(135deg, #6f42c1 0%, #5a329a 100%);">
-                <h5 class="mb-0"><i class="bi bi-list-check"></i> פוסטים עם תגובה ממתינה</h5>
+                <h5 class="mb-0"><i class="bi bi-list-check"></i> פוסטים מסומנים לתגובה</h5>
             </div>
             <div class="card-body p-0">
                 {% if pending %}
@@ -54,15 +60,22 @@
                             <th>#</th>
                             <th>תוכן</th>
                             <th>זמן פרסום</th>
+                            <th>תגובה</th>
                             <th>סטטוס</th>
                         </tr>
                     </thead>
                     <tbody>
                         {% for e in pending %}
+                        {% set s = e.should_comment %}
                         <tr>
                             <td class="fw-bold">{{ e.post_number }}</td>
-                            <td class="text-truncate" style="max-width:300px;">{{ e.text }}</td>
+                            <td class="text-truncate" style="max-width:260px;">{{ e.text }}</td>
                             <td>{{ e.scheduled_time }}</td>
+                            <td>
+                                {% if s in [1,2,3] %}
+                                <span class="badge bg-{{ slot_colors[s-1] }} {% if slot_colors[s-1] == 'warning' %}text-dark{% endif %}">{{ s }}</span>
+                                {% endif %}
+                            </td>
                             <td>
                                 {% if e.comment_posted %}
                                     <span class="badge bg-success"><i class="bi bi-check-lg"></i> פורסמה</span>

@@ -271,11 +271,12 @@ class Database:
         conn.commit()
         conn.close()
     
-    def set_should_comment(self, entry_id: int, value: bool):
-        """Set whether a post should receive an auto-comment after publishing."""
+    def set_should_comment(self, entry_id: int, slot: int):
+        """Set comment slot for a post: 0=none, 1/2/3=use that comment template."""
         conn = self.get_connection()
         cursor = conn.cursor()
-        cursor.execute('UPDATE entries SET should_comment = ? WHERE id = ?', (1 if value else 0, entry_id))
+        cursor.execute('UPDATE entries SET should_comment = ?, comment_posted = 0 WHERE id = ?',
+                       (max(0, min(3, int(slot))), entry_id))
         conn.commit()
         conn.close()
 
@@ -284,9 +285,9 @@ class Database:
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute('''
-            SELECT id, facebook_post_id, post_number, text
+            SELECT id, facebook_post_id, post_number, text, should_comment
             FROM entries
-            WHERE should_comment = 1
+            WHERE should_comment > 0
               AND comment_posted = 0
               AND facebook_post_id IS NOT NULL
               AND scheduled_time < datetime('now', '-2 minutes')
@@ -390,7 +391,8 @@ class Database:
         cursor = conn.cursor()
         
         cursor.execute('''
-            SELECT id, text, post_number, facebook_post_id, scheduled_time
+            SELECT id, text, post_number, facebook_post_id, scheduled_time,
+                   should_comment, comment_posted
             FROM entries
             WHERE status = 'scheduled'
             ORDER BY scheduled_time ASC

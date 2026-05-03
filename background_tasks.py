@@ -453,13 +453,8 @@ def comments_scan_job():
 
 
 def auto_comment_job():
-    """Post a comment on each entry that has should_comment=1 and whose scheduled_time passed 2+ min ago."""
+    """Post a comment on each entry whose scheduled_time passed 2+ min ago (slot 1/2/3)."""
     try:
-        config = load_config()
-        comment_text = config.get('auto_comment_text', '').strip()
-        if not comment_text:
-            return  # No comment configured — nothing to do
-
         if not extensions.facebook_handler:
             return
 
@@ -467,15 +462,24 @@ def auto_comment_job():
         if not pending:
             return
 
+        config = load_config()
+        texts = {
+            1: config.get('auto_comment_text_1', '').strip(),
+            2: config.get('auto_comment_text_2', '').strip(),
+            3: config.get('auto_comment_text_3', '').strip(),
+        }
+
         print(f"\n💬 Auto-comment job: {len(pending)} post(s) to comment on")
         for entry in pending:
             fb_id = entry.get('facebook_post_id')
-            if not fb_id:
+            slot  = entry.get('should_comment', 0)
+            comment_text = texts.get(slot, '')
+            if not fb_id or not comment_text:
                 continue
             try:
                 extensions.facebook_handler.post_comment(fb_id, comment_text)
                 extensions.db.mark_comment_posted(entry['id'])
-                print(f"   ✓ Commented on #{entry.get('post_number')} (fb: {fb_id})")
+                print(f"   ✓ Commented on #{entry.get('post_number')} with slot {slot}")
             except Exception as e:
                 print(f"   ✗ Failed to comment on #{entry.get('post_number')}: {e}")
 

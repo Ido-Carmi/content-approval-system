@@ -279,34 +279,39 @@ def approve_with_comment(entry_id):
 @app.route('/toggle-comment/<int:entry_id>', methods=['POST'])
 def toggle_comment(entry_id):
     data = request.get_json(silent=True) or {}
-    value = bool(data.get('value', 0))
-    extensions.db.set_should_comment(entry_id, value)
-    return jsonify({'ok': True, 'should_comment': value})
+    slot = int(data.get('slot', 0))
+    extensions.db.set_should_comment(entry_id, slot)
+    return jsonify({'ok': True, 'slot': slot})
 
 @app.route('/auto-comment')
 def auto_comment_page():
     config = load_config()
-    auto_comment_text = config.get('auto_comment_text', '')
+    texts = [
+        config.get('auto_comment_text_1', ''),
+        config.get('auto_comment_text_2', ''),
+        config.get('auto_comment_text_3', ''),
+    ]
 
     conn = extensions.db.get_connection()
     cursor = conn.cursor()
     cursor.execute('''
         SELECT id, post_number, text, scheduled_time, should_comment, comment_posted
         FROM entries
-        WHERE should_comment = 1
+        WHERE should_comment > 0
         ORDER BY scheduled_time ASC
     ''')
     pending = [dict(row) for row in cursor.fetchall()]
     conn.close()
 
-    return render_template('auto_comment.html', auto_comment_text=auto_comment_text, pending=pending)
+    return render_template('auto_comment.html', texts=texts, pending=pending)
 
 @app.route('/auto-comment/save', methods=['POST'])
 def auto_comment_save():
     config = load_config()
-    config['auto_comment_text'] = request.form.get('auto_comment_text', '').strip()
+    for i in range(1, 4):
+        config[f'auto_comment_text_{i}'] = request.form.get(f'auto_comment_text_{i}', '').strip()
     save_config(config)
-    flash('התגובה האוטומטית נשמרה', 'success')
+    flash('התגובות האוטומטיות נשמרו', 'success')
     return redirect(url_for('auto_comment_page'))
 
 @app.route('/sync', methods=['POST'])
@@ -662,7 +667,7 @@ def scheduled_content():
 
                     fb_posts = extensions.facebook_handler.get_scheduled_posts()
                     # Re-fetch db_entries so new FB IDs are visible
-                    db_entries = extensions.db.get_entries_by_status('scheduled')
+                    db_entries = extensions.db.get_scheduled_entries()
                     posts_data = []
                     for fb_post in sorted(fb_posts, key=lambda p: p['scheduled_time']):
                         message = fb_post.get('message', '')
