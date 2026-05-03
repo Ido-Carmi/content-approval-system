@@ -471,17 +471,25 @@ def auto_comment_job():
 
         print(f"\n💬 Auto-comment job: {len(pending)} post(s) to comment on")
         for entry in pending:
-            fb_id = entry.get('facebook_post_id')
-            slot  = entry.get('should_comment', 0)
-            comment_text = texts.get(slot, '')
-            if not fb_id or not comment_text:
+            fb_id        = entry.get('facebook_post_id')
+            should_mask  = int(entry.get('should_comment', 0))
+            posted_mask  = int(entry.get('comment_posted', 0))
+            pending_mask = should_mask & ~posted_mask
+            if not fb_id or not pending_mask:
                 continue
-            try:
-                extensions.facebook_handler.post_comment(fb_id, comment_text)
-                extensions.db.mark_comment_posted(entry['id'])
-                print(f"   ✓ Commented on #{entry.get('post_number')} with slot {slot}")
-            except Exception as e:
-                print(f"   ✗ Failed to comment on #{entry.get('post_number')}: {e}")
+            for slot in [1, 2, 3]:
+                slot_bit = 1 << (slot - 1)   # 1, 2, 4
+                if not (pending_mask & slot_bit):
+                    continue
+                comment_text = texts.get(slot, '')
+                if not comment_text:
+                    continue
+                try:
+                    extensions.facebook_handler.post_comment(fb_id, comment_text)
+                    extensions.db.mark_comment_posted(entry['id'], slot_bit)
+                    print(f"   ✓ #{entry.get('post_number')} slot {slot} posted")
+                except Exception as e:
+                    print(f"   ✗ #{entry.get('post_number')} slot {slot} failed: {e}")
 
     except Exception as e:
         print(f"❌ Auto-comment job error: {e}")

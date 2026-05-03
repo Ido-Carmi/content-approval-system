@@ -88,17 +88,17 @@
                           oninput="this.style.height='';this.style.height=this.scrollHeight+'px'"
                           style="overflow-y: hidden; resize: none;">{{ entry.text }}</textarea>
                 
-                <!-- Hidden input tracks selected comment slot (0 = none) -->
+                <!-- Hidden input tracks comment bitmask (slot1=1, slot2=2, slot3=4) -->
                 <input type="hidden" id="slot-{{ entry.id }}" value="0">
 
                 <div class="d-flex gap-2 mb-2">
-                    {% for s, color in [(1,'primary'),(2,'warning'),(3,'success')] %}
+                    {% for s, color, bit in [(1,'primary',1),(2,'warning',2),(3,'success',4)] %}
                     <button type="button"
                             class="btn btn-sm btn-outline-secondary review-slot-btn flex-fill"
                             data-entry-id="{{ entry.id }}"
                             data-slot="{{ s }}"
-                            data-color="btn-{{ color }}"
-                            title="סמן לתגובה {{ s }}">
+                            data-bit="{{ bit }}"
+                            title="תגובה {{ s }}">
                         <i class="bi bi-chat-square"></i> {{ s }}
                     </button>
                     {% endfor %}
@@ -108,7 +108,7 @@
                     <button type="button"
                             class="btn btn-success flex-fill"
                             hx-post="{{ url_for('approve_entry', entry_id=entry.id) }}"
-                            hx-vals='js:{text: document.getElementById("text-{{ entry.id }}").value, comment_slot: document.getElementById("slot-{{ entry.id }}").value}'
+                            hx-vals='js:{text: document.getElementById("text-{{ entry.id }}").value, comment_bitmask: document.getElementById("slot-{{ entry.id }}").value}'
                             hx-target="#entry-{{ entry.id }}"
                             hx-swap="outerHTML swap:200ms settle:600ms">
                         <i class="bi bi-check-lg"></i> אשר
@@ -137,27 +137,24 @@ document.addEventListener('DOMContentLoaded', function() {
         ta.style.height = ta.scrollHeight + 'px';
     });
 
-    // Slot toggle buttons
+    // Slot toggle buttons — XOR the bit to toggle independently
     document.addEventListener('click', function(e) {
         var btn = e.target.closest('.review-slot-btn');
         if (!btn) return;
-        var entryId = btn.dataset.entryId;
-        var slot    = parseInt(btn.dataset.slot);
-        var input   = document.getElementById('slot-' + entryId);
-        var current = parseInt(input.value);
-        var newSlot = (current === slot) ? 0 : slot;
-        input.value = newSlot;
+        var entryId    = btn.dataset.entryId;
+        var bit        = parseInt(btn.dataset.bit);
+        var slot       = parseInt(btn.dataset.slot);
+        var input      = document.getElementById('slot-' + entryId);
+        var newBitmask = (parseInt(input.value) || 0) ^ bit;
+        input.value = newBitmask;
 
         document.querySelectorAll('.review-slot-btn[data-entry-id="' + entryId + '"]').forEach(function(b) {
-            var s = parseInt(b.dataset.slot);
+            var s      = parseInt(b.dataset.slot);
+            var bBit   = parseInt(b.dataset.bit);
+            var active = (newBitmask & bBit) > 0;
             b.classList.remove('btn-primary', 'btn-warning', 'btn-success', 'btn-outline-secondary');
-            if (newSlot === s) {
-                b.classList.add(REVIEW_SLOT_COLORS[s]);
-                b.querySelector('i').className = 'bi bi-chat-square-fill';
-            } else {
-                b.classList.add('btn-outline-secondary');
-                b.querySelector('i').className = 'bi bi-chat-square';
-            }
+            b.classList.add(active ? REVIEW_SLOT_COLORS[s] : 'btn-outline-secondary');
+            b.querySelector('i').className = 'bi bi-chat-square' + (active ? '-fill' : '');
         });
     });
 });

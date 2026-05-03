@@ -85,17 +85,20 @@
                             <i class="bi bi-check-lg"></i> שמור
                         </button>
 
-                        <!-- Auto-comment slot buttons (1=blue, 2=orange, 3=green) -->
+                        <!-- Auto-comment slot buttons (1=blue 2=orange 3=green, bitmask) -->
                         {% if item.entry %}
-                        {% set slot = item.entry.should_comment | int %}
-                        {% for s in [1, 2, 3] %}
+                        {% set bitmask = item.entry.should_comment | int %}
+                        {% for s, color in [(1,'primary'),(2,'warning'),(3,'success')] %}
+                        {% set bit = [1,2,4][s-1] %}
+                        {% set active = (bitmask // bit) % 2 %}
                         <button type="button"
-                                class="btn btn-sm comment-slot-btn {% if slot == s %}{{ ['btn-primary','btn-warning','btn-success'][s-1] }}{% else %}btn-outline-secondary{% endif %}"
+                                class="btn btn-sm comment-slot-btn {% if active %}btn-{{ color }}{% else %}btn-outline-secondary{% endif %}"
                                 data-entry-id="{{ item.entry.id }}"
                                 data-slot="{{ s }}"
-                                data-current="{{ slot }}"
-                                title="תגובה {{ s }}{% if slot == s %} — פעילה, לחץ לביטול{% endif %}">
-                            <i class="bi bi-chat-square{% if slot == s %}-fill{% endif %}"></i> {{ s }}
+                                data-bit="{{ bit }}"
+                                data-bitmask="{{ bitmask }}"
+                                title="תגובה {{ s }}{% if active %} — פעילה{% endif %}">
+                            <i class="bi bi-chat-square{% if active %}-fill{% endif %}"></i> {{ s }}
                         </button>
                         {% endfor %}
                         {% endif %}
@@ -116,35 +119,33 @@
 {% endif %}
 
 <script>
-var SLOT_CLASSES = {1: 'btn-primary', 2: 'btn-warning', 3: 'btn-success'};
+var SLOT_COLORS = {1: 'btn-primary', 2: 'btn-warning', 3: 'btn-success'};
+var SLOT_BITS   = {1: 1, 2: 2, 3: 4};
 
 document.querySelectorAll('.comment-slot-btn').forEach(function(btn) {
     btn.addEventListener('click', function() {
-        var entryId = this.dataset.entryId;
-        var slot    = parseInt(this.dataset.slot);
-        var current = parseInt(this.dataset.current);
-        var newSlot = (current === slot) ? 0 : slot;  // clicking active slot → turn off
+        var entryId    = this.dataset.entryId;
+        var slot       = parseInt(this.dataset.slot);
+        var bit        = parseInt(this.dataset.bit);
+        var oldBitmask = parseInt(this.dataset.bitmask);
+        var newBitmask = oldBitmask ^ bit;  // XOR: toggle this slot's bit
 
         fetch('/toggle-comment/' + entryId, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({slot: newSlot})
+            body: JSON.stringify({bitmask: newBitmask})
         }).then(function(r) {
             if (!r.ok) throw new Error('server error');
-            // Update all 3 buttons for this entry
+            // Update all 3 buttons for this entry to reflect new bitmask
             document.querySelectorAll('.comment-slot-btn[data-entry-id="' + entryId + '"]').forEach(function(b) {
-                var s = parseInt(b.dataset.slot);
-                b.dataset.current = newSlot;
+                var s      = parseInt(b.dataset.slot);
+                var bBit   = parseInt(b.dataset.bit);
+                var active = (newBitmask & bBit) > 0;
+                b.dataset.bitmask = newBitmask;
                 b.classList.remove('btn-primary', 'btn-warning', 'btn-success', 'btn-outline-secondary');
-                if (newSlot === s) {
-                    b.classList.add(SLOT_CLASSES[s]);
-                    b.querySelector('i').className = 'bi bi-chat-square-fill';
-                    b.title = 'תגובה ' + s + ' — פעילה, לחץ לביטול';
-                } else {
-                    b.classList.add('btn-outline-secondary');
-                    b.querySelector('i').className = 'bi bi-chat-square';
-                    b.title = 'תגובה ' + s;
-                }
+                b.classList.add(active ? SLOT_COLORS[s] : 'btn-outline-secondary');
+                b.querySelector('i').className = 'bi bi-chat-square' + (active ? '-fill' : '');
+                b.title = 'תגובה ' + s + (active ? ' — פעילה' : '');
             });
         }).catch(function(e) { console.error('toggle-comment failed', e); });
     });

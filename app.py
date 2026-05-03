@@ -216,10 +216,10 @@ def review_page():
 def approve_entry(entry_id):
     json_body = request.get_json(silent=True) or {}
     edited_text = request.form.get('text', '') or json_body.get('text', '')
-    comment_slot = int(request.form.get('comment_slot', 0) or json_body.get('comment_slot', 0) or 0)
+    comment_bitmask = int(request.form.get('comment_bitmask', 0) or json_body.get('comment_bitmask', 0) or 0)
     extensions.db.approve_entry(entry_id, edited_text, 'admin')
-    if comment_slot > 0:
-        extensions.db.set_should_comment(entry_id, comment_slot)
+    if comment_bitmask > 0:
+        extensions.db.set_should_comment(entry_id, comment_bitmask)
 
     conn = extensions.db.get_connection()
     cursor = conn.cursor()
@@ -254,9 +254,14 @@ def deny_entry(entry_id):
 @app.route('/toggle-comment/<int:entry_id>', methods=['POST'])
 def toggle_comment(entry_id):
     data = request.get_json(silent=True) or {}
-    slot = int(data.get('slot', 0))
-    extensions.db.set_should_comment(entry_id, slot)
-    return jsonify({'ok': True, 'slot': slot})
+    bitmask = int(data.get('bitmask', 0))
+    extensions.db.set_should_comment(entry_id, bitmask)
+    return jsonify({'ok': True, 'bitmask': bitmask})
+
+@app.route('/remove-auto-comment/<int:entry_id>', methods=['POST'])
+def remove_auto_comment(entry_id):
+    extensions.db.remove_auto_comment(entry_id)
+    return jsonify({'ok': True})
 
 @app.route('/auto-comment')
 def auto_comment_page():

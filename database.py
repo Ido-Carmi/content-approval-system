@@ -271,24 +271,28 @@ class Database:
         conn.commit()
         conn.close()
     
-    def set_should_comment(self, entry_id: int, slot: int):
-        """Set comment slot for a post: 0=none, 1/2/3=use that comment template."""
+    def set_should_comment(self, entry_id: int, bitmask: int):
+        """Set comment bitmask for a post.
+        Bits: slot1=1, slot2=2, slot3=4. 0=none. Resets comment_posted for newly enabled slots."""
+        bitmask = max(0, min(7, int(bitmask)))
         conn = self.get_connection()
         cursor = conn.cursor()
-        cursor.execute('UPDATE entries SET should_comment = ?, comment_posted = 0 WHERE id = ?',
-                       (max(0, min(3, int(slot))), entry_id))
+        # Preserve comment_posted only for slots that remain enabled
+        cursor.execute(
+            'UPDATE entries SET should_comment = ?, comment_posted = (comment_posted & ?) WHERE id = ?',
+            (bitmask, bitmask, entry_id))
         conn.commit()
         conn.close()
 
     def get_pending_auto_comments(self) -> List[Dict]:
-        """Return entries that need an auto-comment posted (scheduled time passed 2+ min ago)."""
+        """Return entries with at least one unposted comment slot past their scheduled time."""
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute('''
-            SELECT id, facebook_post_id, post_number, text, should_comment
+            SELECT id, facebook_post_id, post_number, text, should_comment, comment_posted
             FROM entries
             WHERE should_comment > 0
-              AND comment_posted = 0
+              AND (should_comment & ~comment_posted) > 0
               AND facebook_post_id IS NOT NULL
               AND scheduled_time < datetime('now', '-2 minutes')
         ''')
@@ -296,11 +300,20 @@ class Database:
         conn.close()
         return [dict(row) for row in rows]
 
-    def mark_comment_posted(self, entry_id: int):
-        """Mark that the auto-comment was successfully posted."""
+    def mark_comment_posted(self, entry_id: int, slot_bit: int):
+        """OR in the slot bit so we know this slot's comment was posted."""
         conn = self.get_connection()
         cursor = conn.cursor()
-        cursor.execute('UPDATE entries SET comment_posted = 1 WHERE id = ?', (entry_id,))
+        cursor.execute('UPDATE entries SET comment_posted = comment_posted | ? WHERE id = ?',
+                       (slot_bit, entry_id))
+        conn.commit()
+        conn.close()
+
+    def remove_auto_comment(self, entry_id: int):
+        """Clear comment slot selection for a post."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('UPDATE entries SET should_comment = 0, comment_posted = 0 WHERE id = ?', (entry_id,))
         conn.commit()
         conn.close()
 

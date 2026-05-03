@@ -60,28 +60,46 @@
                             <th>#</th>
                             <th>תוכן</th>
                             <th>זמן פרסום</th>
-                            <th>תגובה</th>
+                            <th>תגובות</th>
                             <th>סטטוס</th>
+                            <th></th>
                         </tr>
                     </thead>
                     <tbody>
                         {% for e in pending %}
-                        {% set s = e.should_comment %}
-                        <tr>
+                        {% set bitmask = e.should_comment | int %}
+                        {% set posted  = e.comment_posted | int %}
+                        <tr id="acrow-{{ e.id }}">
                             <td class="fw-bold">{{ e.post_number }}</td>
-                            <td class="text-truncate" style="max-width:260px;">{{ e.text }}</td>
+                            <td class="text-truncate" style="max-width:220px;">{{ e.text }}</td>
                             <td>{{ e.scheduled_time }}</td>
                             <td>
-                                {% if s in [1,2,3] %}
-                                <span class="badge bg-{{ slot_colors[s-1] }} {% if slot_colors[s-1] == 'warning' %}text-dark{% endif %}">{{ s }}</span>
+                                {% for s, color in [(1,'primary'),(2,'warning'),(3,'success')] %}
+                                {% set bit = [1,2,4][s-1] %}
+                                {% set slot_active = (bitmask // bit) % 2 %}
+                                {% if slot_active %}
+                                <span class="badge bg-{{ color }} {% if color == 'warning' %}text-dark{% endif %}">
+                                    {{ s }}
+                                    {% if (posted // bit) % 2 %}<i class="bi bi-check-lg"></i>{% else %}<i class="bi bi-hourglass-split"></i>{% endif %}
+                                </span>
+                                {% endif %}
+                                {% endfor %}
+                            </td>
+                            <td>
+                                {% if bitmask > 0 and bitmask == posted %}
+                                    <span class="badge bg-success">הכל פורסם</span>
+                                {% elif posted > 0 %}
+                                    <span class="badge bg-info text-dark">חלקי</span>
+                                {% else %}
+                                    <span class="badge bg-secondary">ממתין</span>
                                 {% endif %}
                             </td>
                             <td>
-                                {% if e.comment_posted %}
-                                    <span class="badge bg-success"><i class="bi bi-check-lg"></i> פורסמה</span>
-                                {% else %}
-                                    <span class="badge bg-secondary"><i class="bi bi-hourglass-split"></i> ממתין</span>
-                                {% endif %}
+                                <button class="btn btn-sm btn-outline-danger"
+                                        onclick="removeAutoComment({{ e.id }})"
+                                        title="הסר מהרשימה">
+                                    <i class="bi bi-x-lg"></i>
+                                </button>
                             </td>
                         </tr>
                         {% endfor %}
@@ -98,4 +116,20 @@
 
     </div>
 </div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+function removeAutoComment(entryId) {
+    fetch('/remove-auto-comment/' + entryId, {method: 'POST'})
+        .then(function(r) {
+            if (r.ok) {
+                var row = document.getElementById('acrow-' + entryId);
+                if (row) row.remove();
+            }
+        })
+        .catch(function(e) { console.error('remove failed', e); });
+}
+</script>
 {% endblock %}
