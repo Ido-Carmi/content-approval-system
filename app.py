@@ -216,7 +216,10 @@ def review_page():
 def approve_entry(entry_id):
     json_body = request.get_json(silent=True) or {}
     edited_text = request.form.get('text', '') or json_body.get('text', '')
+    comment_slot = int(request.form.get('comment_slot', 0) or json_body.get('comment_slot', 0) or 0)
     extensions.db.approve_entry(entry_id, edited_text, 'admin')
+    if comment_slot > 0:
+        extensions.db.set_should_comment(entry_id, comment_slot)
 
     conn = extensions.db.get_connection()
     cursor = conn.cursor()
@@ -247,34 +250,6 @@ def deny_entry(entry_id):
         return '', 200
     return redirect(url_for('review_page'))
 
-@app.route('/approve-with-comment/<int:entry_id>', methods=['POST'])
-def approve_with_comment(entry_id):
-    json_body = request.get_json(silent=True) or {}
-    edited_text = request.form.get('text', '') or json_body.get('text', '')
-    extensions.db.approve_entry(entry_id, edited_text, 'admin')
-    extensions.db.set_should_comment(entry_id, True)
-
-    conn = extensions.db.get_connection()
-    cursor = conn.cursor()
-    cursor.execute('SELECT post_number FROM entries WHERE id = ?', (entry_id,))
-    result = cursor.fetchone()
-    post_number = result['post_number'] if result else 1
-    conn.close()
-
-    formatted_text = f"#{post_number} {edited_text}"
-
-    def schedule_in_background():
-        if extensions.scheduler:
-            try:
-                extensions.scheduler.schedule_post_to_facebook(entry_id, formatted_text)
-            except Exception as e:
-                print(f"Background scheduling error: {e}")
-
-    threading.Thread(target=schedule_in_background, daemon=True).start()
-
-    if request.headers.get('HX-Request'):
-        return '', 200
-    return redirect(url_for('review_page'))
 
 @app.route('/toggle-comment/<int:entry_id>', methods=['POST'])
 def toggle_comment(entry_id):

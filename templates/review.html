@@ -88,23 +88,30 @@
                           oninput="this.style.height='';this.style.height=this.scrollHeight+'px'"
                           style="overflow-y: hidden; resize: none;">{{ entry.text }}</textarea>
                 
+                <!-- Hidden input tracks selected comment slot (0 = none) -->
+                <input type="hidden" id="slot-{{ entry.id }}" value="0">
+
+                <div class="d-flex gap-2 mb-2">
+                    {% for s, color in [(1,'primary'),(2,'warning'),(3,'success')] %}
+                    <button type="button"
+                            class="btn btn-sm btn-outline-secondary review-slot-btn flex-fill"
+                            data-entry-id="{{ entry.id }}"
+                            data-slot="{{ s }}"
+                            data-color="btn-{{ color }}"
+                            title="סמן לתגובה {{ s }}">
+                        <i class="bi bi-chat-square"></i> {{ s }}
+                    </button>
+                    {% endfor %}
+                </div>
+
                 <div class="d-flex gap-2">
                     <button type="button"
                             class="btn btn-success flex-fill"
                             hx-post="{{ url_for('approve_entry', entry_id=entry.id) }}"
-                            hx-vals='js:{text: document.getElementById("text-{{ entry.id }}").value}'
+                            hx-vals='js:{text: document.getElementById("text-{{ entry.id }}").value, comment_slot: document.getElementById("slot-{{ entry.id }}").value}'
                             hx-target="#entry-{{ entry.id }}"
                             hx-swap="outerHTML swap:200ms settle:600ms">
                         <i class="bi bi-check-lg"></i> אשר
-                    </button>
-                    <button type="button"
-                            class="btn btn-primary flex-fill"
-                            hx-post="{{ url_for('approve_with_comment', entry_id=entry.id) }}"
-                            hx-vals='js:{text: document.getElementById("text-{{ entry.id }}").value}'
-                            hx-target="#entry-{{ entry.id }}"
-                            hx-swap="outerHTML swap:200ms settle:600ms"
-                            title="אשר ותגובה אוטומטית תפורסם לאחר הפרסום">
-                        <i class="bi bi-chat-square-check"></i> אשר + תגובה
                     </button>
                     <button type="button"
                             class="btn btn-danger flex-fill"
@@ -121,11 +128,37 @@
 </div>
 
 <script>
-// Auto-resize all textareas on page load
+var REVIEW_SLOT_COLORS = {1: 'btn-primary', 2: 'btn-warning', 3: 'btn-success'};
+
 document.addEventListener('DOMContentLoaded', function() {
-    document.querySelectorAll('textarea').forEach(function(textarea) {
-        textarea.style.height = '';
-        textarea.style.height = textarea.scrollHeight + 'px';
+    // Auto-resize textareas
+    document.querySelectorAll('textarea').forEach(function(ta) {
+        ta.style.height = '';
+        ta.style.height = ta.scrollHeight + 'px';
+    });
+
+    // Slot toggle buttons
+    document.addEventListener('click', function(e) {
+        var btn = e.target.closest('.review-slot-btn');
+        if (!btn) return;
+        var entryId = btn.dataset.entryId;
+        var slot    = parseInt(btn.dataset.slot);
+        var input   = document.getElementById('slot-' + entryId);
+        var current = parseInt(input.value);
+        var newSlot = (current === slot) ? 0 : slot;
+        input.value = newSlot;
+
+        document.querySelectorAll('.review-slot-btn[data-entry-id="' + entryId + '"]').forEach(function(b) {
+            var s = parseInt(b.dataset.slot);
+            b.classList.remove('btn-primary', 'btn-warning', 'btn-success', 'btn-outline-secondary');
+            if (newSlot === s) {
+                b.classList.add(REVIEW_SLOT_COLORS[s]);
+                b.querySelector('i').className = 'bi bi-chat-square-fill';
+            } else {
+                b.classList.add('btn-outline-secondary');
+                b.querySelector('i').className = 'bi bi-chat-square';
+            }
+        });
     });
 });
 </script>
