@@ -85,7 +85,19 @@ class Database:
             cursor.execute('ALTER TABLE hidden_comments ADD COLUMN dismissed_at TEXT')
             conn.commit()
         except sqlite3.OperationalError:
-            pass  # Column already exists        
+            pass  # Column already exists
+
+        # Auto-comment columns (for time-based comment posting after publish)
+        for col_def in [
+            'ALTER TABLE entries ADD COLUMN should_comment INTEGER DEFAULT 0',
+            'ALTER TABLE entries ADD COLUMN comment_posted INTEGER DEFAULT 0',
+        ]:
+            try:
+                cursor.execute(col_def)
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+
         # Create indexes for hidden_comments
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_comments_status ON hidden_comments(status)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_comments_created ON hidden_comments(created_at)')
@@ -259,6 +271,38 @@ class Database:
         conn.commit()
         conn.close()
     
+    def set_should_comment(self, entry_id: int, value: bool):
+        """Set whether a post should receive an auto-comment after publishing."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('UPDATE entries SET should_comment = ? WHERE id = ?', (1 if value else 0, entry_id))
+        conn.commit()
+        conn.close()
+
+    def get_pending_auto_comments(self) -> List[Dict]:
+        """Return entries that need an auto-comment posted (scheduled time passed 2+ min ago)."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT id, facebook_post_id, post_number, text
+            FROM entries
+            WHERE should_comment = 1
+              AND comment_posted = 0
+              AND facebook_post_id IS NOT NULL
+              AND scheduled_time < datetime('now', '-2 minutes')
+        ''')
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def mark_comment_posted(self, entry_id: int):
+        """Mark that the auto-comment was successfully posted."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('UPDATE entries SET comment_posted = 1 WHERE id = ?', (entry_id,))
+        conn.commit()
+        conn.close()
+
     def schedule_to_facebook(self, entry_id: int, facebook_post_id: str, scheduled_time: str):
         """
         Mark entry as scheduled with Facebook post ID

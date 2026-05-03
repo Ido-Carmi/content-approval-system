@@ -69,24 +69,35 @@
                     <!-- Action Buttons -->
                     <div class="flex-grow-1 d-flex gap-2">
                         <!-- Edit Button -->
-                        <button type="button" 
+                        <button type="button"
                                 class="btn btn-info flex-fill edit-btn"
                                 id="edit-{{ item.entry.id }}"
                                 data-entry-id="{{ item.entry.id }}">
                             <i class="bi bi-pencil"></i> ערוך
                         </button>
-                        
+
                         <!-- Save Button (hidden initially) -->
-                        <button type="button" 
+                        <button type="button"
                                 class="btn btn-success flex-fill save-btn"
                                 id="save-{{ item.entry.id }}"
                                 style="display: none;"
                                 data-entry-id="{{ item.entry.id }}">
                             <i class="bi bi-check-lg"></i> שמור
                         </button>
-                        
+
+                        <!-- Auto-comment Toggle -->
+                        {% if item.entry %}
+                        <button type="button"
+                                class="btn {% if item.entry.should_comment %}btn-primary{% else %}btn-outline-secondary{% endif %} comment-toggle-btn"
+                                data-entry-id="{{ item.entry.id }}"
+                                data-active="{{ '1' if item.entry.should_comment else '0' }}"
+                                title="{% if item.entry.should_comment %}תגובה אוטומטית פעילה — לחץ לביטול{% else %}לחץ להפעלת תגובה אוטומטית{% endif %}">
+                            <i class="bi bi-chat-square{% if item.entry.should_comment %}-fill{% endif %}"></i>
+                        </button>
+                        {% endif %}
+
                         <!-- Return to Pending Button -->
-                        <button type="button" 
+                        <button type="button"
                                 class="btn btn-warning flex-fill unschedule-btn"
                                 data-entry-id="{{ item.entry.id }}">
                             <i class="bi bi-arrow-counterclockwise"></i> החזר
@@ -99,6 +110,37 @@
     {% endfor %}
 </div>
 {% endif %}
+
+<script>
+document.querySelectorAll('.comment-toggle-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+        var entryId = this.dataset.entryId;
+        var active  = this.dataset.active === '1';
+        var newVal  = active ? 0 : 1;
+        var self    = this;
+
+        fetch('/toggle-comment/' + entryId, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({value: newVal})
+        }).then(function(r) {
+            if (!r.ok) throw new Error('server error');
+            self.dataset.active = newVal ? '1' : '0';
+            if (newVal) {
+                self.classList.remove('btn-outline-secondary');
+                self.classList.add('btn-primary');
+                self.querySelector('i').className = 'bi bi-chat-square-fill';
+                self.title = 'תגובה אוטומטית פעילה — לחץ לביטול';
+            } else {
+                self.classList.remove('btn-primary');
+                self.classList.add('btn-outline-secondary');
+                self.querySelector('i').className = 'bi bi-chat-square';
+                self.title = 'לחץ להפעלת תגובה אוטומטית';
+            }
+        }).catch(function(e) { console.error('toggle-comment failed', e); });
+    });
+});
+</script>
 
 {% if had_orphans %}
 <script>

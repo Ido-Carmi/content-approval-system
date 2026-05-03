@@ -178,6 +178,31 @@ class FacebookHandler:
         self.delete_scheduled_post(post_id)
         return self.schedule_post(message, scheduled_time)
     
+    def post_comment(self, post_id: str, message: str) -> Dict:
+        """
+        Post a comment on a published Facebook post.
+
+        Args:
+            post_id: Facebook post ID
+            message: Comment text
+
+        Returns:
+            Dictionary with comment id
+        """
+        url = f"{self.api_base}/{post_id}/comments"
+
+        payload = {
+            'message': message,
+            'access_token': self.access_token
+        }
+
+        response = requests.post(url, data=payload)
+
+        if response.status_code == 200:
+            return response.json()
+        else:
+            raise Exception(f"Facebook API error: {response.text}")
+
     def test_connection(self) -> bool:
         """
         Test if the Page Access Token is valid

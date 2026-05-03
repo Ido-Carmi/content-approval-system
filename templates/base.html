@@ -31,6 +31,7 @@
         nav.page-denied { background-color: #ffc107 !important; }  /* Yellow */
         nav.page-statistics { background-color: #198754 !important; }  /* Green */
         nav.page-settings { background-color: #6c757d !important; }  /* Gray */
+        nav.page-auto-comment { background-color: #6f42c1 !important; }  /* Purple */
         
         /* Mobile-responsive padding */
         @media (max-width: 768px) {
@@ -60,6 +61,10 @@
             .card-header, #sidebar-wrapper { background: linear-gradient(135deg, #6c757d 0%, #5a6268 100%) !important; }
             .sidebar-heading { background: linear-gradient(135deg, #6c757d 0%, #5a6268 100%) !important; }
             .btn-primary { background: linear-gradient(135deg, #6c757d 0%, #5a6268 100%) !important; }
+        {% elif request.endpoint == 'auto_comment_page' %}
+            .card-header, #sidebar-wrapper { background: linear-gradient(135deg, #6f42c1 0%, #5a329a 100%) !important; }
+            .sidebar-heading { background: linear-gradient(135deg, #6f42c1 0%, #5a329a 100%) !important; }
+            .btn-primary { background: linear-gradient(135deg, #6f42c1 0%, #5a329a 100%) !important; border-color: #6f42c1 !important; }
         {% endif %}
     </style>
     
@@ -98,6 +103,9 @@
                 <a href="{{ url_for('ai_examples_page') }}" class="list-group-item list-group-item-action {% if request.endpoint == 'ai_examples_page' %}active{% endif %}">
                     <i class="bi bi-mortarboard"></i> דוגמאות AI
                 </a>
+                <a href="{{ url_for('auto_comment_page') }}" class="list-group-item list-group-item-action {% if request.endpoint == 'auto_comment_page' %}active{% endif %}">
+                    <i class="bi bi-chat-square-text"></i> תגובה אוטומטית
+                </a>
                 <a href="{{ url_for('statistics_page') }}" class="list-group-item list-group-item-action {% if request.endpoint == 'statistics_page' %}active{% endif %}">
                     <i class="bi bi-graph-up"></i> סטטיסטיקה
                 </a>
@@ -124,6 +132,7 @@
                  {% elif request.endpoint == 'denied_page' %}#dc3545
                  {% elif request.endpoint == 'statistics_page' %}#198754
                  {% elif request.endpoint == 'settings_page' %}#6c757d
+                 {% elif request.endpoint == 'auto_comment_page' %}#6f42c1
                  {% else %}#e9ecef{% endif %} !important;">
                 <div class="container-fluid">
                     <button class="btn {% if request.endpoint in ['review_page', 'scheduled_page', 'statistics_page', 'settings_page'] %}btn-light{% else %}btn-primary{% endif %}" id="sidebarToggle">

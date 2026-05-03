@@ -247,6 +247,68 @@ def deny_entry(entry_id):
         return '', 200
     return redirect(url_for('review_page'))
 
+@app.route('/approve-with-comment/<int:entry_id>', methods=['POST'])
+def approve_with_comment(entry_id):
+    json_body = request.get_json(silent=True) or {}
+    edited_text = request.form.get('text', '') or json_body.get('text', '')
+    extensions.db.approve_entry(entry_id, edited_text, 'admin')
+    extensions.db.set_should_comment(entry_id, True)
+
+    conn = extensions.db.get_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT post_number FROM entries WHERE id = ?', (entry_id,))
+    result = cursor.fetchone()
+    post_number = result['post_number'] if result else 1
+    conn.close()
+
+    formatted_text = f"#{post_number} {edited_text}"
+
+    def schedule_in_background():
+        if extensions.scheduler:
+            try:
+                extensions.scheduler.schedule_post_to_facebook(entry_id, formatted_text)
+            except Exception as e:
+                print(f"Background scheduling error: {e}")
+
+    threading.Thread(target=schedule_in_background, daemon=True).start()
+
+    if request.headers.get('HX-Request'):
+        return '', 200
+    return redirect(url_for('review_page'))
+
+@app.route('/toggle-comment/<int:entry_id>', methods=['POST'])
+def toggle_comment(entry_id):
+    data = request.get_json(silent=True) or {}
+    value = bool(data.get('value', 0))
+    extensions.db.set_should_comment(entry_id, value)
+    return jsonify({'ok': True, 'should_comment': value})
+
+@app.route('/auto-comment')
+def auto_comment_page():
+    config = load_config()
+    auto_comment_text = config.get('auto_comment_text', '')
+
+    conn = extensions.db.get_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT id, post_number, text, scheduled_time, should_comment, comment_posted
+        FROM entries
+        WHERE should_comment = 1
+        ORDER BY scheduled_time ASC
+    ''')
+    pending = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+
+    return render_template('auto_comment.html', auto_comment_text=auto_comment_text, pending=pending)
+
+@app.route('/auto-comment/save', methods=['POST'])
+def auto_comment_save():
+    config = load_config()
+    config['auto_comment_text'] = request.form.get('auto_comment_text', '').strip()
+    save_config(config)
+    flash('התגובה האוטומטית נשמרה', 'success')
+    return redirect(url_for('auto_comment_page'))
+
 @app.route('/sync', methods=['POST'])
 def sync_now():
     if not extensions.sheets_handler:

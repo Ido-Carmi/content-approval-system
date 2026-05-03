@@ -66,17 +66,14 @@ def midnight_sync_job():
         else:
             print("⚠️ Sheets handler not initialized")
 
-        # 2. Update dynamic posting windows (only if posts were approved today)
+        # 2. Update dynamic posting windows based on current queue size.
+        # Always recalculate: posts published throughout the day reduce the count
+        # even when no new ones were approved, and the day-boundary check was
+        # always zero-width (ran exactly at midnight = start of new day).
         if extensions.scheduler:
             try:
-                israel_tz = pytz.timezone('Asia/Jerusalem')
-                today_midnight = datetime.now(israel_tz).replace(hour=0, minute=0, second=0, microsecond=0)
-                since_str = today_midnight.strftime('%Y-%m-%d %H:%M:%S')
-                if extensions.db.were_posts_approved_since(since_str):
-                    print("📊 Posts were approved today — recalculating posting windows...")
-                    extensions.scheduler.update_dynamic_windows()
-                else:
-                    print("📊 No posts approved today — skipping window recalculation")
+                print("📊 Recalculating posting windows for new day...")
+                extensions.scheduler.update_dynamic_windows()
             except Exception as e:
                 print(f"❌ Dynamic windows update error: {e}")
 
@@ -455,6 +452,37 @@ def comments_scan_job():
         traceback.print_exc()
 
 
+def auto_comment_job():
+    """Post a comment on each entry that has should_comment=1 and whose scheduled_time passed 2+ min ago."""
+    try:
+        config = load_config()
+        comment_text = config.get('auto_comment_text', '').strip()
+        if not comment_text:
+            return  # No comment configured — nothing to do
+
+        if not extensions.facebook_handler:
+            return
+
+        pending = extensions.db.get_pending_auto_comments()
+        if not pending:
+            return
+
+        print(f"\n💬 Auto-comment job: {len(pending)} post(s) to comment on")
+        for entry in pending:
+            fb_id = entry.get('facebook_post_id')
+            if not fb_id:
+                continue
+            try:
+                extensions.facebook_handler.post_comment(fb_id, comment_text)
+                extensions.db.mark_comment_posted(entry['id'])
+                print(f"   ✓ Commented on #{entry.get('post_number')} (fb: {fb_id})")
+            except Exception as e:
+                print(f"   ✗ Failed to comment on #{entry.get('post_number')}: {e}")
+
+    except Exception as e:
+        print(f"❌ Auto-comment job error: {e}")
+
+
 def cleanup_old_comments_job():
     """Delete comments older than comment_retention_days."""
     try:
@@ -538,6 +566,7 @@ def start_scheduler():
     schedule.every().day.at(f"{cleanup_local:02d}:00").do(cleanup_old_comments_job)
 
     schedule.every(6).hours.do(check_and_send_notifications)
+    schedule.every(1).minutes.do(auto_comment_job)
 
     # Startup comment scan
     def startup_comment_scan():
