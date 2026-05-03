@@ -611,6 +611,7 @@ def start_scheduler():
     print("=" * 80)
     print("✅ Background scheduler started:")
     print(f"   - Midnight sync + nightly comment scan (48h) at {midnight_local:02d}:00 server time (00:00 Israel)")
+    print(f"   - Auto-comment job every 1 minute")
     print(f"   - Notifications check every 6 hours")
     print(f"   - Old comments cleanup at {cleanup_local:02d}:00 server time (02:00 Israel)")
     print(f"   - Webhook batch processor running (queue-based)")

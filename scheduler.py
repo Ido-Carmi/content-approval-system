@@ -271,6 +271,12 @@ class Scheduler:
             
             print(f"[LOCK RELEASED] Entry {entry_id} scheduled successfully")
 
+            # Update posting windows so tier adjusts immediately (not just at midnight)
+            try:
+                self.update_dynamic_windows()
+            except Exception as e:
+                print(f"[WARNING] Could not update dynamic windows after scheduling: {e}")
+
             return {
                 'scheduled_time': scheduled_time.strftime("%d/%m/%Y %H:%M"),
                 'facebook_post_id': result['id']

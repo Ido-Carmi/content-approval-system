@@ -71,9 +71,21 @@
     font-size: 1.1rem;
     padding: 0 4px;
     transition: color 0.15s;
+    touch-action: none;        /* prevent browser scroll from stealing touch events */
+    user-select: none;
+    -webkit-user-select: none;
 }
 .drag-handle:hover { color: #fff; }
 .drag-handle:active { cursor: grabbing; }
+
+/* Bigger touch target on mobile */
+@media (max-width: 768px) {
+    .drag-handle {
+        font-size: 1.5rem;
+        padding: 4px 10px;
+        margin: -4px -6px;     /* expand hit area without breaking layout */
+    }
+}
 
 /* Sortable states */
 .sortable-ghost {
@@ -406,6 +418,9 @@ function initSortable() {
         animation: 150,
         ghostClass: 'sortable-ghost',
         chosenClass: 'sortable-chosen',
+        delay: 0,                  // no hold delay — instant grab
+        delayOnTouchOnly: false,   // even on touch
+        touchStartThreshold: 3,    // px of movement tolerated before deciding it's a drag
         onEnd: function(evt) {
             if (evt.oldIndex === evt.newIndex) return;
 

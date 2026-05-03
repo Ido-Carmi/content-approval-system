@@ -294,7 +294,7 @@ class Database:
             WHERE should_comment > 0
               AND (should_comment & ~comment_posted) > 0
               AND facebook_post_id IS NOT NULL
-              AND scheduled_time < datetime('now', '-2 minutes')
+              AND datetime(scheduled_time) < datetime('now', '-2 minutes')
         ''')
         rows = cursor.fetchall()
         conn.close()
