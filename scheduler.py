@@ -109,32 +109,36 @@ class Scheduler:
                 return tier['windows']
         return tiers[-1]['windows'] if tiers else ['14:00']
     
-    def update_dynamic_windows(self):
+    def update_dynamic_windows(self) -> bool:
         """
         Recalculate posting windows based on number of scheduled posts.
         Called after each new post is scheduled.
+        Returns True if windows changed.
         """
         try:
             # Count currently scheduled posts on Facebook
             scheduled_times = self.get_scheduled_times_from_facebook()
             scheduled_count = len(scheduled_times)
-            
+
             new_windows = self.get_windows_for_count(scheduled_count)
-            
+
             # Save to config
             config = load_config()
             old_windows = config.get('posting_windows', [])
             config['posting_windows'] = new_windows
             save_config(config)
-            
+
             posts_per_day = len(new_windows)
-            if old_windows != new_windows:
+            changed = old_windows != new_windows
+            if changed:
                 print(f"📊 Dynamic windows updated: {scheduled_count} scheduled → {posts_per_day}/day → {new_windows}")
             else:
                 print(f"📊 Dynamic windows unchanged: {scheduled_count} scheduled → {posts_per_day}/day")
-                
+            return changed
+
         except Exception as e:
             print(f"⚠️  Error updating dynamic windows: {e}")
+            return False
     
     def is_shabbat(self, date: datetime.date) -> bool:
         """Check if a date is Friday or Saturday (Shabbat)"""
@@ -173,47 +177,61 @@ class Scheduler:
     
     def get_next_available_slot(self) -> datetime:
         """
-        Get the next available posting slot
-        Checks Facebook's scheduler to find empty slot
+        Get the next available posting slot.
+        Uses per-day post count to handle tier changes: if a day already has
+        >= windows_count posts (even at old window times), it's considered full.
         """
         windows = self.load_posting_windows()
         now = datetime.now(self.timezone)
-        
-        # Get already scheduled times from Facebook
-        scheduled_times = self.get_scheduled_times_from_facebook()
+        num_windows = len(windows)
+
+        # Get already scheduled times from Facebook, normalized to Israel timezone
+        raw_times = self.get_scheduled_times_from_facebook()
+        scheduled_times = []
+        for st in raw_times:
+            if st.tzinfo:
+                scheduled_times.append(st.astimezone(self.timezone))
+            else:
+                scheduled_times.append(self.timezone.localize(st))
+
+        # Count posts per day AND track exact slots (both in Israel time)
+        posts_per_day = {}
         scheduled_slots = set()
         for st in scheduled_times:
-            # Store as (date, time) tuple for comparison
-            scheduled_slots.add((st.date(), st.time().replace(second=0, microsecond=0)))
-        
-        # Try to find a slot today
+            d = st.date()
+            posts_per_day[d] = posts_per_day.get(d, 0) + 1
+            scheduled_slots.add((d, st.time().replace(second=0, microsecond=0)))
+
         current_date = now.date()
+
+        # Try to find a slot today
         if not self.should_skip_date(current_date):
-            for window_time in windows:
-                slot = self.timezone.localize(datetime.combine(current_date, window_time))
-                slot_key = (slot.date(), slot.time().replace(second=0, microsecond=0))
-                
-                if slot > now and slot_key not in scheduled_slots:
-                    return slot
-        
+            if posts_per_day.get(current_date, 0) < num_windows:
+                for window_time in windows:
+                    slot = self.timezone.localize(datetime.combine(current_date, window_time))
+                    slot_key = (slot.date(), slot.time().replace(second=0, microsecond=0))
+                    if slot > now and slot_key not in scheduled_slots:
+                        return slot
+
         # Look for future slots
         days_checked = 0
-        max_days = 365
-        
-        while days_checked < max_days:
+        while days_checked < 365:
             days_checked += 1
             check_date = current_date + timedelta(days=days_checked)
-            
+
             if self.should_skip_date(check_date):
                 continue
-            
+
+            # Skip days already at or over capacity (handles tier-change scenario)
+            if posts_per_day.get(check_date, 0) >= num_windows:
+                continue
+
             for window_time in windows:
                 slot = self.timezone.localize(datetime.combine(check_date, window_time))
                 slot_key = (slot.date(), slot.time().replace(second=0, microsecond=0))
-                
                 if slot_key not in scheduled_slots:
                     return slot
-        
+
         # Fallback
         fallback_days = 1
         while fallback_days < 365:
@@ -221,7 +239,7 @@ class Scheduler:
             if not self.should_skip_date(fallback_date):
                 return self.timezone.localize(datetime.combine(fallback_date, windows[0]))
             fallback_days += 1
-        
+
         return self.timezone.localize(datetime.combine(current_date + timedelta(days=1), windows[0]))
     
     def schedule_post_to_facebook(self, entry_id: int, text: str) -> Dict:
@@ -249,7 +267,10 @@ class Scheduler:
             # Double-check the slot is still empty (in case of race condition)
             current_scheduled = self.get_scheduled_times_from_facebook()
             slot_key = (scheduled_time.date(), scheduled_time.time().replace(second=0, microsecond=0))
-            occupied_slots = {(t.date(), t.time().replace(second=0, microsecond=0)) for t in current_scheduled}
+            occupied_slots = set()
+            for t in current_scheduled:
+                t_local = t.astimezone(self.timezone) if t.tzinfo else self.timezone.localize(t)
+                occupied_slots.add((t_local.date(), t_local.time().replace(second=0, microsecond=0)))
             
             if slot_key in occupied_slots:
                 print(f"[WARNING] Slot {scheduled_time} was taken! Finding next one...")
@@ -377,52 +398,76 @@ class Scheduler:
     
     def reschedule_all_to_new_windows(self) -> int:
         """
-        Reschedule all scheduled posts to match new posting windows
-        
-        Returns:
-            Number of posts rescheduled
+        Redistribute all future scheduled posts across the new posting windows.
+        Posts within 1 hour of publishing are left in place (too close to move safely).
+        Posts are sorted by current time and reassigned sequentially so relative order
+        is preserved — overflow from days with too many old-tier posts spills to the
+        next available day.
+        Returns the number of posts actually rescheduled.
         """
-        # Get all scheduled entries
         entries = self.db.get_scheduled_entries()
-        
         if not entries:
             return 0
-        
-        # Get current windows
+
         windows = self.load_posting_windows()
-        
-        # Group entries by date
-        entries_by_date = {}
+        now = datetime.now(self.timezone)
+        cutoff = now + timedelta(hours=1)
+
+        # Parse and tag each entry with its Israel-time datetime; skip those too soon
+        to_reschedule = []
         for entry in entries:
-            scheduled_dt = datetime.fromisoformat(entry['scheduled_time'])
-            date_key = scheduled_dt.date()
-            
-            if date_key not in entries_by_date:
-                entries_by_date[date_key] = []
-            entries_by_date[date_key].append(entry)
-        
-        rescheduled_count = 0
-        
-        # For each date, redistribute posts across windows
-        for date, date_entries in sorted(entries_by_date.items()):
-            if self.should_skip_date(date):
-                # This date should be skipped now - reschedule to next valid date
-                for entry in date_entries:
-                    new_time = self.get_next_available_slot()
-                    if self.reschedule_post(entry['id'], new_time):
-                        rescheduled_count += 1
+            st = entry.get('scheduled_time', '')
+            if not st:
+                continue
+            try:
+                scheduled_dt = datetime.fromisoformat(st)
+                if scheduled_dt.tzinfo is None:
+                    scheduled_dt = self.timezone.localize(scheduled_dt)
+                else:
+                    scheduled_dt = scheduled_dt.astimezone(self.timezone)
+            except Exception:
+                continue
+            if scheduled_dt > cutoff:
+                entry['_scheduled_dt'] = scheduled_dt
+                to_reschedule.append(entry)
+
+        if not to_reschedule:
+            return 0
+
+        # Sort by current scheduled time to preserve the posting order
+        to_reschedule.sort(key=lambda e: e['_scheduled_dt'])
+
+        # Build an ordered list of available window slots starting from today
+        available_slots = []
+        day_cursor = now.date()
+        days_scanned = 0
+        needed = len(to_reschedule) + 5  # a few extra in case some reschedules fail
+        while len(available_slots) < needed and days_scanned < 365:
+            if not self.should_skip_date(day_cursor):
+                for w in windows:
+                    slot_dt = self.timezone.localize(datetime.combine(day_cursor, w))
+                    if slot_dt > cutoff:
+                        available_slots.append(slot_dt)
+            day_cursor += timedelta(days=1)
+            days_scanned += 1
+
+        rescheduled = 0
+        for i, entry in enumerate(to_reschedule):
+            if i >= len(available_slots):
+                print(f"   ⚠️  No more slots — {len(to_reschedule) - i} post(s) not rescheduled")
+                break
+            new_time = available_slots[i]
+            old_time = entry['_scheduled_dt']
+            # Skip if already at the correct slot (within 1 minute tolerance)
+            if abs((new_time - old_time).total_seconds()) < 60:
+                continue
+            if self.reschedule_post(entry['id'], new_time):
+                rescheduled += 1
+                print(f"   📅 #{entry.get('post_number')} {old_time.strftime('%d/%m %H:%M')} → {new_time.strftime('%d/%m %H:%M')}")
             else:
-                # Redistribute across windows for this date
-                for idx, entry in enumerate(date_entries):
-                    window_idx = idx % len(windows)
-                    new_time = self.timezone.localize(
-                        datetime.combine(date, windows[window_idx])
-                    )
-                    
-                    if self.reschedule_post(entry['id'], new_time):
-                        rescheduled_count += 1
-        
-        return rescheduled_count
+                print(f"   ❌ #{entry.get('post_number')} failed to reschedule")
+
+        return rescheduled
     
     def update_scheduled_post_content(self, entry_id: int, new_text_with_number: str) -> bool:
         """

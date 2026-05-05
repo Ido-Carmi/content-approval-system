@@ -70,10 +70,16 @@ def midnight_sync_job():
         # Always recalculate: posts published throughout the day reduce the count
         # even when no new ones were approved, and the day-boundary check was
         # always zero-width (ran exactly at midnight = start of new day).
+        # When the tier changes, redistribute all existing scheduled posts to the
+        # new windows so the whole queue runs at the correct cadence.
         if extensions.scheduler:
             try:
                 print("📊 Recalculating posting windows for new day...")
-                extensions.scheduler.update_dynamic_windows()
+                windows_changed = extensions.scheduler.update_dynamic_windows()
+                if windows_changed:
+                    print("📅 Windows changed — redistributing all scheduled posts...")
+                    count = extensions.scheduler.reschedule_all_to_new_windows()
+                    print(f"✅ Rescheduled {count} post(s) to new windows")
             except Exception as e:
                 print(f"❌ Dynamic windows update error: {e}")
 

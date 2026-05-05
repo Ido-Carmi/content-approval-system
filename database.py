@@ -286,19 +286,40 @@ class Database:
 
     def get_pending_auto_comments(self) -> List[Dict]:
         """Return entries with at least one unposted comment slot past their scheduled time."""
+        import pytz
         conn = self.get_connection()
         cursor = conn.cursor()
+        # Fetch candidates without time filter — SQLite's datetime() strips timezone
+        # offsets (+03:00) on some versions, causing a 3-hour delay. Filter in Python.
         cursor.execute('''
-            SELECT id, facebook_post_id, post_number, text, should_comment, comment_posted
+            SELECT id, facebook_post_id, post_number, text, should_comment, comment_posted,
+                   scheduled_time
             FROM entries
             WHERE should_comment > 0
               AND (should_comment & ~comment_posted) > 0
               AND facebook_post_id IS NOT NULL
-              AND datetime(scheduled_time) < datetime('now', '-2 minutes')
         ''')
         rows = cursor.fetchall()
         conn.close()
-        return [dict(row) for row in rows]
+
+        israel_tz = pytz.timezone('Asia/Jerusalem')
+        threshold = datetime.now(pytz.utc) - timedelta(minutes=2)
+
+        result = []
+        for row in rows:
+            d = dict(row)
+            st = d.get('scheduled_time', '')
+            if not st:
+                continue
+            try:
+                scheduled_dt = datetime.fromisoformat(st)
+                if scheduled_dt.tzinfo is None:
+                    scheduled_dt = israel_tz.localize(scheduled_dt)
+                if scheduled_dt.astimezone(pytz.utc) <= threshold:
+                    result.append(d)
+            except Exception:
+                pass
+        return result
 
     def mark_comment_posted(self, entry_id: int, slot_bit: int):
         """OR in the slot bit so we know this slot's comment was posted."""
@@ -729,16 +750,16 @@ class Database:
         cursor.execute('''
             DELETE FROM entries
             WHERE status = 'approved'
-            AND updated_at < datetime('now', '-1 day')
+            AND COALESCE(approved_at, created_at) < datetime('now', '-1 day')
         ''')
         approved_deleted = cursor.rowcount
         total_deleted += approved_deleted
-        
+
         # Delete denied entries older than 24 hours
         cursor.execute('''
             DELETE FROM entries
             WHERE status = 'denied'
-            AND updated_at < datetime('now', '-1 day')
+            AND COALESCE(approved_at, created_at) < datetime('now', '-1 day')
         ''')
         denied_deleted = cursor.rowcount
         total_deleted += denied_deleted
