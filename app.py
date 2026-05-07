@@ -472,14 +472,16 @@ def scheduled_content():
                     if current_number and current_number != expected:
                         new_text = f"#{expected} {clean_message}"
                         try:
+                            old_fb_id = fb_post['id']
                             _dt = datetime.fromisoformat(fb_post['scheduled_time'])
                             if _dt.tzinfo is None:
                                 _dt = pytz.timezone('Asia/Jerusalem').localize(_dt)
-                            result = extensions.facebook_handler.update_scheduled_post(fb_post['id'], new_text, _dt)
+                            result = extensions.facebook_handler.update_scheduled_post(old_fb_id, new_text, _dt)
                             new_fb_id = result['id']
                             fb_post['message'] = new_text
                             fb_post['id'] = new_fb_id
-                            renumber_results.append((current_number, expected, new_fb_id))
+                            # Store old FB ID so we can target the exact DB row (post_number is not unique)
+                            renumber_results.append((old_fb_id, expected, new_fb_id))
                             print(f"   Renumbered #{current_number} → #{expected}")
                         except Exception as e:
                             print(f"   ✗ Error renumbering: {e}")
@@ -487,10 +489,11 @@ def scheduled_content():
             if renumber_results:
                 conn = extensions.db.get_connection()
                 cursor = conn.cursor()
-                for old_num, new_num, new_fb_id in renumber_results:
+                for old_fb_id, new_num, new_fb_id in renumber_results:
+                    # Update by Facebook post ID (unique) — not by post_number (may have duplicates)
                     cursor.execute(
-                        'UPDATE entries SET post_number = ?, facebook_post_id = ? WHERE post_number = ?',
-                        (new_num, new_fb_id, old_num)
+                        'UPDATE entries SET post_number = ?, facebook_post_id = ? WHERE facebook_post_id = ?',
+                        (new_num, new_fb_id, old_fb_id)
                     )
                 conn.commit()
                 conn.close()
@@ -552,7 +555,9 @@ def scheduled_content():
                     'text': clean_message,
                     'post_number': fb_post_number,
                     'facebook_post_id': fb_post['id'],
-                    'scheduled_time': fb_post['scheduled_time']
+                    'scheduled_time': fb_post['scheduled_time'],
+                    'should_comment': 0,
+                    'comment_posted': 0,
                 }
 
             weekday = get_hebrew_weekday(fb_post['scheduled_time'])

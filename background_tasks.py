@@ -75,11 +75,7 @@ def midnight_sync_job():
         if extensions.scheduler:
             try:
                 print("📊 Recalculating posting windows for new day...")
-                windows_changed = extensions.scheduler.update_dynamic_windows()
-                if windows_changed:
-                    print("📅 Windows changed — redistributing all scheduled posts...")
-                    count = extensions.scheduler.reschedule_all_to_new_windows()
-                    print(f"✅ Rescheduled {count} post(s) to new windows")
+                extensions.scheduler.update_dynamic_windows()
             except Exception as e:
                 print(f"❌ Dynamic windows update error: {e}")
 
