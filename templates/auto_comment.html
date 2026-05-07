@@ -12,7 +12,7 @@
 
         <div class="card mb-4">
             <div class="card-header text-white" style="background: linear-gradient(135deg, #6f42c1 0%, #5a329a 100%);">
-                <h5 class="mb-0"><i class="bi bi-chat-square-text"></i> טקסטים לתגובות האוטומטיות</h5>
+                <h5 class="mb-0"><i class="bi bi-chat-square-text"></i> קבוצות תגובה אוטומטית</h5>
             </div>
             <div class="card-body">
                 <p class="text-muted mb-4">
@@ -20,23 +20,66 @@
                     <span class="badge bg-primary">1</span>
                     <span class="badge bg-warning text-dark">2</span>
                     <span class="badge bg-success">3</span>
-                    כדי לבחור איזו תגובה תפורסם עליהם כ-2 דקות אחרי הפרסום.
+                    כדי לבחור איזו קבוצת תגובה תפורסם כ-2 דקות אחרי הפרסום.
+                    כשיש מספר תגובות בקבוצה, המערכת מסבבת ביניהן לסירוגין.
                 </p>
 
                 <form method="POST" action="{{ url_for('auto_comment_save') }}">
                     {% for i in range(3) %}
                     {% set n = i + 1 %}
-                    <div class="mb-4">
-                        <label class="form-label fw-bold">
-                            <span class="badge bg-{{ slot_colors[i] }} {% if slot_colors[i] == 'warning' %}text-dark{% endif %} me-1">{{ n }}</span>
-                            תגובה {{ n }} ({{ slot_labels[i] }})
-                        </label>
-                        <textarea name="auto_comment_text_{{ n }}"
-                                  class="form-control"
-                                  rows="3"
-                                  placeholder="כתוב כאן את התגובה {{ n }}...">{{ texts[i] }}</textarea>
-                        {% if not texts[i] %}
-                        <div class="form-text text-warning"><i class="bi bi-exclamation-circle"></i> לא מוגדר — פוסטים עם סימון {{ n }} לא יקבלו תגובה</div>
+                    {% set group = groups[i] %}
+                    {% set cur_idx = indices[i] %}
+                    <div class="mb-4 border rounded p-3" id="group-container-{{ n }}">
+                        <div class="d-flex align-items-center mb-2">
+                            <span class="badge bg-{{ slot_colors[i] }} {% if slot_colors[i] == 'warning' %}text-dark{% endif %} me-2 fs-6">{{ n }}</span>
+                            <strong>קבוצה {{ n }} ({{ slot_labels[i] }})</strong>
+                            {% if group|length > 1 %}
+                            <span class="badge bg-secondary ms-2">סיבוב: {{ cur_idx + 1 }}/{{ group|length }}</span>
+                            {% endif %}
+                        </div>
+
+                        <div id="group-items-{{ n }}">
+                            {% if group %}
+                                {% for txt in group %}
+                                <div class="input-group mb-2 group-item">
+                                    <textarea name="group_{{ n }}[]"
+                                              class="form-control"
+                                              rows="2"
+                                              placeholder="תגובה...">{{ txt }}</textarea>
+                                    <button type="button"
+                                            class="btn btn-outline-danger"
+                                            onclick="removeItem(this)"
+                                            title="הסר">
+                                        <i class="bi bi-x-lg"></i>
+                                    </button>
+                                </div>
+                                {% endfor %}
+                            {% else %}
+                                <div class="input-group mb-2 group-item">
+                                    <textarea name="group_{{ n }}[]"
+                                              class="form-control"
+                                              rows="2"
+                                              placeholder="תגובה..."></textarea>
+                                    <button type="button"
+                                            class="btn btn-outline-danger"
+                                            onclick="removeItem(this)"
+                                            title="הסר">
+                                        <i class="bi bi-x-lg"></i>
+                                    </button>
+                                </div>
+                            {% endif %}
+                        </div>
+
+                        <button type="button"
+                                class="btn btn-sm btn-outline-secondary"
+                                onclick="addItem({{ n }})">
+                            <i class="bi bi-plus-lg"></i> הוסף תגובה לקבוצה
+                        </button>
+
+                        {% if not group or group | reject | list | length == group | length %}
+                        {% endif %}
+                        {% if not group %}
+                        <div class="form-text text-warning mt-1"><i class="bi bi-exclamation-circle"></i> קבוצה ריקה — פוסטים עם סימון {{ n }} לא יקבלו תגובה</div>
                         {% endif %}
                     </div>
                     {% endfor %}
@@ -121,6 +164,29 @@
 
 {% block extra_scripts %}
 <script>
+function addItem(groupNum) {
+    var container = document.getElementById('group-items-' + groupNum);
+    var div = document.createElement('div');
+    div.className = 'input-group mb-2 group-item';
+    div.innerHTML =
+        '<textarea name="group_' + groupNum + '[]" class="form-control" rows="2" placeholder="תגובה..."></textarea>' +
+        '<button type="button" class="btn btn-outline-danger" onclick="removeItem(this)" title="הסר">' +
+        '<i class="bi bi-x-lg"></i></button>';
+    container.appendChild(div);
+    div.querySelector('textarea').focus();
+}
+
+function removeItem(btn) {
+    var item = btn.closest('.group-item');
+    var container = item.parentElement;
+    // Keep at least one row per group so the name[] always submits
+    if (container.querySelectorAll('.group-item').length > 1) {
+        item.remove();
+    } else {
+        item.querySelector('textarea').value = '';
+    }
+}
+
 function removeAutoComment(entryId) {
     fetch('/remove-auto-comment/' + entryId, {method: 'POST'})
         .then(function(r) {

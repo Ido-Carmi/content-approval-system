@@ -6,6 +6,7 @@ Hourly job to scan comments, filter with AI, and hide violations
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict
 import time
+from config import get_auto_comment_texts
 
 class CommentsScanner:
     def __init__(self, db, facebook_handler, ai_filter, retention_days: int = 7, lookback_hours: int = 48):
@@ -66,18 +67,27 @@ class CommentsScanner:
             # Only filter NEW comments through AI (expensive!)
             new_comments = []
             existing_count = 0
-            
+            auto_count = 0
+
+            auto_texts = get_auto_comment_texts()
+
             conn = self.db.get_connection()
             cursor = conn.cursor()
             for comment in comments:
-                cursor.execute('SELECT id FROM hidden_comments WHERE comment_id = ?', 
+                # Skip the page's own auto-comments — no need to store or classify them
+                if comment.get('comment_text', '').strip() in auto_texts:
+                    auto_count += 1
+                    continue
+                cursor.execute('SELECT id FROM hidden_comments WHERE comment_id = ?',
                               (comment['comment_id'],))
                 if cursor.fetchone():
                     existing_count += 1
                 else:
                     new_comments.append(comment)
             conn.close()
-            
+
+            if auto_count > 0:
+                print(f"   [Skip] {auto_count} auto-comment(s) ignored")
             if existing_count > 0:
                 print(f"   [Skip] {existing_count} comments already in database (no AI needed)")
             if new_comments:

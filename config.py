@@ -18,3 +18,18 @@ def save_config(config: dict):
     """Save configuration to config.json"""
     with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
         json.dump(config, f, indent=2, ensure_ascii=False)
+
+
+def get_auto_comment_texts(config=None) -> set:
+    """Return a set of all configured auto-comment texts (used to skip them in comment filtering)."""
+    if config is None:
+        config = load_config()
+    texts = set()
+    for i in range(1, 4):
+        for t in config.get(f'auto_comment_group_{i}', []):
+            if t and t.strip():
+                texts.add(t.strip())
+        old = config.get(f'auto_comment_text_{i}', '').strip()
+        if old:
+            texts.add(old)
+    return texts

@@ -10,7 +10,7 @@ from datetime import datetime
 
 from flask import request, jsonify, redirect, url_for, render_template, flash
 
-from config import load_config, save_config
+from config import load_config, save_config, get_auto_comment_texts
 import extensions
 from background_tasks import check_comment_notification, send_notification_email
 
@@ -191,6 +191,17 @@ def process_webhook_batch():
         extensions.first_queued_time = None
 
     config = load_config()
+
+    # Drop auto-comments — the page's own replies don't need AI filtering or storage
+    auto_texts = get_auto_comment_texts(config)
+    if auto_texts:
+        before = len(batch)
+        batch = [cd for cd in batch if cd.get('comment_text', '').strip() not in auto_texts]
+        skipped = before - len(batch)
+        if skipped:
+            print(f"   ⏭️  Skipped {skipped} auto-comment(s)")
+    if not batch:
+        return
 
     if not config.get('comments_filter_enabled') or not config.get('openai_api_key'):
         for cd in batch:

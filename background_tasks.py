@@ -459,7 +459,8 @@ def comments_scan_job():
 
 
 def auto_comment_job():
-    """Post a comment on each entry whose scheduled_time passed 2+ min ago (slot 1/2/3)."""
+    """Post a comment on each entry whose scheduled_time passed 2+ min ago (slot 1/2/3).
+    Each slot has a group of texts that rotate round-robin across posts."""
     try:
         if not extensions.facebook_handler:
             return
@@ -469,11 +470,7 @@ def auto_comment_job():
             return
 
         config = load_config()
-        texts = {
-            1: config.get('auto_comment_text_1', '').strip(),
-            2: config.get('auto_comment_text_2', '').strip(),
-            3: config.get('auto_comment_text_3', '').strip(),
-        }
+        config_dirty = False
 
         print(f"\n💬 Auto-comment job: {len(pending)} post(s) to comment on")
         for entry in pending:
@@ -487,15 +484,35 @@ def auto_comment_job():
                 slot_bit = 1 << (slot - 1)   # 1, 2, 4
                 if not (pending_mask & slot_bit):
                     continue
-                comment_text = texts.get(slot, '')
-                if not comment_text:
+
+                # Build the active text list for this slot (new group format, with old fallback)
+                group = [t.strip() for t in config.get(f'auto_comment_group_{slot}', []) if t.strip()]
+                if not group:
+                    old = config.get(f'auto_comment_text_{slot}', '').strip()
+                    if old:
+                        group = [old]
+
+                if not group:
                     continue
+
+                idx = config.get(f'auto_comment_group_{slot}_index', 0) % len(group)
+                comment_text = group[idx]
+
                 try:
                     extensions.facebook_handler.post_comment(fb_id, comment_text)
                     extensions.db.mark_comment_posted(entry['id'], slot_bit)
-                    print(f"   ✓ #{entry.get('post_number')} slot {slot} posted")
+
+                    # Advance rotation index only when there are multiple texts
+                    if len(group) > 1:
+                        config[f'auto_comment_group_{slot}_index'] = (idx + 1) % len(group)
+                        config_dirty = True
+
+                    print(f"   ✓ #{entry.get('post_number')} slot {slot} posted (text {idx + 1}/{len(group)})")
                 except Exception as e:
                     print(f"   ✗ #{entry.get('post_number')} slot {slot} failed: {e}")
+
+        if config_dirty:
+            save_config(config)
 
     except Exception as e:
         print(f"❌ Auto-comment job error: {e}")

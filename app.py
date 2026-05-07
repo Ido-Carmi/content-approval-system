@@ -266,11 +266,15 @@ def remove_auto_comment(entry_id):
 @app.route('/auto-comment')
 def auto_comment_page():
     config = load_config()
-    texts = [
-        config.get('auto_comment_text_1', ''),
-        config.get('auto_comment_text_2', ''),
-        config.get('auto_comment_text_3', ''),
-    ]
+    groups = []
+    for i in range(1, 4):
+        group = config.get(f'auto_comment_group_{i}')
+        if group is None:
+            # Migrate from old single-text format on first load
+            old = config.get(f'auto_comment_text_{i}', '').strip()
+            group = [old] if old else []
+        groups.append(group)
+    indices = [config.get(f'auto_comment_group_{i}_index', 0) for i in range(1, 4)]
 
     conn = extensions.db.get_connection()
     cursor = conn.cursor()
@@ -283,13 +287,19 @@ def auto_comment_page():
     pending = [dict(row) for row in cursor.fetchall()]
     conn.close()
 
-    return render_template('auto_comment.html', texts=texts, pending=pending)
+    return render_template('auto_comment.html', groups=groups, indices=indices, pending=pending)
 
 @app.route('/auto-comment/save', methods=['POST'])
 def auto_comment_save():
     config = load_config()
     for i in range(1, 4):
-        config[f'auto_comment_text_{i}'] = request.form.get(f'auto_comment_text_{i}', '').strip()
+        raw = request.form.getlist(f'group_{i}[]')
+        texts = [t.strip() for t in raw if t.strip()]
+        config[f'auto_comment_group_{i}'] = texts
+        # Clamp rotation index to new group size
+        old_idx = config.get(f'auto_comment_group_{i}_index', 0)
+        if texts and old_idx >= len(texts):
+            config[f'auto_comment_group_{i}_index'] = 0
     save_config(config)
     flash('התגובות האוטומטיות נשמרו', 'success')
     return redirect(url_for('auto_comment_page'))

@@ -82,10 +82,10 @@
             </div>
             <div class="card-body py-2">
                 <label class="form-label fw-bold mb-1">תוכן:</label>
-                <textarea id="text-{{ entry.id }}" 
-                          class="form-control mb-2" 
+                <textarea id="text-{{ entry.id }}"
+                          class="form-control mb-2"
                           rows="1"
-                          oninput="this.style.height='';this.style.height=this.scrollHeight+'px'"
+                          oninput="autoResize(this)"
                           style="overflow-y: hidden; resize: none;">{{ entry.text }}</textarea>
                 
                 <!-- Hidden input tracks comment bitmask (slot1=1, slot2=2, slot3=4) -->
@@ -130,11 +130,18 @@
 <script>
 var REVIEW_SLOT_COLORS = {1: 'btn-primary', 2: 'btn-warning', 3: 'btn-success'};
 
+function autoResize(el) {
+    // Save scroll position before forcing a reflow so mobile doesn't jump to top
+    var sy = window.pageYOffset;
+    el.style.height = 'auto';
+    el.style.height = el.scrollHeight + 'px';
+    window.scrollTo(0, sy);
+}
+
 document.addEventListener('DOMContentLoaded', function() {
-    // Auto-resize textareas
+    // Auto-resize textareas on load
     document.querySelectorAll('textarea').forEach(function(ta) {
-        ta.style.height = '';
-        ta.style.height = ta.scrollHeight + 'px';
+        autoResize(ta);
     });
 
     // Slot toggle buttons — XOR the bit to toggle independently
