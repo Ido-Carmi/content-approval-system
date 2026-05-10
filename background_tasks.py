@@ -75,7 +75,16 @@ def midnight_sync_job():
         if extensions.scheduler:
             try:
                 print("📊 Recalculating posting windows for new day...")
-                extensions.scheduler.update_dynamic_windows()
+                windows_changed = extensions.scheduler.update_dynamic_windows()
+                if windows_changed:
+                    print("📅 Windows changed — redistributing scheduled posts...")
+                    try:
+                        moved = extensions.scheduler.reschedule_all_to_new_windows()
+                        print(f"✅ Midnight reschedule: {moved} post(s) moved to new windows")
+                    except Exception as e:
+                        print(f"❌ Midnight reschedule error: {e}")
+                else:
+                    print("✅ Windows unchanged — no reschedule needed")
             except Exception as e:
                 print(f"❌ Dynamic windows update error: {e}")
 
@@ -273,23 +282,34 @@ def check_and_send_notifications():
     else:
         print(f"✅ Pending entries OK: {pending_count}/{threshold}")
 
-    # Check 2: Next empty window within 24 hours
+    # Check 2: Queue running out — last scheduled post is within 24 hours
+    # (Checking the *last* post time is robust: it doesn't fire false positives
+    #  when the tier changes and new "empty" canonical slots appear on existing days.)
     if extensions.scheduler:
         try:
-            next_slot = extensions.scheduler.get_next_available_slot()
+            scheduled_times = extensions.scheduler.get_scheduled_times_from_facebook()
             now = datetime.now(extensions.scheduler.timezone)
-            hours_until = (next_slot - now).total_seconds() / 3600
 
-            if hours_until < 24:
-                print(f"📧 Sending notification: Next window in {hours_until:.1f} hours")
-                subject = "⏰ החלון הפנוי הבא בעוד פחות מ-24 שעות"
+            if not scheduled_times:
+                hours_until_empty = 0.0
+                last_post_str = "אין פוסטים מתוזמנים"
+            else:
+                last_post = max(
+                    t.astimezone(extensions.scheduler.timezone) for t in scheduled_times
+                )
+                hours_until_empty = (last_post - now).total_seconds() / 3600
+                last_post_str = last_post.strftime('%d/%m/%Y %H:%M')
+
+            if hours_until_empty < 24:
+                print(f"📧 Sending notification: Queue runs out in {hours_until_empty:.1f} hours (last post: {last_post_str})")
+                subject = "⏰ התור לפרסום מסתיים בעוד פחות מ-24 שעות"
                 body = f"""שלום,
 
-החלון הפנוי הבא לפרסום הוא בעוד {hours_until:.1f} שעות:
+התור לפרסום עומד להיגמר — הפוסט האחרון המתוזמן הוא בעוד {hours_until_empty:.1f} שעות:
 
-תאריך ושעה: {next_slot.strftime('%d/%m/%Y %H:%M')}
+תאריך ושעה: {last_post_str}
 
-אם יש ערכים ממתינים, כדאי לאשר אותם כדי למלא את החלון.
+אם יש ערכים ממתינים, כדאי לאשר אותם כדי שלא תהיה הפסקה בפרסום.
 
 כנסו למערכת: {config.get('app_url', 'http://localhost:5000')}
 
@@ -298,9 +318,9 @@ def check_and_send_notifications():
 """
                 send_notification_email(subject, body, notification_emails)
             else:
-                print(f"✅ Next window OK: in {hours_until:.1f} hours")
+                print(f"✅ Queue OK: {len(scheduled_times)} posts, last at {last_post_str} (in {hours_until_empty:.1f}h)")
         except Exception as e:
-            print(f"❌ Error checking next window: {e}")
+            print(f"❌ Error checking queue: {e}")
     else:
         print("⚠️ Scheduler not initialized")
 

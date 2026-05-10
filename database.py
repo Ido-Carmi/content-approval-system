@@ -250,14 +250,14 @@ class Database:
         
         return [dict(row) for row in rows]
     
-    def approve_entry(self, entry_id: int, edited_text: str, approved_by: str):
-        """Mark entry as approved and assign post number"""
+    def approve_entry(self, entry_id: int, edited_text: str, approved_by: str) -> bool:
+        """Mark entry as approved and assign post number.
+        Returns False if entry was already approved/denied (guards against double-submit)."""
         conn = self.get_connection()
         cursor = conn.cursor()
-        
-        # Get next post number
+
         post_number = self.get_next_post_number()
-        
+
         cursor.execute('''
             UPDATE entries
             SET status = 'approved',
@@ -265,11 +265,13 @@ class Database:
                 post_number = ?,
                 approved_by = ?,
                 approved_at = ?
-            WHERE id = ?
+            WHERE id = ? AND status = 'pending'
         ''', (edited_text, post_number, approved_by, datetime.now().isoformat(), entry_id))
-        
+
+        affected = cursor.rowcount
         conn.commit()
         conn.close()
+        return affected > 0
     
     def set_should_comment(self, entry_id: int, bitmask: int):
         """Set comment bitmask for a post.

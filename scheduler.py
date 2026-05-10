@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, time
 import pytz
+import time as time_module
 from typing import List, Dict, Optional
 from config import load_config, save_config
 import threading
@@ -114,31 +115,35 @@ class Scheduler:
         Recalculate posting windows based on number of scheduled posts.
         Called after each new post is scheduled.
         Returns True if windows changed.
+        On Facebook API failure, retries once after 60 seconds before giving up.
         """
-        try:
-            # Count currently scheduled posts on Facebook
-            scheduled_times = self.get_scheduled_times_from_facebook()
-            scheduled_count = len(scheduled_times)
+        for attempt in range(2):
+            try:
+                scheduled_times = self.get_scheduled_times_from_facebook()
+                scheduled_count = len(scheduled_times)
 
-            new_windows = self.get_windows_for_count(scheduled_count)
+                new_windows = self.get_windows_for_count(scheduled_count)
 
-            # Save to config
-            config = load_config()
-            old_windows = config.get('posting_windows', [])
-            config['posting_windows'] = new_windows
-            save_config(config)
+                config = load_config()
+                old_windows = config.get('posting_windows', [])
+                config['posting_windows'] = new_windows
+                save_config(config)
 
-            posts_per_day = len(new_windows)
-            changed = old_windows != new_windows
-            if changed:
-                print(f"📊 Dynamic windows updated: {scheduled_count} scheduled → {posts_per_day}/day → {new_windows}")
-            else:
-                print(f"📊 Dynamic windows unchanged: {scheduled_count} scheduled → {posts_per_day}/day")
-            return changed
+                posts_per_day = len(new_windows)
+                changed = old_windows != new_windows
+                if changed:
+                    print(f"📊 Dynamic windows updated: {scheduled_count} scheduled → {posts_per_day}/day → {new_windows}")
+                else:
+                    print(f"📊 Dynamic windows unchanged: {scheduled_count} scheduled → {posts_per_day}/day")
+                return changed
 
-        except Exception as e:
-            print(f"⚠️  Error updating dynamic windows: {e}")
-            return False
+            except Exception as e:
+                if attempt == 0:
+                    print(f"⚠️  Error updating dynamic windows (attempt 1), retrying in 60s: {e}")
+                    time_module.sleep(60)
+                else:
+                    print(f"⚠️  Error updating dynamic windows (attempt 2), giving up: {e}")
+                    return False
     
     def is_shabbat(self, date: datetime.date) -> bool:
         """Check if a date is Friday or Saturday (Shabbat)"""
@@ -413,8 +418,9 @@ class Scheduler:
         now = datetime.now(self.timezone)
         cutoff = now + timedelta(hours=1)
 
-        # Parse and tag each entry with its Israel-time datetime; skip those too soon
+        # Parse each entry; posts within cutoff stay put (their slots are locked)
         to_reschedule = []
+        locked_slots: set = set()  # minute-resolution times that are already taken
         for entry in entries:
             st = entry.get('scheduled_time', '')
             if not st:
@@ -430,14 +436,33 @@ class Scheduler:
             if scheduled_dt > cutoff:
                 entry['_scheduled_dt'] = scheduled_dt
                 to_reschedule.append(entry)
+            else:
+                # This post stays — its slot must not be double-booked
+                locked_slots.add(scheduled_dt.replace(second=0, microsecond=0))
 
         if not to_reschedule:
             return 0
 
+        # Deduplicate by facebook_post_id — keep the highest DB id when two entries
+        # share the same FB post (can happen after DB corruption).  Trying to update
+        # the same FB post twice causes the second call to fail with a stale ID error.
+        seen_fb: dict = {}
+        for entry in to_reschedule:
+            fb_id = entry.get('facebook_post_id')
+            if not fb_id:
+                continue
+            if fb_id not in seen_fb or entry['id'] > seen_fb[fb_id]['id']:
+                seen_fb[fb_id] = entry
+        dupes = len(to_reschedule) - len(seen_fb)
+        if dupes:
+            print(f"   ⚠️  Skipped {dupes} duplicate DB entries (same facebook_post_id)")
+        to_reschedule = list(seen_fb.values())
+
         # Sort by current scheduled time to preserve the posting order
         to_reschedule.sort(key=lambda e: e['_scheduled_dt'])
 
-        # Build an ordered list of available window slots starting from today
+        # Build an ordered list of available window slots starting from today,
+        # excluding any slot already occupied by a near-cutoff post (locked_slots).
         available_slots = []
         day_cursor = now.date()
         days_scanned = 0
@@ -447,7 +472,9 @@ class Scheduler:
                 for w in windows:
                     slot_dt = self.timezone.localize(datetime.combine(day_cursor, w))
                     if slot_dt > cutoff:
-                        available_slots.append(slot_dt)
+                        slot_key = slot_dt.replace(second=0, microsecond=0)
+                        if slot_key not in locked_slots:
+                            available_slots.append(slot_dt)
             day_cursor += timedelta(days=1)
             days_scanned += 1
 

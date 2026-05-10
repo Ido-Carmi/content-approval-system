@@ -217,7 +217,13 @@ def approve_entry(entry_id):
     json_body = request.get_json(silent=True) or {}
     edited_text = request.form.get('text', '') or json_body.get('text', '')
     comment_bitmask = int(request.form.get('comment_bitmask', 0) or json_body.get('comment_bitmask', 0) or 0)
-    extensions.db.approve_entry(entry_id, edited_text, 'admin')
+    approved = extensions.db.approve_entry(entry_id, edited_text, 'admin')
+    if not approved:
+        # Already approved/denied (double-submit) — return quietly
+        if request.headers.get('HX-Request'):
+            return '', 200
+        return redirect(url_for('review_page'))
+
     if comment_bitmask > 0:
         extensions.db.set_should_comment(entry_id, comment_bitmask)
 
@@ -796,9 +802,24 @@ def reschedule_canonical():
     try:
         extensions.scheduler.update_dynamic_windows()
 
-        entries = extensions.db.get_scheduled_entries()   # sorted by scheduled_time ASC
-        if not entries:
+        raw_entries = extensions.db.get_scheduled_entries()   # sorted by scheduled_time ASC
+        if not raw_entries:
             return jsonify({'ok': True, 'updated': 0})
+
+        # Deduplicate by post_number — older corruption can leave multiple DB rows for the
+        # same post number.  Keep the entry with the highest ID (most recently written).
+        seen_pn: dict = {}
+        no_number = []
+        for e in raw_entries:
+            pn = e.get('post_number')
+            if pn is None:
+                no_number.append(e)
+            elif pn not in seen_pn or e['id'] > seen_pn[pn]['id']:
+                seen_pn[pn] = e
+        entries = sorted(seen_pn.values(), key=lambda e: e.get('scheduled_time') or '') + no_number
+        dupes = len(raw_entries) - len(entries)
+        if dupes:
+            print(f"  ⚠️  Skipped {dupes} duplicate DB entries (same post_number)")
 
         n = len(entries)
         windows  = extensions.scheduler.load_posting_windows()

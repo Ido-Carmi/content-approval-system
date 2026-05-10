@@ -110,14 +110,16 @@
                             hx-post="{{ url_for('approve_entry', entry_id=entry.id) }}"
                             hx-vals='js:{text: document.getElementById("text-{{ entry.id }}").value, comment_bitmask: document.getElementById("slot-{{ entry.id }}").value}'
                             hx-target="#entry-{{ entry.id }}"
-                            hx-swap="outerHTML swap:200ms settle:600ms">
+                            hx-swap="outerHTML swap:200ms settle:600ms"
+                            hx-disabled-elt="closest .entry-card">
                         <i class="bi bi-check-lg"></i> אשר
                     </button>
                     <button type="button"
                             class="btn btn-danger flex-fill"
                             hx-post="{{ url_for('deny_entry', entry_id=entry.id) }}"
                             hx-target="#entry-{{ entry.id }}"
-                            hx-swap="outerHTML swap:200ms settle:600ms">
+                            hx-swap="outerHTML swap:200ms settle:600ms"
+                            hx-disabled-elt="closest .entry-card">
                         <i class="bi bi-x-lg"></i> דחה
                     </button>
                 </div>
