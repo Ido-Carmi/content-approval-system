@@ -197,6 +197,9 @@ def review_page():
         print("Step 4: Loading config...")
         config = load_config()
         print(f"✓ Config loaded, last sync: {config.get('last_sync', 'Never')}")
+        # User is active on review page — reset pending notification cooldown
+        if config.pop('pending_notification_last_sent', None) is not None:
+            save_config(config)
     except Exception as e:
         print(f"✗ Config loading failed: {e}")
         config = {}
@@ -251,7 +254,7 @@ def approve_entry(entry_id):
 
 @app.route('/deny/<int:entry_id>', methods=['POST'])
 def deny_entry(entry_id):
-    extensions.db.deny_entry(entry_id, 'admin')
+    extensions.db.deny_entry(entry_id, 'admin')  # returns False if already processed, but denial is silent either way
     if request.headers.get('HX-Request'):
         return '', 200
     return redirect(url_for('review_page'))
@@ -360,6 +363,14 @@ def scheduled_content():
     print("=" * 80)
     print("SCHEDULED CONTENT - SYNCING WITH FACEBOOK")
     print("=" * 80)
+
+    # User is active on scheduled page — reset queue notification cooldown
+    try:
+        _cfg = load_config()
+        if _cfg.pop('queue_notification_last_sent', None) is not None:
+            save_config(_cfg)
+    except Exception:
+        pass
 
     if not extensions.facebook_handler:
         return '<div class="alert alert-danger text-center py-3">❌ Facebook לא מחובר — הגדר בהגדרות</div>'
@@ -1241,6 +1252,34 @@ def swap_posts(entry_id, direction):
         current_time_dt = parse_time(current_time_str)
         target_time_dt = parse_time(target_time_str)
 
+        # Update Facebook FIRST — only commit DB if both succeed.
+        # Reverses the first call if the second fails to keep both sides consistent.
+        if current_entry.get('facebook_post_id'):
+            extensions.facebook_handler.update_scheduled_post(
+                current_entry['facebook_post_id'],
+                f"#{target_num} {current_entry['text']}",
+                target_time_dt
+            )
+        if target_entry.get('facebook_post_id'):
+            try:
+                extensions.facebook_handler.update_scheduled_post(
+                    target_entry['facebook_post_id'],
+                    f"#{current_num} {target_entry['text']}",
+                    current_time_dt
+                )
+            except Exception:
+                # Undo the first FB update before re-raising
+                if current_entry.get('facebook_post_id'):
+                    try:
+                        extensions.facebook_handler.update_scheduled_post(
+                            current_entry['facebook_post_id'],
+                            f"#{current_num} {current_entry['text']}",
+                            current_time_dt
+                        )
+                    except Exception:
+                        pass
+                raise
+
         conn = extensions.db.get_connection()
         cursor = conn.cursor()
         cursor.execute('UPDATE entries SET post_number = ?, scheduled_time = ? WHERE id = ?',
@@ -1249,19 +1288,6 @@ def swap_posts(entry_id, direction):
                        (current_num, current_time_str, target_entry['id']))
         conn.commit()
         conn.close()
-
-        if current_entry.get('facebook_post_id'):
-            extensions.facebook_handler.update_scheduled_post(
-                current_entry['facebook_post_id'],
-                f"#{target_num} {current_entry['text']}",
-                target_time_dt
-            )
-        if target_entry.get('facebook_post_id'):
-            extensions.facebook_handler.update_scheduled_post(
-                target_entry['facebook_post_id'],
-                f"#{current_num} {target_entry['text']}",
-                current_time_dt
-            )
 
         flash('✅ הפוסטים הוחלפו בהצלחה!', 'success')
 
@@ -1338,7 +1364,6 @@ def settings_page():
             'pending_threshold':              int(request.form.get('pending_threshold', 20)),
             'app_url':                        request.form.get('app_url', ''),
             'comments_filter_enabled':        request.form.get('comments_filter_enabled') == 'on',
-            'daily_api_limit':                int(request.form.get('daily_api_limit', 1000)),
             'batch_size':                     int(request.form.get('batch_size', 50)),
             'comment_flagged_notification_threshold': int(request.form.get('comment_flagged_notification_threshold', 0)),
             'comment_notification_threshold': int(request.form.get('comment_notification_threshold', 0)),
@@ -1355,6 +1380,7 @@ def settings_page():
         tiers_text = request.form.get('dynamic_tiers', '')
         if tiers_text.strip():
             dynamic_tiers = []
+            bad_times = []
             for line in tiers_text.strip().split('\n'):
                 line = line.strip()
                 if not line or '|' not in line:
@@ -1362,11 +1388,25 @@ def settings_page():
                 parts = line.split('|')
                 try:
                     max_posts = int(parts[0].strip())
-                    windows = [w.strip() for w in parts[1].strip().split(',') if w.strip()]
+                    raw_windows = [w.strip() for w in parts[1].strip().split(',') if w.strip()]
+                    windows = []
+                    for w in raw_windows:
+                        t_parts = w.split(':')
+                        if len(t_parts) != 2:
+                            bad_times.append(w)
+                            continue
+                        h, m = int(t_parts[0]), int(t_parts[1])
+                        if not (0 <= h <= 23 and 0 <= m <= 59):
+                            bad_times.append(w)
+                            continue
+                        windows.append(f"{h:02d}:{m:02d}")
                     if windows:
                         dynamic_tiers.append({'max_posts': max_posts, 'windows': windows})
                 except ValueError:
                     continue
+            if bad_times:
+                flash(f'❌ שעות לא חוקיות: {", ".join(bad_times)} — יש להשתמש בפורמט HH:MM (00:00–23:59)', 'danger')
+                return redirect(url_for('settings_page'))
             if dynamic_tiers:
                 dynamic_tiers.sort(key=lambda t: t['max_posts'])
                 config['dynamic_tiers'] = dynamic_tiers

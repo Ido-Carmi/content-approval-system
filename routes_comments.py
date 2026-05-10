@@ -2,6 +2,8 @@
 All comment-related routes and webhook handling.
 Call register(app) from app.py once after Flask app is created.
 """
+import hashlib
+import hmac as hmac_module
 import json
 import threading
 import traceback
@@ -442,6 +444,24 @@ def register(app):
     @app.route('/webhook', methods=['POST'])
     def webhook_receive():
         try:
+            # Verify Facebook signature if App Secret is configured
+            config_for_sig = load_config()
+            app_secret = config_for_sig.get('facebook_app_secret', '')
+            if app_secret:
+                signature = request.headers.get('X-Hub-Signature-256', '')
+                if not signature:
+                    print("❌ Webhook POST rejected: missing X-Hub-Signature-256")
+                    return 'Forbidden', 403
+                raw_body = request.get_data()
+                expected = 'sha256=' + hmac_module.new(
+                    app_secret.encode('utf-8'), raw_body, hashlib.sha256
+                ).hexdigest()
+                if not hmac_module.compare_digest(signature, expected):
+                    print("❌ Webhook POST rejected: invalid signature")
+                    return 'Forbidden', 403
+            else:
+                print("⚠️  Webhook signature not verified (set facebook_app_secret in settings)")
+
             data = request.get_json()
             print(f"\n📩 WEBHOOK RECEIVED:")
             print(f"   Raw data: {json.dumps(data, indent=2, default=str)[:500]}")

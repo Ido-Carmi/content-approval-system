@@ -1,10 +1,12 @@
 import sqlite3
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Optional
 import time
 
 class Database:
+    _post_number_lock = threading.Lock()
     def __init__(self, db_file: str = "content_system.db"):
         """Initialize database connection"""
         self.db_file = db_file
@@ -453,21 +455,24 @@ class Database:
         conn.commit()
         conn.close()
     
-    def deny_entry(self, entry_id: int, denied_by: str):
-        """Mark entry as denied with timestamp"""
+    def deny_entry(self, entry_id: int, denied_by: str) -> bool:
+        """Mark entry as denied with timestamp.
+        Returns False if entry was already processed (guards against double-submit)."""
         conn = self.get_connection()
         cursor = conn.cursor()
-        
+
         cursor.execute('''
             UPDATE entries
             SET status = 'denied',
                 approved_by = ?,
                 approved_at = ?
-            WHERE id = ?
+            WHERE id = ? AND status = 'pending'
         ''', (denied_by, datetime.now().isoformat(), entry_id))
-        
+
+        affected = cursor.rowcount
         conn.commit()
         conn.close()
+        return affected > 0
     
     def were_posts_approved_since(self, since_timestamp: str) -> bool:
         """Check if any posts were approved (and scheduled) since the given timestamp"""
@@ -605,29 +610,26 @@ class Database:
         }
     
     def get_next_post_number(self) -> int:
-        """Get and increment the post number. Never returns an already-used number."""
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        
-        # Get counter value
-        cursor.execute('SELECT current_number FROM post_numbers WHERE id = 1')
-        counter = cursor.fetchone()['current_number']
-        
-        # Get highest post number ever assigned
-        cursor.execute('SELECT MAX(post_number) as max_num FROM entries WHERE post_number IS NOT NULL')
-        result = cursor.fetchone()
-        max_used = result['max_num'] if result['max_num'] else 0
-        
-        # Use whichever is higher
-        next_number = max(counter, max_used + 1)
-        
-        # Update counter to next_number + 1
-        cursor.execute('UPDATE post_numbers SET current_number = ? WHERE id = 1', (next_number + 1,))
-        
-        conn.commit()
-        conn.close()
-        
-        return next_number
+        """Get and increment the post number. Never returns an already-used number.
+        Class-level lock makes the read-modify-write atomic across threads."""
+        with Database._post_number_lock:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute('SELECT current_number FROM post_numbers WHERE id = 1')
+            counter = cursor.fetchone()['current_number']
+
+            cursor.execute('SELECT MAX(post_number) as max_num FROM entries WHERE post_number IS NOT NULL')
+            result = cursor.fetchone()
+            max_used = result['max_num'] if result['max_num'] else 0
+
+            next_number = max(counter, max_used + 1)
+
+            cursor.execute('UPDATE post_numbers SET current_number = ? WHERE id = 1', (next_number + 1,))
+            conn.commit()
+            conn.close()
+
+            return next_number
     
     def get_current_post_number(self) -> int:
         """Get current post number without incrementing. Accounts for highest used number."""

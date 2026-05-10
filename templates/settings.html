@@ -169,13 +169,6 @@
                             {% endif %}
                         </div>
                         <div class="mb-3">
-                            <label class="form-label">מכסת API יומית</label>
-                            <input type="number" name="daily_api_limit" class="form-control" 
-                                   value="{{config.daily_api_limit or 1000}}"
-                                   min="100">
-                            <small class="text-muted">מקסימום קריאות API ליום (למניעת עלויות יתר)</small>
-                        </div>
-                        <div class="mb-3">
                             <label class="form-label">גודל בלוק סינון</label>
                             <input type="number" name="batch_size" class="form-control" 
                                    value="{{config.batch_size or 50}}"
@@ -307,4 +300,60 @@
         </form>
     </div>
 </div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+(function() {
+    var tiersTextarea = document.querySelector('textarea[name="dynamic_tiers"]');
+    if (!tiersTextarea) return;
+
+    var errorDiv = document.createElement('div');
+    errorDiv.className = 'invalid-feedback';
+    errorDiv.style.display = 'none';
+    tiersTextarea.parentNode.insertBefore(errorDiv, tiersTextarea.nextSibling);
+
+    function validateTiers() {
+        var lines = tiersTextarea.value.trim().split('\n');
+        var badTimes = [];
+        for (var i = 0; i < lines.length; i++) {
+            var line = lines[i].trim();
+            if (!line || line.indexOf('|') === -1) continue;
+            var parts = line.split('|');
+            if (parts.length < 2) continue;
+            var windows = parts[1].split(',');
+            for (var j = 0; j < windows.length; j++) {
+                var w = windows[j].trim();
+                if (!w) continue;
+                var m = w.match(/^(\d{1,2}):(\d{2})$/);
+                if (!m || parseInt(m[1]) > 23 || parseInt(m[2]) > 59) {
+                    badTimes.push(w);
+                }
+            }
+        }
+        if (badTimes.length > 0) {
+            tiersTextarea.classList.add('is-invalid');
+            errorDiv.style.display = 'block';
+            errorDiv.textContent = 'שעות לא חוקיות: ' + badTimes.join(', ') + ' — פורמט: HH:MM (00:00–23:59)';
+            return false;
+        }
+        tiersTextarea.classList.remove('is-invalid');
+        errorDiv.style.display = 'none';
+        return true;
+    }
+
+    tiersTextarea.addEventListener('input', validateTiers);
+
+    var mainForm = tiersTextarea.closest('form');
+    if (mainForm) {
+        mainForm.addEventListener('submit', function(e) {
+            if (!validateTiers()) {
+                e.preventDefault();
+                tiersTextarea.scrollIntoView({behavior: 'smooth', block: 'center'});
+            }
+        });
+    }
+})();
+</script>
 {% endblock %}

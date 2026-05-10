@@ -247,8 +247,26 @@ def _send_token_alert(config, expired, days_left=None, expires_dt=None):
 # NOTIFICATIONS
 # ============================================================================
 
+def _notification_on_cooldown(config: dict, key: str) -> bool:
+    """Return True if a notification was sent within the last 24 hours and the user
+    hasn't acted since (i.e. reset_key is still set to the sent timestamp)."""
+    last_sent = config.get(key)
+    if not last_sent:
+        return False
+    try:
+        israel_tz = pytz.timezone('Asia/Jerusalem')
+        last_dt = datetime.fromisoformat(last_sent)
+        if last_dt.tzinfo is None:
+            last_dt = israel_tz.localize(last_dt)
+        elapsed_hours = (datetime.now(pytz.utc) - last_dt.astimezone(pytz.utc)).total_seconds() / 3600
+        return elapsed_hours < 24
+    except Exception:
+        return False
+
+
 def check_and_send_notifications():
-    """Check pending entries and next empty window; send email alerts as needed."""
+    """Check pending entries and queue; send email alerts as needed.
+    Each alert fires once, then waits until the user acts in the app OR 24 hours pass."""
     config = load_config()
 
     if not config.get('notifications_enabled', False):
@@ -260,14 +278,20 @@ def check_and_send_notifications():
         print("⚠️ No notification emails configured")
         return
 
+    israel_tz = pytz.timezone('Asia/Jerusalem')
+    config_dirty = False
+
     # Check 1: Too many pending entries
     pending_count = len(extensions.db.get_pending_entries())
     threshold = config.get('pending_threshold', 10)
 
     if pending_count >= threshold:
-        print(f"📧 Sending notification: {pending_count} pending entries (threshold: {threshold})")
-        subject = f"⚠️ {pending_count} ערכים ממתינים לבדיקה"
-        body = f"""שלום,
+        if _notification_on_cooldown(config, 'pending_notification_last_sent'):
+            print(f"⏸️  Pending notification skipped (cooldown active, {pending_count}/{threshold})")
+        else:
+            print(f"📧 Sending notification: {pending_count} pending entries (threshold: {threshold})")
+            subject = f"⚠️ {pending_count} ערכים ממתינים לבדיקה"
+            body = f"""שלום,
 
 יש כרגע {pending_count} ערכים שממתינים לאישור במערכת.
 
@@ -278,9 +302,14 @@ def check_and_send_notifications():
 בברכה,
 מערכת ניהול התוכן
 """
-        send_notification_email(subject, body, notification_emails)
+            send_notification_email(subject, body, notification_emails)
+            config['pending_notification_last_sent'] = datetime.now(israel_tz).isoformat()
+            config_dirty = True
     else:
         print(f"✅ Pending entries OK: {pending_count}/{threshold}")
+        if config.get('pending_notification_last_sent'):
+            config.pop('pending_notification_last_sent', None)
+            config_dirty = True
 
     # Check 2: Queue running out — last scheduled post is within 24 hours
     # (Checking the *last* post time is robust: it doesn't fire false positives
@@ -301,9 +330,12 @@ def check_and_send_notifications():
                 last_post_str = last_post.strftime('%d/%m/%Y %H:%M')
 
             if hours_until_empty < 24:
-                print(f"📧 Sending notification: Queue runs out in {hours_until_empty:.1f} hours (last post: {last_post_str})")
-                subject = "⏰ התור לפרסום מסתיים בעוד פחות מ-24 שעות"
-                body = f"""שלום,
+                if _notification_on_cooldown(config, 'queue_notification_last_sent'):
+                    print(f"⏸️  Queue notification skipped (cooldown active, last post: {last_post_str})")
+                else:
+                    print(f"📧 Sending notification: Queue runs out in {hours_until_empty:.1f} hours (last post: {last_post_str})")
+                    subject = "⏰ התור לפרסום מסתיים בעוד פחות מ-24 שעות"
+                    body = f"""שלום,
 
 התור לפרסום עומד להיגמר — הפוסט האחרון המתוזמן הוא בעוד {hours_until_empty:.1f} שעות:
 
@@ -316,13 +348,21 @@ def check_and_send_notifications():
 בברכה,
 מערכת ניהול התוכן
 """
-                send_notification_email(subject, body, notification_emails)
+                    send_notification_email(subject, body, notification_emails)
+                    config['queue_notification_last_sent'] = datetime.now(israel_tz).isoformat()
+                    config_dirty = True
             else:
                 print(f"✅ Queue OK: {len(scheduled_times)} posts, last at {last_post_str} (in {hours_until_empty:.1f}h)")
+                if config.get('queue_notification_last_sent'):
+                    config.pop('queue_notification_last_sent', None)
+                    config_dirty = True
         except Exception as e:
             print(f"❌ Error checking queue: {e}")
     else:
         print("⚠️ Scheduler not initialized")
+
+    if config_dirty:
+        save_config(config)
 
 
 def send_notification_email(subject, body, recipients):

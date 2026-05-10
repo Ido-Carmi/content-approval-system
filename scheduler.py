@@ -169,16 +169,17 @@ class Scheduler:
         return False
     
     def get_scheduled_times_from_facebook(self) -> List[datetime]:
-        """Get all scheduled times from Facebook"""
-        try:
-            fb_posts = self.fb.get_scheduled_posts()
-            times = []
-            for post in fb_posts:
-                dt = datetime.fromisoformat(post['scheduled_time'])
-                times.append(dt)
-            return times
-        except:
-            return []
+        """Get all scheduled times from Facebook.
+        Raises on API/auth failure so callers can distinguish 'no posts' from 'API down'.
+        Skips individual posts with malformed timestamps."""
+        fb_posts = self.fb.get_scheduled_posts()
+        times = []
+        for post in fb_posts:
+            try:
+                times.append(datetime.fromisoformat(post['scheduled_time']))
+            except (ValueError, KeyError):
+                print(f"⚠️  Skipping post with invalid scheduled_time: {post.get('id')}")
+        return times
     
     def get_next_available_slot(self) -> datetime:
         """

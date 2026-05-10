@@ -13,7 +13,7 @@ class FacebookCommentsHandler:
         """Initialize Facebook Comments Handler"""
         self.access_token = access_token
         self.page_id = page_id
-        self.base_url = "https://graph.facebook.com/v18.0"
+        self.base_url = "https://graph.facebook.com/v21.0"
     
     def fetch_post_comments(self, post_id: str, limit: int = 100, max_pages: int = 5) -> List[Dict]:
         """

@@ -14,7 +14,7 @@ class FacebookHandler:
         """
         self.page_id = page_id
         self.access_token = access_token
-        self.api_base = f"https://graph.facebook.com/v18.0"
+        self.api_base = f"https://graph.facebook.com/v21.0"
     
     def publish_post(self, text: str) -> Dict:
         """
