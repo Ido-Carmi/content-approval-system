@@ -423,27 +423,18 @@ def scheduled_content():
             db_entries = extensions.db.get_scheduled_entries()
             print(f"   ✓ Marked {len(entries_published)} entries as published")
 
-        # Orphans: fb_id known, future-scheduled, but no longer on FB (deleted externally).
-        # Use facebook_post_id to match — post_number matching breaks during reconciler
-        # catch-up when cascade has updated post_number in DB but FB still has old numbers.
-        entries_to_remove = [
+        # Orphans: fb_id known, future-scheduled, but no longer on FB.
+        # Do NOT cascade here — the reconciler's step3 already handles this via 404 detection.
+        # Cascading from the UI races with step3 (which deletes-old then creates-new per entry).
+        orphans = [
             e for e in db_entries
             if e.get('facebook_post_id')
             and e['facebook_post_id'] not in fb_post_ids
             and _is_future_entry(e)
         ]
-        had_orphans = len(entries_to_remove) > 0
-
-        if entries_to_remove:
-            from reconciler import signal_reconciler
-            print(f"   Found {len(entries_to_remove)} orphan(s) — returning to pending via reconciler cascade")
-            for entry in entries_to_remove:
-                freed = extensions.db.return_post_to_pending_from_reconciler(entry['facebook_post_id'])
-                print(f"   ↩ Entry {entry['id']} (#{entry.get('post_number')}) → pending, freed #{freed}")
-            # Re-fetch: cascade has updated post_number / scheduled_time for following entries
-            db_entries = extensions.db.get_scheduled_entries()
-            # Reconciler will renumber and slide time-slots on FB (step3 sync)
-            signal_reconciler()
+        had_orphans = len(orphans) > 0
+        if orphans:
+            print(f"   Found {len(orphans)} orphan(s) — reconciler will handle")
         else:
             print("   ✓ No orphaned entries found")
 
@@ -1033,11 +1024,11 @@ def set_post_number():
         num = int(new_number)
         if num < 1:
             raise ValueError
-        effective_min = extensions.db.get_current_post_number()
-        if num < effective_min:
-            flash(f'⚠️ לא ניתן להגדיר מספר נמוך מ-#{effective_min} (קיים פוסט עם מספר גבוה יותר)', 'error')
+        extensions.db.reset_post_number(num)
+        effective = extensions.db.get_current_post_number()
+        if effective != num:
+            flash(f'✅ הגדרת מספר ל-#{num}, אך קיים פוסט עם מספר גבוה יותר — הפוסט הבא יקבל #{effective}', 'success')
         else:
-            extensions.db.reset_post_number(num)
             flash(f'✅ מספר הפוסט הבא עודכן ל-#{num}', 'success')
     except ValueError:
         flash('⚠️ מספר לא תקין', 'error')

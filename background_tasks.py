@@ -679,23 +679,6 @@ def start_scheduler():
     # Reload any jobs that were pending before last restart
     extensions.comment_queue.reload_pending()
 
-    # Recover comments that were dismissed but never actually unhidden on FB
-    # (dismissed_at set but status still 'hidden' — happens when unhide job fails).
-    try:
-        conn = extensions.db.get_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE hidden_comments SET dismissed_at = NULL "
-            "WHERE dismissed_at IS NOT NULL AND status = 'hidden'"
-        )
-        recovered = cursor.rowcount
-        conn.commit()
-        conn.close()
-        if recovered:
-            print(f"🔧 Recovered {recovered} dismissed-but-hidden comment(s) — will reappear for admin review")
-    except Exception as e:
-        print(f"⚠️  Failed to recover dismissed-hidden comments: {e}")
-
     from queue_workers import comment_worker_loop
     threading.Thread(target=comment_worker_loop, daemon=True, name="comment-worker").start()
     print("✅ Comment worker thread started")
