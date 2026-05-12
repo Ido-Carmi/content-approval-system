@@ -463,8 +463,9 @@ def scheduled_content():
             clean_message = message
             if message.startswith('#'):
                 try:
-                    fb_post_number = int(message.split()[0][1:])
-                    clean_message = message.split(' ', 1)[1] if ' ' in message else message
+                    first_line = message.split('\n', 1)[0]
+                    fb_post_number = int(first_line[1:])
+                    clean_message = message.split('\n', 1)[1] if '\n' in message else message
                 except Exception:
                     pass
 
@@ -1032,8 +1033,12 @@ def set_post_number():
         num = int(new_number)
         if num < 1:
             raise ValueError
-        extensions.db.reset_post_number(num)
-        flash(f'✅ מספר הפוסט הבא עודכן ל-#{num}', 'success')
+        effective_min = extensions.db.get_current_post_number()
+        if num < effective_min:
+            flash(f'⚠️ לא ניתן להגדיר מספר נמוך מ-#{effective_min} (קיים פוסט עם מספר גבוה יותר)', 'error')
+        else:
+            extensions.db.reset_post_number(num)
+            flash(f'✅ מספר הפוסט הבא עודכן ל-#{num}', 'success')
     except ValueError:
         flash('⚠️ מספר לא תקין', 'error')
     return redirect(url_for('settings_page'))

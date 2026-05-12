@@ -99,8 +99,6 @@ def _handle_job(job):
                 # Permanent failure
                 log.error("[comment-worker] job %d permanently failed after %d attempts: %s",
                           job.journal_id, MAX_RETRIES, exc)
-                # Only revert status for hide/unhide — for delete, the comment was already
-                # dismissed from the DB by the route, so revert is not meaningful
                 if action in ('hide', 'unhide'):
                     try:
                         db.update_comment_status(comment_id, prev_status)
@@ -109,6 +107,16 @@ def _handle_job(job):
                     except Exception as revert_exc:
                         log.error("[comment-worker] failed to revert status for %s: %s",
                                   comment_id[:30], revert_exc)
+                    # If unhide failed, the comment is still hidden on FB but may be dismissed
+                    # in DB — undismiss so the admin can see and retry it.
+                    if action == 'unhide':
+                        try:
+                            db.undismiss_comment(comment_id)
+                            log.warning("[comment-worker] unhide permanently failed for %s — "
+                                        "undismissed so admin can see and retry", comment_id[:30])
+                        except Exception as revert_exc:
+                            log.error("[comment-worker] failed to undismiss %s: %s",
+                                      comment_id[:30], revert_exc)
                 elif action == 'delete':
                     try:
                         db.undismiss_comment(comment_id)
