@@ -725,7 +725,8 @@ class Database:
         }
     
     def get_next_post_number(self) -> int:
-        """Get and increment the post number. Never returns an already-used number.
+        """Get and increment the post number. Starts from the counter and skips
+        any numbers already in use, so reset_post_number() is always honoured.
         Class-level lock makes the read-modify-write atomic across threads."""
         with Database._post_number_lock:
             conn = self.get_connection()
@@ -734,32 +735,35 @@ class Database:
             cursor.execute('SELECT current_number FROM post_numbers WHERE id = 1')
             counter = cursor.fetchone()['current_number']
 
-            cursor.execute('SELECT MAX(post_number) as max_num FROM entries WHERE post_number IS NOT NULL')
-            result = cursor.fetchone()
-            max_used = result['max_num'] if result['max_num'] else 0
+            cursor.execute('SELECT post_number FROM entries WHERE post_number IS NOT NULL')
+            used = {row['post_number'] for row in cursor.fetchall()}
 
-            next_number = max(counter, max_used + 1)
+            next_number = counter
+            while next_number in used:
+                next_number += 1
 
             cursor.execute('UPDATE post_numbers SET current_number = ? WHERE id = 1', (next_number + 1,))
             conn.commit()
             conn.close()
 
             return next_number
-    
+
     def get_current_post_number(self) -> int:
-        """Get current post number without incrementing. Accounts for highest used number."""
+        """Get what the next post number would be without incrementing."""
         conn = self.get_connection()
         cursor = conn.cursor()
-        
+
         cursor.execute('SELECT current_number FROM post_numbers WHERE id = 1')
         counter = cursor.fetchone()['current_number']
-        
-        cursor.execute('SELECT MAX(post_number) as max_num FROM entries WHERE post_number IS NOT NULL')
-        result = cursor.fetchone()
-        max_used = result['max_num'] if result['max_num'] else 0
-        
+
+        cursor.execute('SELECT post_number FROM entries WHERE post_number IS NOT NULL')
+        used = {row['post_number'] for row in cursor.fetchall()}
+
         conn.close()
-        return max(counter, max_used + 1)
+        next_number = counter
+        while next_number in used:
+            next_number += 1
+        return next_number
     
     def reset_post_number(self, number: int = 1):
         """Reset post number to specified value"""

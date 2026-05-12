@@ -1027,7 +1027,7 @@ def set_post_number():
         extensions.db.reset_post_number(num)
         effective = extensions.db.get_current_post_number()
         if effective != num:
-            flash(f'✅ הגדרת מספר ל-#{num}, אך קיים פוסט עם מספר גבוה יותר — הפוסט הבא יקבל #{effective}', 'success')
+            flash(f'✅ מספר הפוסט הבא עודכן ל-#{num} — הפוסט הבא יקבל #{effective} (מספרים עד {effective-1} כבר בשימוש)', 'success')
         else:
             flash(f'✅ מספר הפוסט הבא עודכן ל-#{num}', 'success')
     except ValueError:
