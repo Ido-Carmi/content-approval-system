@@ -1,10 +1,11 @@
 """
-Shared application state — imported by background_tasks and routes_comments.
+Shared application state — imported by background_tasks, routes_comments, and reconciler.
 Initialized once at startup; handlers reinitialised via init_handlers().
 """
 import threading
 from database import Database
 from notifications import NotificationHandler
+from job_queue import JobQueue
 
 # Core objects
 db = Database()
@@ -13,8 +14,11 @@ facebook_handler = None
 sheets_handler = None
 notifications = NotificationHandler()
 
-# Comment-scanning state
-scan_in_progress = False
+# Reconciler wakeup signal — set() wakes the reconciler immediately
+reconcile_event = threading.Event()
+
+# Comment action queue — serialises all FB comment API calls (hide/unhide/delete)
+comment_queue = JobQueue(db, queue_name='comments')
 
 # Webhook batch queue
 webhook_queue = []

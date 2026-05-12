@@ -38,6 +38,10 @@
                             <input type="text" name="facebook_page_id" class="form-control" value="{{config.facebook_page_id or ''}}">
                         </div>
                         <div class="mb-3">
+                            <label class="form-label">שם הדף <small class="text-muted">(לזיהוי תיוגים בתגובות)</small></label>
+                            <input type="text" name="facebook_page_name" class="form-control" value="{{config.facebook_page_name or ''}}" placeholder="למשל: וידויים צבאיים">
+                        </div>
+                        <div class="mb-3">
                             <label class="form-label">Access Token</label>
                             <input type="password" name="facebook_access_token" class="form-control"
                                    placeholder="{% if config.facebook_access_token_set %}מפתח מוגדר ✓ (השאר ריק לשמור){% else %}הזן Access Token{% endif %}">

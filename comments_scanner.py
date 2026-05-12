@@ -1,6 +1,7 @@
 """
 Comments Scanner
-Hourly job to scan comments, filter with AI, and hide violations
+Nightly/startup scan: fetches recent comments, classifies with AI, saves to DB for admin review.
+All moderation actions (hide/unhide/delete) are handled exclusively by the webhook + job queue.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -18,124 +19,90 @@ class CommentsScanner:
     
     def scan_and_filter_comments(self) -> Dict:
         """
-        Main hourly job:
-        1. Get posts to monitor (2 days + sliding window)
-        2. Fetch comments from last hour
-        3. Filter with AI in batches
-        4. Hide violations on Facebook
-        5. Save to database
-        
-        Returns:
-            Statistics about the scan
+        Fetch recent comments, classify with AI, save to DB for admin review.
+        Does NOT hide anything — moderation is handled by the webhook + job queue.
         """
         print("\n" + "=" * 60)
-        print(f"🔍 Starting hourly comment scan at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"🔍 Starting comment scan at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print("=" * 60)
-        
+
         stats = {
             'posts_checked': 0,
             'comments_found': 0,
             'comments_filtered': 0,
-            'comments_hidden': 0,
-            'political': 0,
-            'hate': 0,
-            'errors': 0
+            'errors': 0,
         }
-        
+
         try:
-            # Step 1: Get posts to monitor
             posts = self._get_posts_to_monitor()
             stats['posts_checked'] = len(posts)
-            
+
             if not posts:
                 print("ℹ️  No posts to monitor")
                 return stats
-            
+
             print(f"📊 Monitoring {len(posts)} posts")
-            
-            # Step 2: Fetch comments from last hour
+
             comments = self._fetch_recent_comments(posts)
             stats['comments_found'] = len(comments)
-            
+
             if not comments:
                 print("ℹ️  No new comments found")
                 return stats
-            
+
             print(f"📝 Found {len(comments)} new comments")
-            
-            # CRITICAL: Separate truly NEW comments from already-in-database
-            # Only filter NEW comments through AI (expensive!)
+
+            # Skip already-known comments and the page's own auto-comments
             new_comments = []
             existing_count = 0
             auto_count = 0
 
             auto_texts = get_auto_comment_texts()
+            page_id = str(getattr(self.facebook, 'page_id', '') or '')
 
             conn = self.db.get_connection()
             cursor = conn.cursor()
             for comment in comments:
-                # Skip the page's own auto-comments — no need to store or classify them
+                if page_id and comment.get('author_id', '') == page_id:
+                    auto_count += 1
+                    continue
                 if comment.get('comment_text', '').strip() in auto_texts:
                     auto_count += 1
                     continue
                 cursor.execute('SELECT id FROM hidden_comments WHERE comment_id = ?',
-                              (comment['comment_id'],))
+                               (comment['comment_id'],))
                 if cursor.fetchone():
                     existing_count += 1
                 else:
                     new_comments.append(comment)
             conn.close()
 
-            if auto_count > 0:
+            if auto_count:
                 print(f"   [Skip] {auto_count} auto-comment(s) ignored")
-            if existing_count > 0:
-                print(f"   [Skip] {existing_count} comments already in database (no AI needed)")
-            if new_comments:
-                print(f"   [New] {len(new_comments)} truly NEW comments (will filter with AI)")
-            
-            # Step 3: Add any queued comments from previous failed attempts
-            queued = self.db.get_queued_comments()
-            if queued:
-                print(f"📥 Adding {len(queued)} queued comments from previous attempts")
-                new_comments.extend(queued)
-            
-            # Skip if no new comments to filter
+            if existing_count:
+                print(f"   [Skip] {existing_count} already in database")
             if not new_comments:
-                print("ℹ️  No new comments to filter")
+                print("ℹ️  No new comments to classify")
                 return stats
-            
-            # Step 4: Filter ONLY NEW comments with AI
-            print(f"🤖 Filtering {len(new_comments)} NEW comments with AI...")
+
+            print(f"   [New] {len(new_comments)} new comments — classifying with AI...")
             filter_results = self._filter_comments_with_ai(new_comments)
             stats['comments_filtered'] = len(filter_results)
-            
-            # Step 5: Process results
-            hidden_count = self._process_filter_results(filter_results, new_comments)
-            stats['comments_hidden'] = hidden_count
-            
-            # Count by reason
-            for result in filter_results:
-                if result['should_hide']:
-                    if result['reason'] == 'political':
-                        stats['political'] += 1
-                    elif result['reason'] == 'hate':
-                        stats['hate'] += 1
-            
+
+            self._save_filter_results(filter_results, new_comments)
+
             print("\n" + "=" * 60)
-            print(f"✅ Scan complete:")
-            print(f"   Posts checked: {stats['posts_checked']}")
-            print(f"   Comments found: {stats['comments_found']}")
-            print(f"   Comments hidden: {stats['comments_hidden']}")
-            print(f"     • Political: {stats['political']}")
-            print(f"     • Hate speech: {stats['hate']}")
+            print(f"✅ Scan complete: {stats['posts_checked']} posts, "
+                  f"{stats['comments_found']} comments, "
+                  f"{stats['comments_filtered']} classified")
             print("=" * 60 + "\n")
-            
+
         except Exception as e:
             print(f"❌ Error in comment scan: {e}")
             stats['errors'] += 1
             import traceback
             traceback.print_exc()
-        
+
         return stats
     
     def _get_posts_to_monitor(self) -> List[Dict]:
@@ -360,91 +327,29 @@ class CommentsScanner:
         return "Post text not available"
     
     def _filter_comments_with_ai(self, comments: List[Dict]) -> List[Dict]:
-        """
-        Filter comments using AI in batches
-        
-        Args:
-            comments: List of comment dictionaries
-        
-        Returns:
-            List of filter results
-        """
+        """Classify comments with AI. Returns results or [] on error."""
         if not comments:
             return []
-        
-        print(f"🤖 Filtering {len(comments)} comments with AI...")
-        
         try:
-            results = self.ai_filter.filter_comments_batch(
-                comments=comments,
-                batch_size=30  # Reduced to avoid token limits
-            )
-            return results
-            
+            return self.ai_filter.filter_comments_batch(comments=comments, batch_size=30)
         except Exception as e:
             print(f"❌ AI filtering error: {e}")
-            
-            # On ANY error, queue comments for retry on next scan
-            print("⚠️  Queueing comments for retry on next scan")
-            for comment in comments:
-                self.db.queue_comment(comment)
-            
             return []
-    
-    def _process_filter_results(self, filter_results: List[Dict], comments: List[Dict]) -> int:
-        """
-        Process AI filter results:
-        1. Save ALL comments to database
-        2. Hide only flagged comments on Facebook
-        3. Remove from queue if successful
-        
-        Returns:
-            Number of comments successfully hidden
-        """
+
+    def _save_filter_results(self, filter_results: List[Dict], comments: List[Dict]) -> None:
+        """Save AI classification results to DB for admin review. No FB actions."""
         if not filter_results:
-            return 0
-        
-        hidden_count = 0
-        added_count = 0
-        skipped_count = 0
-        
-        # Create comment lookup
+            return
         comment_map = {c['comment_id']: c for c in comments}
-        
         for result in filter_results:
             comment_data = comment_map.get(result['comment_id'])
             if not comment_data:
                 continue
-            
-            # Add AI results to comment data
             comment_data['should_hide'] = result['should_hide']
             comment_data['filter_reason'] = result['reason']
             comment_data['ai_explanation'] = result['explanation']
             comment_data['ai_confidence'] = result.get('confidence', 0.0)
-            
-            # Save comment to database (skips if already exists)
-            was_added = self.db.add_comment(comment_data)
-            if was_added:
-                added_count += 1
-            else:
-                skipped_count += 1
-            
-            # Only hide on Facebook if AI flagged it AND it was newly added
-            if result['should_hide'] and was_added:
-                success = self.facebook.hide_comment(result['comment_id'])
-                
-                if success:
-                    hidden_count += 1
-                    # Remove from queue if it was there
-                    self.db.remove_from_queue(result['comment_id'])
-                else:
-                    # If hiding failed, queue for retry
-                    self.db.queue_comment(comment_data)
-            else:
-                # Clean comment - just remove from queue if it was there
-                self.db.remove_from_queue(result['comment_id'])
-        
-        return hidden_count
+            self.db.add_comment(comment_data)
 
 
 def create_hourly_job(db, config, lookback_hours: int = 48):

@@ -145,6 +145,20 @@
     color: #0f5132;
 }
 
+.comment-item.mention {
+    border-right: 4px solid #fd7e14 !important;
+    background: #fff8f0;
+}
+
+.badge-mention {
+    background: #fd7e14;
+    color: #fff;
+    font-size: 0.75rem;
+    padding: 0.2rem 0.55rem;
+    border-radius: 20px;
+    font-weight: 600;
+}
+
 /* HTMX swap animation - fade out before removal */
 .comment-item.htmx-swapping {
     opacity: 0;
@@ -172,234 +186,35 @@
 }
 </style>
 
-<!-- Dead-letter queue alert -->
-{% if failed_comments %}
-<div class="card mb-3 border-danger">
-    <div class="card-header bg-danger text-white d-flex justify-content-between align-items-center"
-         data-bs-toggle="collapse" data-bs-target="#failedCommentsPanel" style="cursor:pointer;">
-        <span>
-            <i class="bi bi-exclamation-triangle-fill"></i>
-            <strong>{{ failed_comments|length }} תגובות נכשלו לעיבוד</strong>
-            <small class="ms-2 opacity-75">לחץ להרחבה</small>
-        </span>
-        <i class="bi bi-chevron-down"></i>
-    </div>
-    <div id="failedCommentsPanel" class="collapse">
-        <div class="card-body p-0">
-            <div class="table-responsive">
-                <table class="table table-sm mb-0">
-                    <thead class="table-light">
-                        <tr>
-                            <th>תגובה</th>
-                            <th>מחבר</th>
-                            <th>ניסיונות</th>
-                            <th>שגיאה</th>
-                            <th>תאריך</th>
-                            <th></th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for fc in failed_comments %}
-                        <tr id="failed-row-{{ fc.comment_id }}">
-                            <td style="max-width:300px;">
-                                <small>{{ fc.comment_text[:120] }}{% if fc.comment_text|length > 120 %}…{% endif %}</small>
-                            </td>
-                            <td><small>{{ fc.author_name or '—' }}</small></td>
-                            <td><span class="badge bg-warning text-dark">{{ fc.retry_count }}</span></td>
-                            <td><small class="text-muted">{{ fc.error_reason or '—' }}</small></td>
-                            <td><small class="text-muted">{{ fc.failed_at[:16] if fc.failed_at else '—' }}</small></td>
-                            <td class="text-nowrap">
-                                <button class="btn btn-sm btn-outline-primary me-1"
-                                        hx-post="{{ url_for('retry_failed_comment', comment_id=fc.comment_id) }}"
-                                        hx-target="#failed-row-{{ fc.comment_id }}"
-                                        hx-swap="outerHTML"
-                                        title="החזר לתור הניסיון">
-                                    <i class="bi bi-arrow-clockwise"></i>
-                                </button>
-                                <button class="btn btn-sm btn-outline-secondary"
-                                        hx-post="{{ url_for('dismiss_failed_comment', comment_id=fc.comment_id) }}"
-                                        hx-target="#failed-row-{{ fc.comment_id }}"
-                                        hx-swap="outerHTML"
-                                        title="בטל">
-                                    <i class="bi bi-x"></i>
-                                </button>
-                            </td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-</div>
-{% endif %}
 
-<!-- Filter Tabs + Scan Button -->
+<!-- Filter Tabs -->
 <div class="card mb-3">
     <div class="card-body">
         <div class="btn-group" role="group">
-            <a href="{{ url_for('comments_page', filter='all') }}" 
+            <a href="{{ url_for('comments_page', filter='all') }}"
                class="btn {% if filter_status == 'all' %}btn-primary{% else %}btn-outline-primary{% endif %}">
                 הכל (<span id="count-total">{{ stats.total }}</span>)
             </a>
-            <a href="{{ url_for('comments_page', filter='shown') }}" 
+            <a href="{{ url_for('comments_page', filter='shown') }}"
                class="btn {% if filter_status == 'shown' %}btn-primary{% else %}btn-outline-primary{% endif %}">
                 מוצגות (<span id="count-shown">{{ stats.shown }}</span>)
             </a>
-            <a href="{{ url_for('comments_page', filter='hidden') }}" 
+            <a href="{{ url_for('comments_page', filter='hidden') }}"
                class="btn {% if filter_status == 'hidden' %}btn-primary{% else %}btn-outline-primary{% endif %}">
                 מוסתרות (<span id="count-hidden">{{ stats.hidden }}</span>)
             </a>
         </div>
-        
-        <button class="btn btn-primary float-start"
-                id="scan-btn"
-                onclick="startScan()">
-            <i class="bi bi-arrow-clockwise" id="scan-icon"></i>
-            <span id="scan-text">סרוק תגובות חדשות</span>
-        </button>
-        <button class="btn btn-outline-secondary float-start ms-2"
-                id="deep-scan-btn"
-                onclick="startDeepScan()"
-                title="סריקה מלאה אחורה עד מספר הימים שהוגדר בהגדרות">
-            <i class="bi bi-search" id="deep-scan-icon"></i>
-            <span id="deep-scan-text">סריקה עמוקה</span>
-        </button>
-        
+
         {% if grouped_comments %}
-        <form method="POST" action="{{ url_for('mark_all_comments_ok') }}" class="d-inline float-start ms-2"
->
+        <form method="POST" action="{{ url_for('mark_all_comments_ok') }}" class="d-inline float-start ms-2">
             <input type="hidden" name="filter_status" value="{{ filter_status }}">
             <button type="submit" class="btn btn-success">
                 ✓ סמן הכל כתקין
             </button>
         </form>
         {% endif %}
-        <div id="scan-status-inline" class="mt-2" style="display: none;">
-            <div class="alert alert-info mb-0">
-                <div class="d-flex align-items-center">
-                    <div class="spinner-border spinner-border-sm me-2" role="status"></div>
-                    <div>
-                        <strong id="scan-message">סורק...</strong>
-                        <br>
-                        <small class="text-muted" id="scan-detail">זה עשוי לקחת כמה שניות</small>
-                        <br>
-                        <small class="text-muted" id="scan-timer">0 שניות</small>
-                    </div>
-                </div>
-            </div>
-        </div>
-        {% if last_scan %}
-        <div class="mt-2">
-            <small class="text-muted"><i class="bi bi-clock-history"></i> סריקה אחרונה: {{ last_scan }}</small>
-        </div>
-        {% endif %}
     </div>
 </div>
-
-<script>
-let scanInterval;
-let scanStartTime;
-
-function startScan() {
-    // Disable button
-    const btn = document.getElementById('scan-btn');
-    btn.disabled = true;
-    btn.classList.add('disabled');
-    
-    // Show inline status
-    document.getElementById('scan-status-inline').style.display = 'block';
-    
-    // Add spinning animation to icon
-    document.getElementById('scan-icon').classList.add('fa-spin');
-    
-    // Trigger scan
-    fetch('{{ url_for("scan_comments_now") }}', {
-        method: 'POST'
-    }).then(() => {
-        scanStartTime = Date.now();
-        scanInterval = setInterval(checkScanStatus, 1000);
-    }).catch(err => {
-        console.error('Scan error:', err);
-        btn.disabled = false;
-        btn.classList.remove('disabled');
-        document.getElementById('scan-status-inline').style.display = 'none';
-    });
-}
-
-function checkScanStatus() {
-    const elapsed = Math.floor((Date.now() - scanStartTime) / 1000);
-    
-    // Update timer
-    document.getElementById('scan-timer').textContent = elapsed + ' שניות';
-    
-    // Update status messages
-    const messageEl = document.getElementById('scan-message');
-    const detailEl = document.getElementById('scan-detail');
-    
-    if (elapsed < 3) {
-        messageEl.textContent = 'מתחיל סריקה...';
-        detailEl.textContent = 'מאתר פוסטים פעילים';
-    } else if (elapsed < 8) {
-        messageEl.textContent = 'אוסף תגובות...';
-        detailEl.textContent = 'קורא תגובות חדשות מפייסבוק';
-    } else if (elapsed < 15) {
-        messageEl.textContent = 'מסנן עם AI...';
-        detailEl.textContent = 'בודק תוכן פוליטי ושנאה (לומד מטעויות קודמות)';
-    } else if (elapsed < 25) {
-        messageEl.textContent = 'מעבד תוצאות...';
-        detailEl.textContent = 'מעדכן מסד נתונים';
-    } else {
-        messageEl.textContent = 'מסיים...';
-        detailEl.textContent = 'כמעט גמרנו';
-    }
-    
-    // Poll server for completion
-    fetch('{{ url_for("scan_status") }}')
-        .then(res => res.json())
-        .then(data => {
-            if (!data.scanning) {
-                clearInterval(scanInterval);
-                messageEl.textContent = 'סיים!';
-                detailEl.textContent = 'טוען מחדש את העמוד...';
-                setTimeout(() => location.reload(), 500);
-            }
-        })
-        .catch(err => {
-            // Fallback: reload after 40 seconds
-            if (elapsed >= 40) {
-                clearInterval(scanInterval);
-                location.reload();
-            }
-        });
-}
-
-function startDeepScan() {
-    const btn = document.getElementById('deep-scan-btn');
-    const regularBtn = document.getElementById('scan-btn');
-    btn.disabled = true;
-    regularBtn.disabled = true;
-    document.getElementById('deep-scan-icon').className = 'bi bi-hourglass-split';
-    document.getElementById('deep-scan-text').textContent = 'סורק...';
-    document.getElementById('scan-status-inline').style.display = 'block';
-    document.getElementById('scan-message').textContent = 'סריקה עמוקה...';
-    document.getElementById('scan-detail').textContent = 'מחפש תגובות מהימים האחרונים שפוספסו';
-
-    fetch('{{ url_for("deep_scan_comments") }}', { method: 'POST' })
-        .then(() => {
-            scanStartTime = Date.now();
-            scanInterval = setInterval(checkScanStatus, 1000);
-        })
-        .catch(err => {
-            console.error('Deep scan error:', err);
-            btn.disabled = false;
-            regularBtn.disabled = false;
-            document.getElementById('deep-scan-icon').className = 'bi bi-search';
-            document.getElementById('deep-scan-text').textContent = 'סריקה עמוקה';
-            document.getElementById('scan-status-inline').style.display = 'none';
-        });
-}
-</script>
 
 <!-- Floating sticky bar (shown via JS when post header scrolls out of view) -->
 <div id="post-float-bar" class="post-float-bar">
@@ -448,7 +263,7 @@ function startDeepScan() {
     <!-- Comments List -->
     <div class="post-collapse" id="comments-{{ post_id }}">
         {% for comment in post_data.comments %}
-        <div class="comment-item status-{{ comment.status }}" id="comment-{{ comment.id }}">
+        <div class="comment-item status-{{ comment.status }}{% if comment.mentions_page %} mention{% endif %}" id="comment-{{ comment.id }}">
             <!-- Dismiss Button (X) -->
             <button class="btn btn-sm btn-outline-danger dismiss-btn" 
                     hx-post="{{ url_for('dismiss_comment', comment_id=comment.comment_id) }}"
@@ -466,10 +281,14 @@ function startDeepScan() {
                 
                 <!-- Status Badges -->
                 <div class="mt-1">
+                    {% if comment.mentions_page %}
+                    <span class="badge-mention">🔔 תיוג</span>
+                    {% endif %}
+
                     <span class="status-badge {{ comment.status }}">
                         {% if comment.status == 'shown' %}✓ מוצגת{% elif comment.status == 'hidden' %}✗ מוסתרת{% endif %}
                     </span>
-                    
+
                     {% if comment.filter_reason %}
                     <span class="status-badge {{ comment.filter_reason }}">
                         {% if comment.filter_reason == 'political' %}

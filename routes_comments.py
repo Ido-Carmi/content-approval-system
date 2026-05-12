@@ -57,8 +57,14 @@ def _get_comment(comment_id):
     return dict(row) if row else None
 
 
-def _run_async(fn):
-    threading.Thread(target=fn, daemon=True).start()
+def _enqueue_fb_action(action: str, comment_id: str, prev_status: str, **extra):
+    """Put an FB API action in the persistent serialised comment queue."""
+    extensions.comment_queue.put({
+        'action': action,
+        'comment_id': comment_id,
+        'prev_status': prev_status,
+        **extra,
+    })
 
 
 def _enrich_webhook_comments(comments):
@@ -104,79 +110,62 @@ def _enrich_webhook_comments(comments):
 
 
 def _mark_and_delete_comment(comment_id, label):
-    """Shared logic: delete from Facebook + save AI training data + dismiss."""
-    def async_action():
-        try:
-            fb = _get_fb_handler()
-            if not fb:
-                return
-            comment = _get_comment(comment_id)
-            if not comment:
-                return
+    """Save training data + dismiss immediately; queue FB delete."""
+    comment = _get_comment(comment_id)
+    if not comment:
+        return '', 200
 
-            success = fb.delete_comment(comment_id)
+    prev_status = comment['status']
+    ai_said = comment['filter_reason']
+    category = f'correct_{label}' if ai_said == label else f'missed_{label}'
 
-            ai_said = comment['filter_reason']
-            category = f'correct_{label}' if ai_said == label else f'missed_{label}'
+    # DB ops are synchronous (fast) — training data recorded before FB action
+    extensions.db.add_ai_example(
+        category=category,
+        comment_text=comment['comment_text'],
+        original_ai_prediction=ai_said,
+        explanation=f"{_LABEL_DESCRIPTIONS.get(label, label)} - admin marked for deletion"
+    )
+    extensions.db.save_training_data(
+        comment_id=comment_id,
+        post_id=comment.get('post_id', ''),
+        comment_text=comment['comment_text'],
+        admin_label=label,
+        ai_prediction=ai_said,
+        ai_explanation=comment.get('ai_explanation', '')
+    )
+    # Dismiss immediately so comment leaves the UI now (FB delete follows async)
+    extensions.db.dismiss_comment(comment_id)
 
-            extensions.db.add_ai_example(
-                category=category,
-                comment_text=comment['comment_text'],
-                original_ai_prediction=ai_said,
-                explanation=f"{_LABEL_DESCRIPTIONS.get(label, label)} - admin marked for deletion"
-            )
-            extensions.db.save_training_data(
-                comment_id=comment_id,
-                post_id=comment.get('post_id', ''),
-                comment_text=comment['comment_text'],
-                admin_label=label,
-                ai_prediction=ai_said,
-                ai_explanation=comment.get('ai_explanation', '')
-            )
-            extensions.db.dismiss_comment(comment_id)
-
-            status = "✅" if success else "⚠️  Facebook delete failed —"
-            print(f"{status} Marked as {label}: {comment_id} → {category}")
-
-        except Exception as e:
-            print(f"❌ Error marking {label}: {e}")
-
-    _run_async(async_action)
+    # FB delete is fire-and-forget — comment is already dismissed; log on failure only
+    _enqueue_fb_action('delete', comment_id, prev_status)
+    print(f"[comment] queued delete for {comment_id[:30]}... label={label} → {category}")
     return '', 200
 
 
 def _batch_mark_ok(comment_ids):
-    """Unhide + train + dismiss a list of comments in a background thread."""
-    def async_batch():
+    """Dismiss + train immediately; queue FB unhide for each hidden comment."""
+    queued = 0
+    for cid in comment_ids:
         try:
-            fb = _get_fb_handler()
-            for cid in comment_ids:
-                try:
-                    comment = _get_comment(cid)
-                    if not comment:
-                        continue
-                    if fb and comment['status'] == 'hidden':
-                        fb.unhide_comment(cid)
-                    ai_said = comment['filter_reason']
-                    if ai_said and ai_said != 'clean':
-                        extensions.db.add_ai_example(
-                            category=f'false_positive_{ai_said}',
-                            comment_text=comment['comment_text'],
-                            original_ai_prediction=ai_said,
-                            explanation="False positive - batch marked as OK"
-                        )
-                    extensions.db.dismiss_comment(cid)
-                except Exception as e:
-                    print(f"⚠️  Error marking comment {cid} as OK: {e}")
-                    try:
-                        extensions.db.dismiss_comment(cid)
-                    except Exception:
-                        pass
-            print(f"✅ Batch mark-ok complete: {len(comment_ids)} comments")
+            comment = _get_comment(cid)
+            if not comment:
+                continue
+            ai_said = comment['filter_reason']
+            if ai_said and ai_said != 'clean':
+                extensions.db.add_ai_example(
+                    category=f'false_positive_{ai_said}',
+                    comment_text=comment['comment_text'],
+                    original_ai_prediction=ai_said,
+                    explanation="False positive - batch marked as OK"
+                )
+            extensions.db.dismiss_comment(cid)
+            if comment['status'] == 'hidden':
+                _enqueue_fb_action('unhide', cid, 'hidden')
+                queued += 1
         except Exception as e:
-            print(f"❌ Batch mark-ok error: {e}")
-
-    _run_async(async_batch)
+            print(f"⚠️  _batch_mark_ok error for {cid}: {e}")
+    print(f"[comment] batch mark-ok: {len(comment_ids)} dismissed, {queued} FB unhides queued")
 
 
 # ============================================================================
@@ -194,14 +183,18 @@ def process_webhook_batch():
 
     config = load_config()
 
-    # Drop auto-comments — the page's own replies don't need AI filtering or storage
+    # Drop auto-comments — the page's own replies don't need AI filtering or storage.
+    # Filter primarily by author_id (reliable), secondarily by text (belt-and-suspenders).
+    page_id = str(config.get('facebook_page_id', ''))
+    before = len(batch)
+    if page_id:
+        batch = [cd for cd in batch if cd.get('author_id', '') != page_id]
     auto_texts = get_auto_comment_texts(config)
     if auto_texts:
-        before = len(batch)
         batch = [cd for cd in batch if cd.get('comment_text', '').strip() not in auto_texts]
-        skipped = before - len(batch)
-        if skipped:
-            print(f"   ⏭️  Skipped {skipped} auto-comment(s)")
+    skipped = before - len(batch)
+    if skipped:
+        print(f"   ⏭️  Skipped {skipped} auto-comment(s)")
     if not batch:
         return
 
@@ -225,9 +218,6 @@ def process_webhook_batch():
         results = ai_filter.filter_comments_batch(batch, batch_size=30)
         result_map = {r['comment_id']: r for r in results}
 
-        from facebook_comments_handler import FacebookCommentsHandler
-        fb = FacebookCommentsHandler(config['facebook_access_token'], config['facebook_page_id'])
-
         hidden_count = 0
         for cd in batch:
             result = result_map.get(cd['comment_id'])
@@ -244,13 +234,11 @@ def process_webhook_batch():
 
             if cd['should_hide']:
                 hidden_count += 1
-                try:
-                    fb.hide_comment(cd['comment_id'])
-                    print(f"   🚫 Hidden: {cd['comment_id'][:30]}... ({cd['filter_reason']})")
-                except Exception as e:
-                    print(f"   ❌ Error hiding: {e}")
+                # Enqueue to the serial comment worker (retries, journalled, non-blocking)
+                _enqueue_fb_action('hide', cd['comment_id'], 'shown')
+                print(f"   🚫 Queued hide: {cd['comment_id'][:30]}... ({cd['filter_reason']})")
 
-        print(f"✅ Batch complete: {len(batch)} comments, {hidden_count} hidden")
+        print(f"✅ Batch complete: {len(batch)} comments, {hidden_count} queued to hide")
 
         check_comment_notification()
 
@@ -261,8 +249,6 @@ def process_webhook_batch():
     except Exception as e:
         print(f"❌ Batch processing error: {e}")
         traceback.print_exc()
-        for cd in batch:
-            extensions.db.queue_comment(cd)
 
 
 def _webhook_batch_checker():
@@ -326,105 +312,11 @@ def register(app):
         except Exception:
             stats = {'total': 0, 'hidden': 0, 'shown': 0}
 
-        try:
-            failed_comments = extensions.db.get_failed_comments()
-        except Exception:
-            failed_comments = []
-
         return render_template('comments.html',
                                grouped_comments=grouped_comments,
                                stats=stats,
                                filter_status=filter_status,
-                               last_scan=config.get('last_comment_scan', ''),
-                               failed_comments=failed_comments)
-
-    # ---- Manual scan ----
-
-    @app.route('/scan-comments-now', methods=['POST'])
-    def scan_comments_now():
-        extensions.scan_in_progress = True
-
-        def async_scan():
-            try:
-                print("\n" + "="*60 + "\n🔍 MANUAL COMMENT SCAN TRIGGERED\n" + "="*60)
-                config = load_config()
-
-                if not config.get('comments_filter_enabled', False):
-                    print("⚠️  Comments filter disabled")
-                    return
-                if not config.get('openai_api_key'):
-                    print("⚠️  Missing OpenAI API key")
-                    return
-                if not config.get('facebook_access_token'):
-                    print("⚠️  Missing Facebook access token")
-                    return
-
-                from comments_scanner import create_hourly_job
-                job = create_hourly_job(extensions.db, config)
-                job()
-
-                config = load_config()
-                israel_tz = pytz.timezone('Asia/Jerusalem')
-                config['last_comment_scan'] = datetime.now(israel_tz).strftime('%Y-%m-%d %H:%M:%S')
-                save_config(config)
-
-                check_comment_notification()
-                print("✅ Manual scan completed\n" + "="*60)
-
-            except Exception as e:
-                print(f"❌ Scan error: {e}")
-                traceback.print_exc()
-            finally:
-                extensions.scan_in_progress = False
-
-        threading.Thread(target=async_scan, daemon=True).start()
-        return '', 200
-
-    @app.route('/scan-status', methods=['GET'])
-    def scan_status():
-        return jsonify({'scanning': extensions.scan_in_progress})
-
-    # ---- Deep scan ----
-
-    @app.route('/deep-scan-comments', methods=['POST'])
-    def deep_scan_comments():
-        """Scan back N days instead of the default 48h window."""
-        if extensions.scan_in_progress:
-            return jsonify({'error': 'סריקה כבר רצה'}), 409
-
-        extensions.scan_in_progress = True
-
-        def async_deep_scan():
-            try:
-                config = load_config()
-                if not config.get('facebook_access_token'):
-                    print("⚠️  Missing Facebook access token")
-                    return
-
-                retention_days = config.get('comment_retention_days', 7)
-                lookback_hours = retention_days * 24
-                print(f"\n{'='*60}\n🔍 DEEP SCAN: looking back {retention_days} days ({lookback_hours}h)\n{'='*60}")
-
-                from comments_scanner import create_hourly_job
-                job = create_hourly_job(extensions.db, config, lookback_hours=lookback_hours)
-                job()
-
-                config = load_config()
-                israel_tz = pytz.timezone('Asia/Jerusalem')
-                config['last_comment_scan'] = datetime.now(israel_tz).strftime('%Y-%m-%d %H:%M:%S')
-                save_config(config)
-
-                check_comment_notification()
-                print(f"✅ Deep scan completed\n{'='*60}")
-
-            except Exception as e:
-                print(f"❌ Deep scan error: {e}")
-                traceback.print_exc()
-            finally:
-                extensions.scan_in_progress = False
-
-        threading.Thread(target=async_deep_scan, daemon=True).start()
-        return '', 200
+                               last_scan=config.get('last_comment_scan', ''))
 
     # ---- Webhook ----
 
@@ -444,9 +336,9 @@ def register(app):
     @app.route('/webhook', methods=['POST'])
     def webhook_receive():
         try:
-            # Verify Facebook signature if App Secret is configured
-            config_for_sig = load_config()
-            app_secret = config_for_sig.get('facebook_app_secret', '')
+            # Load config once for the entire webhook request
+            wh_config = load_config()
+            app_secret = wh_config.get('facebook_app_secret', '')
             if app_secret:
                 signature = request.headers.get('X-Hub-Signature-256', '')
                 if not signature:
@@ -478,6 +370,23 @@ def register(app):
 
                     print(f"   Change: field={field}, item={item}, verb={verb}")
 
+                    # Detect external deletion of a scheduled post
+                    if field == 'feed' and item in ('status', 'post') and verb in ('remove', 'delete'):
+                        post_id = value.get('post_id') or value.get('story_id')
+                        if post_id:
+                            print(f"   🗑️  Post {post_id} deleted on Facebook — checking if it was scheduled")
+                            try:
+                                from reconciler import signal_reconciler
+                                freed = extensions.db.return_post_to_pending_from_reconciler(post_id)
+                                if freed is not None:
+                                    print(f"   ↩️  Entry returned to pending (freed #{freed}) — signalling reconciler")
+                                    signal_reconciler()
+                                else:
+                                    print(f"   ℹ️  Post {post_id} not found as scheduled entry — ignoring")
+                            except Exception as _e:
+                                print(f"   ❌ Error handling post deletion: {_e}")
+                        continue
+
                     if field != 'feed' or item != 'comment' or verb != 'add':
                         continue
 
@@ -503,6 +412,10 @@ def register(app):
                     except (ValueError, TypeError):
                         created_at_iso = str(created_time)
 
+                    # Check if the page is mentioned: comment starts with the page name
+                    page_name = (wh_config.get('facebook_page_name') or '').strip()
+                    mentions_page = 1 if (page_name and message.lower().startswith(page_name.lower())) else 0
+
                     comment_data = {
                         'comment_id': comment_id,
                         'post_id': post_id,
@@ -511,7 +424,8 @@ def register(app):
                         'author_id': str(sender_id),
                         'created_at': created_at_iso,
                         'is_hidden': False,
-                        'parent_id': parent_id if parent_id != post_id else None
+                        'parent_id': parent_id if parent_id != post_id else None,
+                        'mentions_page': mentions_page,
                     }
 
                     with extensions.webhook_queue_lock:
@@ -545,66 +459,40 @@ def register(app):
 
     @app.route('/comment/<comment_id>/mark-ok', methods=['POST'])
     def mark_comment_ok(comment_id):
-        def async_action():
-            try:
-                fb = _get_fb_handler()
-                if not fb:
-                    return
-                comment = _get_comment(comment_id)
-                if not comment:
-                    return
-
-                unhide_failed = False
-                if comment['status'] == 'hidden':
-                    if fb.unhide_comment(comment_id):
-                        extensions.db.update_comment_status(comment_id, 'shown')
-                    else:
-                        unhide_failed = True
-                        print(f"⚠️  unhide failed for {comment_id} — comment stays hidden on Facebook")
-
-                ai_said = comment['filter_reason']
-                extensions.db.save_training_data(
-                    comment_id=comment_id,
-                    post_id=comment.get('post_id', ''),
-                    comment_text=comment['comment_text'],
-                    admin_label='ok',
-                    ai_prediction=ai_said,
-                    ai_explanation=comment.get('ai_explanation', '')
-                )
-                if ai_said and ai_said != 'clean':
-                    extensions.db.add_ai_example(
-                        category=f'false_positive_{ai_said}',
-                        comment_text=comment['comment_text'],
-                        original_ai_prediction=ai_said,
-                        explanation="False positive - actually acceptable"
-                    )
-                extensions.db.dismiss_comment(comment_id)
-                if unhide_failed:
-                    print(f"⚠️  Dismissed from review but NOT shown on Facebook: {comment_id}")
-                else:
-                    print(f"✅ Marked as OK and shown on Facebook: {comment_id}")
-
-            except Exception as e:
-                print(f"❌ Error marking OK: {e}")
-
-        _run_async(async_action)
+        comment = _get_comment(comment_id)
+        if not comment:
+            return '', 200
+        ai_said = comment['filter_reason']
+        prev_status = comment['status']
+        extensions.db.save_training_data(
+            comment_id=comment_id,
+            post_id=comment.get('post_id', ''),
+            comment_text=comment['comment_text'],
+            admin_label='ok',
+            ai_prediction=ai_said,
+            ai_explanation=comment.get('ai_explanation', '')
+        )
+        if ai_said and ai_said != 'clean':
+            extensions.db.add_ai_example(
+                category=f'false_positive_{ai_said}',
+                comment_text=comment['comment_text'],
+                original_ai_prediction=ai_said,
+                explanation="False positive - actually acceptable"
+            )
+        extensions.db.dismiss_comment(comment_id)
+        if prev_status == 'hidden':
+            _enqueue_fb_action('unhide', comment_id, 'hidden')
+            print(f"[comment] queued unhide for {comment_id[:30]}...")
         return '', 200
 
     @app.route('/comment/<comment_id>/delete', methods=['POST'])
     def delete_comment_only(comment_id):
         """Delete from Facebook without saving to any training list."""
-        def async_action():
-            try:
-                fb = _get_fb_handler()
-                if not fb:
-                    return
-                fb.delete_comment(comment_id)
-                extensions.db.dismiss_comment(comment_id)
-                print(f"🗑️ Deleted comment (no training): {comment_id}")
-            except Exception as e:
-                print(f"❌ Error deleting comment: {e}")
-
-        _run_async(async_action)
+        comment = _get_comment(comment_id)
+        prev_status = comment['status'] if comment else 'shown'
+        extensions.db.dismiss_comment(comment_id)
+        _enqueue_fb_action('delete', comment_id, prev_status)
+        print(f"[comment] queued delete (no training) for {comment_id[:30]}...")
         return '', 200
 
     @app.route('/comment/<comment_id>/dismiss', methods=['POST'])
@@ -620,22 +508,14 @@ def register(app):
 
     @app.route('/comment/<comment_id>/show', methods=['POST'])
     def show_comment(comment_id):
-        def async_action():
-            try:
-                fb = _get_fb_handler()
-                if not fb:
-                    return
-                success = fb.unhide_comment(comment_id)
-                if success:
-                    extensions.db.update_comment_status(comment_id, 'shown')
-                    extensions.db.log_ai_feedback(comment_id, 'false_positive')
-                    print(f"✅ Showed comment {comment_id}")
-                else:
-                    print(f"❌ Failed to show comment {comment_id}")
-            except Exception as e:
-                print(f"❌ Error showing comment {comment_id}: {e}")
-
-        _run_async(async_action)
+        comment = _get_comment(comment_id)
+        if not comment:
+            return '', 404
+        extensions.db.log_ai_feedback(comment_id, 'false_positive')
+        # Optimistic: set shown now; worker reverts to 'hidden' on permanent failure
+        extensions.db.update_comment_status(comment_id, 'shown')
+        _enqueue_fb_action('unhide', comment_id, 'hidden')
+        print(f"[comment] queued unhide for {comment_id[:30]}...")
         return _PROCESSING_RESPONSE, 200
 
     @app.route('/comment/<comment_id>/hide', methods=['POST'])
@@ -657,23 +537,13 @@ def register(app):
             </div>
             ''', 200
 
-        def async_action():
-            try:
-                fb = _get_fb_handler()
-                if not fb:
-                    return
-                success = fb.hide_comment(comment_id)
-                if success:
-                    if comment and comment['filter_reason'] == 'clean' and reason:
-                        extensions.db.log_ai_feedback(comment_id, 'missed', reason)
-                    extensions.db.update_comment_status(comment_id, 'hidden')
-                    print(f"✅ Hid comment {comment_id} (reason: {reason or 'already flagged'})")
-                else:
-                    print(f"❌ Failed to hide comment {comment_id}")
-            except Exception as e:
-                print(f"❌ Error hiding comment {comment_id}: {e}")
-
-        _run_async(async_action)
+        prev_status = comment['status'] if comment else 'shown'
+        if comment and comment['filter_reason'] == 'clean' and reason:
+            extensions.db.log_ai_feedback(comment_id, 'missed', reason)
+        # Optimistic: set hidden now; worker reverts on permanent failure
+        extensions.db.update_comment_status(comment_id, 'hidden')
+        _enqueue_fb_action('hide', comment_id, prev_status)
+        print(f"[comment] queued hide for {comment_id[:30]}... reason={reason}")
         return _PROCESSING_RESPONSE, 200
 
     # ---- Batch operations ----
@@ -746,21 +616,3 @@ def register(app):
             return '<div class="alert alert-success">✓ דוגמה נמחקה</div>', 200
         return '<div class="alert alert-danger">✗ שגיאה</div>', 404
 
-    # ---- Dead-letter queue ----
-
-    @app.route('/comment/<comment_id>/retry-failed', methods=['POST'])
-    def retry_failed_comment(comment_id):
-        """Move a failed comment back to the retry queue."""
-        success = extensions.db.requeue_failed_comment(comment_id)
-        if request.headers.get('HX-Request'):
-            return '', 200
-        flash('✅ התגובה הוחזרה לתור הניסיון' if success else '❌ תגובה לא נמצאה', 'success' if success else 'error')
-        return redirect(url_for('comments_page'))
-
-    @app.route('/comment/<comment_id>/dismiss-failed', methods=['POST'])
-    def dismiss_failed_comment(comment_id):
-        """Permanently remove a comment from the dead-letter queue."""
-        extensions.db.dismiss_failed_comment(comment_id)
-        if request.headers.get('HX-Request'):
-            return '', 200
-        return redirect(url_for('comments_page'))

@@ -89,6 +89,13 @@ class Database:
         except sqlite3.OperationalError:
             pass  # Column already exists
 
+        # Add mentions_page column if it doesn't exist
+        try:
+            cursor.execute('ALTER TABLE hidden_comments ADD COLUMN mentions_page INTEGER DEFAULT 0')
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
         # Auto-comment columns (for time-based comment posting after publish)
         for col_def in [
             'ALTER TABLE entries ADD COLUMN should_comment INTEGER DEFAULT 0',
@@ -99,6 +106,35 @@ class Database:
                 conn.commit()
             except sqlite3.OperationalError:
                 pass  # Column already exists
+
+        # Reconciler actual-state columns — only the reconciler writes these
+        for col_def in [
+            'ALTER TABLE entries ADD COLUMN fb_scheduled_time TEXT',
+            'ALTER TABLE entries ADD COLUMN fb_post_number INTEGER',
+            'ALTER TABLE entries ADD COLUMN fb_text_hash TEXT',
+            'ALTER TABLE entries ADD COLUMN fb_published_at TEXT',
+        ]:
+            try:
+                cursor.execute(col_def)
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+
+        # Persistent journal for the comment action queue
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS action_queue_journal (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                queue_name TEXT NOT NULL,
+                action TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                status TEXT DEFAULT 'pending',
+                retry_count INTEGER DEFAULT 0,
+                error TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_aqj_queue_status ON action_queue_journal(queue_name, status)')
 
         # Create indexes for hidden_comments
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_comments_status ON hidden_comments(status)')
@@ -252,8 +288,9 @@ class Database:
         
         return [dict(row) for row in rows]
     
-    def approve_entry(self, entry_id: int, edited_text: str, approved_by: str) -> bool:
-        """Mark entry as approved and assign post number.
+    def approve_entry(self, entry_id: int, edited_text: str, approved_by: str,
+                      scheduled_time: str = None) -> bool:
+        """Mark entry as scheduled, assign post number and optional time slot.
         Returns False if entry was already approved/denied (guards against double-submit)."""
         conn = self.get_connection()
         cursor = conn.cursor()
@@ -262,18 +299,35 @@ class Database:
 
         cursor.execute('''
             UPDATE entries
-            SET status = 'approved',
+            SET status = 'scheduled',
                 text = ?,
                 post_number = ?,
                 approved_by = ?,
-                approved_at = ?
+                approved_at = ?,
+                scheduled_time = ?
             WHERE id = ? AND status = 'pending'
-        ''', (edited_text, post_number, approved_by, datetime.now().isoformat(), entry_id))
+        ''', (edited_text, post_number, approved_by, datetime.now().isoformat(),
+              scheduled_time, entry_id))
 
         affected = cursor.rowcount
         conn.commit()
         conn.close()
         return affected > 0
+
+    def get_desired_slots(self) -> List[str]:
+        """Return all desired scheduled_time values for non-published scheduled entries.
+        Used by the approve route for local slot-picking (avoids querying Facebook)."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT scheduled_time FROM entries
+            WHERE status = 'scheduled'
+              AND scheduled_time IS NOT NULL
+              AND (fb_published_at IS NULL OR fb_published_at = '')
+        ''')
+        rows = cursor.fetchall()
+        conn.close()
+        return [row['scheduled_time'] for row in rows]
     
     def set_should_comment(self, entry_id: int, bitmask: int):
         """Set comment bitmask for a post.
@@ -344,67 +398,128 @@ class Database:
 
     def schedule_to_facebook(self, entry_id: int, facebook_post_id: str, scheduled_time: str):
         """
-        Mark entry as scheduled with Facebook post ID
-        
-        Args:
-            entry_id: Local entry ID
-            facebook_post_id: Facebook's post ID
-            scheduled_time: ISO format scheduled time
+        Mark entry as scheduled with Facebook post ID.
+        Also mirrors scheduled_time into fb_scheduled_time so the reconciler
+        doesn't see spurious time-drift for posts scheduled by legacy paths
+        (reschedule_all_to_new_windows, reschedule_canonical, reschedule_today).
         """
         conn = self.get_connection()
         cursor = conn.cursor()
-        
+
         cursor.execute('''
             UPDATE entries
             SET status = 'scheduled',
                 facebook_post_id = ?,
-                scheduled_time = ?
+                scheduled_time = ?,
+                fb_scheduled_time = ?
             WHERE id = ?
-        ''', (facebook_post_id, scheduled_time, entry_id))
-        
+        ''', (facebook_post_id, scheduled_time, scheduled_time, entry_id))
+
         conn.commit()
         conn.close()
     
-    def unschedule_entry(self, entry_id: int):
-        """
-        Return a scheduled entry back to pending and renumber all following posts
-        
-        Args:
-            entry_id: Entry ID to unschedule
-        """
+    def unschedule_entry(self, entry_id: int) -> dict:
+        """Return a scheduled entry to pending.
+        Slides time-slots for all following posts (each takes the freed slot above it),
+        decrements their post_numbers, and signals the reconciler via caller.
+        Does NOT clear fb_* columns — the reconciler owns those.
+        Returns {'freed_number': int, 'freed_time': str} or {} if entry not found/already pending."""
         conn = self.get_connection()
         cursor = conn.cursor()
-        
-        # Get the post number of the entry being unscheduled
-        cursor.execute('SELECT post_number FROM entries WHERE id = ?', (entry_id,))
-        result = cursor.fetchone()
-        
-        if result:
-            unscheduled_number = result['post_number']
-            
-            # Set entry back to pending
+        try:
+            cursor.execute(
+                'SELECT post_number, scheduled_time, status, fb_published_at FROM entries WHERE id = ?',
+                (entry_id,)
+            )
+            row = cursor.fetchone()
+            if not row or row['status'] != 'scheduled':
+                return {}
+            if row['fb_published_at']:
+                return {'error': 'published'}
+
+            freed_number = row['post_number']
+            freed_time   = row['scheduled_time']
+
+            # Desired-state: mark as pending, clear number + time (fb_* columns stay — reconciler clears them)
             cursor.execute('''
-                UPDATE entries
-                SET status = 'pending',
-                    facebook_post_id = NULL,
-                    scheduled_time = NULL,
-                    post_number = NULL
-                WHERE id = ?
+                UPDATE entries SET status='pending', post_number=NULL, scheduled_time=NULL
+                WHERE id=?
             ''', (entry_id,))
-            
-            # Decrement post numbers for all posts after this one
-            if unscheduled_number:
+
+            if freed_number:
+                # Slide following posts: each gets the slot of the post before it
                 cursor.execute('''
-                    UPDATE entries
-                    SET post_number = post_number - 1
-                    WHERE post_number > ? AND post_number IS NOT NULL
-                ''', (unscheduled_number,))
-                
-                # Decrement the counter
-                cursor.execute('UPDATE post_numbers SET current_number = current_number - 1 WHERE id = 1')
-        
-        conn.commit()
-        conn.close()
+                    SELECT id, post_number, scheduled_time FROM entries
+                    WHERE post_number > ? AND status='scheduled' AND (fb_published_at IS NULL OR fb_published_at='')
+                    ORDER BY post_number ASC
+                ''', (freed_number,))
+                following = cursor.fetchall()
+
+                prev_time = freed_time
+                for f in following:
+                    cursor.execute('''
+                        UPDATE entries SET post_number=post_number-1, scheduled_time=?
+                        WHERE id=?
+                    ''', (prev_time, f['id']))
+                    prev_time = f['scheduled_time']
+
+                cursor.execute('UPDATE post_numbers SET current_number=current_number-1 WHERE id=1')
+
+            conn.commit()
+            return {'freed_number': freed_number, 'freed_time': freed_time}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def deny_scheduled_entry(self, entry_id: int) -> dict:
+        """Deny a scheduled post — same cascade as unschedule but status='denied'.
+        For pending posts use deny_entry() instead.
+        Returns {'freed_number': int} or {'error': reason}."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                'SELECT post_number, scheduled_time, status, fb_published_at FROM entries WHERE id=?',
+                (entry_id,)
+            )
+            row = cursor.fetchone()
+            if not row:
+                return {'error': 'not_found'}
+            if row['status'] == 'published' or row['fb_published_at']:
+                return {'error': 'published'}
+            if row['status'] != 'scheduled':
+                return {'error': f"wrong_status:{row['status']}"}
+
+            freed_number = row['post_number']
+            freed_time   = row['scheduled_time']
+
+            cursor.execute("UPDATE entries SET status='denied' WHERE id=?", (entry_id,))
+
+            if freed_number:
+                cursor.execute('''
+                    SELECT id, post_number, scheduled_time FROM entries
+                    WHERE post_number > ? AND status='scheduled' AND (fb_published_at IS NULL OR fb_published_at='')
+                    ORDER BY post_number ASC
+                ''', (freed_number,))
+                following = cursor.fetchall()
+                prev_time = freed_time
+                for f in following:
+                    cursor.execute('''
+                        UPDATE entries SET post_number=post_number-1, scheduled_time=?
+                        WHERE id=?
+                    ''', (prev_time, f['id']))
+                    prev_time = f['scheduled_time']
+                cursor.execute('UPDATE post_numbers SET current_number=current_number-1 WHERE id=1')
+
+            conn.commit()
+            return {'freed_number': freed_number}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
     
     def get_posts_needing_renumber(self, from_number: int) -> List[Dict]:
         """Get all scheduled posts with post_number >= from_number that need updating on Facebook"""
@@ -823,10 +938,10 @@ class Database:
             print(f"   [DB] Adding new comment {comment_id[:30]}... (status={initial_status})")
             
             cursor.execute('''
-                INSERT INTO hidden_comments 
-                (comment_id, post_id, post_number, post_text, comment_text, 
-                 author_name, author_id, created_at, filter_reason, ai_explanation, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO hidden_comments
+                (comment_id, post_id, post_number, post_text, comment_text,
+                 author_name, author_id, created_at, filter_reason, ai_explanation, status, mentions_page)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 comment_data['comment_id'],
                 comment_data['post_id'],
@@ -838,7 +953,8 @@ class Database:
                 comment_data['created_at'],
                 filter_reason,
                 comment_data.get('ai_explanation', ''),
-                initial_status
+                initial_status,
+                comment_data.get('mentions_page', 0),
             ))
             
             # Update last_comment_at for sliding window (same transaction)
@@ -880,19 +996,19 @@ class Database:
         if filter_status and filter_status != 'all':
             print(f"   [DB] Filtering by status: {filter_status}")
             cursor.execute('''
-                SELECT * FROM hidden_comments 
-                WHERE created_at >= ? 
+                SELECT * FROM hidden_comments
+                WHERE created_at >= ?
                   AND status = ?
                   AND dismissed_at IS NULL
-                ORDER BY created_at DESC
+                ORDER BY mentions_page DESC, created_at DESC
             ''', (cutoff, filter_status))
         else:
             print(f"   [DB] Getting all comments (no status filter, excluding dismissed)")
             cursor.execute('''
-                SELECT * FROM hidden_comments 
+                SELECT * FROM hidden_comments
                 WHERE created_at >= ?
                   AND dismissed_at IS NULL
-                ORDER BY created_at DESC
+                ORDER BY mentions_page DESC, created_at DESC
             ''', (cutoff,))
         
         rows = cursor.fetchall()
@@ -1291,6 +1407,20 @@ class Database:
         
         return success
     
+    def undismiss_comment(self, comment_id: str) -> bool:
+        """Clear dismissed_at so the comment reappears in the admin UI."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            UPDATE hidden_comments
+            SET dismissed_at = NULL, last_action_at = ?
+            WHERE comment_id = ?
+        ''', (datetime.now().isoformat(), comment_id))
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return success
+
     def cleanup_old_post_tracking(self, days: int = 30) -> int:
         """Remove post_tracking entries older than N days with no recent comment activity."""
         conn = self.get_connection()
@@ -1661,4 +1791,289 @@ class Database:
         count = cursor.fetchone()['count']
         conn.close()
         return count
+
+    # ==================== RECONCILER METHODS ====================
+
+    def get_entries_needing_fb_delete(self) -> List[Dict]:
+        """Posts that were denied/returned-to-pending but still have a FB post_id.
+        Reconciler deletes them from FB then calls confirm_fb_deleted()."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT id, facebook_post_id, post_number, status
+            FROM entries
+            WHERE status IN ('denied', 'pending')
+              AND facebook_post_id IS NOT NULL
+              AND (fb_published_at IS NULL OR fb_published_at = '')
+        ''')
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def get_entries_needing_schedule(self) -> List[Dict]:
+        """Scheduled posts that have no FB post_id yet — reconciler creates them on FB."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT id, text, post_number, scheduled_time
+            FROM entries
+            WHERE status = 'scheduled'
+              AND facebook_post_id IS NULL
+              AND scheduled_time IS NOT NULL
+            ORDER BY post_number ASC
+        ''')
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def get_entries_needing_sync(self) -> List[Dict]:
+        """Scheduled posts already on FB — reconciler checks desired vs actual state.
+        Returns all columns so reconciler can compare fb_* against desired state."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT id, text, post_number, scheduled_time, facebook_post_id,
+                   fb_scheduled_time, fb_post_number, fb_text_hash
+            FROM entries
+            WHERE status = 'scheduled'
+              AND facebook_post_id IS NOT NULL
+              AND (fb_published_at IS NULL OR fb_published_at = '')
+            ORDER BY post_number ASC
+        ''')
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def mark_published_if_past(self, cutoff_iso: str) -> int:
+        """Mark scheduled+linked posts whose scheduled_time < cutoff as published.
+        Returns count of rows updated."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        now_iso = datetime.now().isoformat()
+        cursor.execute('''
+            UPDATE entries
+            SET status = 'published',
+                fb_published_at = ?
+            WHERE status = 'scheduled'
+              AND facebook_post_id IS NOT NULL
+              AND scheduled_time IS NOT NULL
+              AND scheduled_time < ?
+        ''', (now_iso, cutoff_iso))
+        count = cursor.rowcount
+        conn.commit()
+        conn.close()
+        return count
+
+    def confirm_scheduled(self, entry_id: int, fb_id: str, slot_iso: str,
+                          post_number: int, text_hash: str):
+        """Reconciler writes actual-state columns after successfully creating a FB post."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            UPDATE entries
+            SET facebook_post_id = ?,
+                fb_scheduled_time = ?,
+                fb_post_number = ?,
+                fb_text_hash = ?
+            WHERE id = ?
+        ''', (fb_id, slot_iso, post_number, text_hash, entry_id))
+        conn.commit()
+        conn.close()
+
+    def confirm_synced(self, entry_id: int, new_fb_id: str, new_time_iso: str,
+                       post_number: int, text_hash: str):
+        """Reconciler writes actual-state after rescheduling / text-update on FB.
+        facebook_post_id changes because FB delete+recreate gives a new id."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            UPDATE entries
+            SET facebook_post_id = ?,
+                fb_scheduled_time = ?,
+                fb_post_number = ?,
+                fb_text_hash = ?
+            WHERE id = ?
+        ''', (new_fb_id, new_time_iso, post_number, text_hash, entry_id))
+        conn.commit()
+        conn.close()
+
+    def confirm_fb_deleted(self, entry_id: int):
+        """Reconciler clears facebook_post_id and all fb_* after deleting post from FB."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            UPDATE entries
+            SET facebook_post_id = NULL,
+                fb_scheduled_time = NULL,
+                fb_post_number    = NULL,
+                fb_text_hash      = NULL
+            WHERE id = ?
+        ''', (entry_id,))
+        conn.commit()
+        conn.close()
+
+    def get_taken_fb_slots(self) -> List[str]:
+        """Return all fb_scheduled_time values for in-flight scheduled posts.
+        Reconciler uses this to avoid double-booking a slot when assigning new posts."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT fb_scheduled_time FROM entries
+            WHERE status = 'scheduled'
+              AND fb_scheduled_time IS NOT NULL
+              AND (fb_published_at IS NULL OR fb_published_at = '')
+        ''')
+        rows = cursor.fetchall()
+        conn.close()
+        return [row['fb_scheduled_time'] for row in rows]
+
+    def get_entry_by_facebook_post_id(self, fb_post_id: str) -> Optional[Dict]:
+        """Look up an entry by its Facebook post ID (for webhook-driven deletion detection)."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM entries WHERE facebook_post_id = ?', (fb_post_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+    def return_post_to_pending_from_reconciler(self, fb_post_id: str) -> Optional[int]:
+        """FB webhook told us a scheduled post was deleted externally.
+        Returns entry to pending, slides following posts up, decrements post counter.
+        Returns freed post_number or None if post was not found / already published."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                'SELECT id, post_number, scheduled_time, status, fb_published_at '
+                'FROM entries WHERE facebook_post_id = ?',
+                (fb_post_id,)
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            if row['status'] != 'scheduled' or row['fb_published_at']:
+                return None
+
+            entry_id     = row['id']
+            freed_number = row['post_number']
+            freed_time   = row['scheduled_time']
+
+            # Clear both desired-state and actual-state — post is gone from FB
+            cursor.execute('''
+                UPDATE entries
+                SET status='pending', post_number=NULL, scheduled_time=NULL,
+                    facebook_post_id=NULL, fb_scheduled_time=NULL,
+                    fb_post_number=NULL, fb_text_hash=NULL, fb_published_at=NULL
+                WHERE id=?
+            ''', (entry_id,))
+
+            if freed_number:
+                cursor.execute('''
+                    SELECT id, post_number, scheduled_time FROM entries
+                    WHERE post_number > ?
+                      AND status='scheduled'
+                      AND (fb_published_at IS NULL OR fb_published_at='')
+                    ORDER BY post_number ASC
+                ''', (freed_number,))
+                following = cursor.fetchall()
+                prev_time = freed_time
+                for f in following:
+                    cursor.execute(
+                        'UPDATE entries SET post_number=post_number-1, scheduled_time=? WHERE id=?',
+                        (prev_time, f['id'])
+                    )
+                    prev_time = f['scheduled_time']
+                cursor.execute('UPDATE post_numbers SET current_number=current_number-1 WHERE id=1')
+
+            conn.commit()
+            return freed_number
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def bulk_update_post_orders(self, updates: List[Dict]) -> bool:
+        """Bulk-write post_number + scheduled_time for reorder_posts route.
+        Each dict: {'id': int, 'post_number': int, 'scheduled_time': str}."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        try:
+            for u in updates:
+                cursor.execute(
+                    'UPDATE entries SET post_number=?, scheduled_time=? WHERE id=?',
+                    (u['post_number'], u['scheduled_time'], u['id'])
+                )
+            conn.commit()
+            return True
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    # ==================== ACTION QUEUE JOURNAL METHODS ====================
+
+    def journal_enqueue(self, queue_name: str, action: str, payload_json: str) -> int:
+        """Persist a new job in the action queue journal. Returns the journal row id."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO action_queue_journal (queue_name, action, payload, status)
+            VALUES (?, ?, ?, 'pending')
+        ''', (queue_name, action, payload_json))
+        row_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return row_id
+
+    def journal_mark_done(self, journal_id: int):
+        """Mark a journal job as successfully completed."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE action_queue_journal SET status='done', updated_at=? WHERE id=?",
+            (datetime.now().isoformat(), journal_id)
+        )
+        conn.commit()
+        conn.close()
+
+    def journal_mark_failed(self, journal_id: int, error: str, retry_count: int):
+        """Mark a journal job as permanently failed."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            UPDATE action_queue_journal
+            SET status='failed', error=?, retry_count=?, updated_at=?
+            WHERE id=?
+        ''', (error, retry_count, datetime.now().isoformat(), journal_id))
+        conn.commit()
+        conn.close()
+
+    def journal_increment_retry(self, journal_id: int) -> int:
+        """Increment retry_count and return the new value."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            'UPDATE action_queue_journal SET retry_count=retry_count+1, updated_at=? WHERE id=?',
+            (datetime.now().isoformat(), journal_id)
+        )
+        cursor.execute('SELECT retry_count FROM action_queue_journal WHERE id=?', (journal_id,))
+        row = cursor.fetchone()
+        conn.commit()
+        conn.close()
+        return row['retry_count'] if row else 0
+
+    def journal_get_pending(self, queue_name: str) -> List[Dict]:
+        """Return all pending/processing jobs for a queue (used on startup to reload)."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT * FROM action_queue_journal
+            WHERE queue_name=? AND status IN ('pending', 'processing')
+            ORDER BY id ASC
+        ''', (queue_name,))
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
 

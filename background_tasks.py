@@ -80,7 +80,10 @@ def midnight_sync_job():
                     print("📅 Windows changed — redistributing scheduled posts...")
                     try:
                         moved = extensions.scheduler.reschedule_all_to_new_windows()
-                        print(f"✅ Midnight reschedule: {moved} post(s) moved to new windows")
+                        print(f"✅ Midnight reschedule: {moved} desired slot(s) updated — reconciler will push to FB")
+                        if moved:
+                            from reconciler import signal_reconciler
+                            signal_reconciler()
                     except Exception as e:
                         print(f"❌ Midnight reschedule error: {e}")
                 else:
@@ -638,6 +641,14 @@ def _watchdog():
 def start_scheduler():
     """Set up scheduled jobs and start the scheduler + watchdog threads."""
     global _scheduler_thread
+    import logging
+
+    # Wire up Python logging so reconciler / queue_workers messages appear in journald
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s %(levelname)s %(name)s: %(message)s',
+        datefmt='%H:%M:%S',
+    )
 
     israel_tz = pytz.timezone('Asia/Jerusalem')
     now_utc = datetime.now(pytz.utc)
@@ -658,6 +669,18 @@ def start_scheduler():
 
     schedule.every(6).hours.do(check_and_send_notifications)
     schedule.every(1).minutes.do(auto_comment_job)
+
+    # ── Reconciler thread ────────────────────────────────────────────────────
+    from reconciler import reconciler_loop
+    threading.Thread(target=reconciler_loop, daemon=True, name="reconciler").start()
+    print("✅ Reconciler thread started")
+
+    # ── Comment action worker thread ─────────────────────────────────────────
+    # Reload any jobs that were pending before last restart
+    extensions.comment_queue.reload_pending()
+    from queue_workers import comment_worker_loop
+    threading.Thread(target=comment_worker_loop, daemon=True, name="comment-worker").start()
+    print("✅ Comment worker thread started")
 
     # Startup comment scan
     def startup_comment_scan():
@@ -693,7 +716,8 @@ def start_scheduler():
     print(f"   - Auto-comment job every 1 minute")
     print(f"   - Notifications check every 6 hours")
     print(f"   - Old comments cleanup at {cleanup_local:02d}:00 server time (02:00 Israel)")
-    print(f"   - Webhook batch processor running (queue-based)")
+    print(f"   - Reconciler loop running (30s safety net + on-demand wake)")
+    print(f"   - Comment worker loop running (serial FB API calls)")
     print(f"   - Startup comment scan triggered")
     print(f"   - Scheduler thread running with watchdog")
     print("=" * 80)
