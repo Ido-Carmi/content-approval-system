@@ -1869,6 +1869,11 @@ class Database:
         """Reconciler writes actual-state columns after successfully creating a FB post."""
         conn = self.get_connection()
         cursor = conn.cursor()
+        # Clear any stale duplicate fb_id from other entries before writing.
+        cursor.execute(
+            'UPDATE entries SET facebook_post_id = NULL WHERE facebook_post_id = ? AND id != ?',
+            (fb_id, entry_id)
+        )
         cursor.execute('''
             UPDATE entries
             SET facebook_post_id = ?,
@@ -1886,6 +1891,11 @@ class Database:
         facebook_post_id changes because FB delete+recreate gives a new id."""
         conn = self.get_connection()
         cursor = conn.cursor()
+        # Clear any stale duplicate fb_id from other entries before writing.
+        cursor.execute(
+            'UPDATE entries SET facebook_post_id = NULL WHERE facebook_post_id = ? AND id != ?',
+            (new_fb_id, entry_id)
+        )
         cursor.execute('''
             UPDATE entries
             SET facebook_post_id = ?,
@@ -1943,6 +1953,16 @@ class Database:
         conn = self.get_connection()
         cursor = conn.cursor()
         try:
+            # If any pending entry still holds this fb_id, the deletion was reconciler-initiated
+            # (e.g. unschedule_all set the entry to pending, then step1 deleted from FB).
+            # Don't cascade in that case — the entry is already handled.
+            cursor.execute(
+                "SELECT COUNT(*) as cnt FROM entries WHERE facebook_post_id = ? AND status = 'pending'",
+                (fb_post_id,)
+            )
+            if cursor.fetchone()['cnt'] > 0:
+                return None
+
             cursor.execute(
                 'SELECT id, post_number, scheduled_time, status, fb_published_at '
                 'FROM entries WHERE facebook_post_id = ?',

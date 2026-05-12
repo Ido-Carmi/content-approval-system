@@ -127,9 +127,9 @@ def _handle_job(job):
 
 def _action_hide(payload):
     import extensions
-    fh = extensions.facebook_handler
+    fh = extensions.facebook_comments_handler
     if not fh:
-        raise RuntimeError("facebook_handler not initialised")
+        raise RuntimeError("facebook_comments_handler not initialised")
     comment_id = payload['comment_id']
     log.debug("[comment-worker] hiding comment %s on FB", comment_id[:30])
     fh.hide_comment(comment_id)
@@ -137,9 +137,9 @@ def _action_hide(payload):
 
 def _action_unhide(payload):
     import extensions
-    fh = extensions.facebook_handler
+    fh = extensions.facebook_comments_handler
     if not fh:
-        raise RuntimeError("facebook_handler not initialised")
+        raise RuntimeError("facebook_comments_handler not initialised")
     comment_id = payload['comment_id']
     log.debug("[comment-worker] unhiding comment %s on FB", comment_id[:30])
     fh.unhide_comment(comment_id)
@@ -147,9 +147,9 @@ def _action_unhide(payload):
 
 def _action_delete(payload):
     import extensions
-    fh = extensions.facebook_handler
+    fh = extensions.facebook_comments_handler
     if not fh:
-        raise RuntimeError("facebook_handler not initialised")
+        raise RuntimeError("facebook_comments_handler not initialised")
     comment_id = payload['comment_id']
     log.debug("[comment-worker] deleting comment %s on FB", comment_id[:30])
     fh.delete_comment(comment_id)

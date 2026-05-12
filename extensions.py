@@ -11,6 +11,7 @@ from job_queue import JobQueue
 db = Database()
 scheduler = None
 facebook_handler = None
+facebook_comments_handler = None
 sheets_handler = None
 notifications = NotificationHandler()
 
@@ -28,10 +29,11 @@ first_queued_time = None
 
 def init_handlers():
     """(Re-)initialise Facebook, Scheduler, and Sheets handlers from config."""
-    global scheduler, facebook_handler, sheets_handler
+    global scheduler, facebook_handler, facebook_comments_handler, sheets_handler
 
     from config import load_config
     from facebook_handler import FacebookHandler
+    from facebook_comments_handler import FacebookCommentsHandler
     from sheets_handler import SheetsHandler
     from scheduler import Scheduler
 
@@ -42,6 +44,10 @@ def init_handlers():
             facebook_handler = FacebookHandler(
                 config['facebook_page_id'],
                 config['facebook_access_token']
+            )
+            facebook_comments_handler = FacebookCommentsHandler(
+                access_token=config['facebook_access_token'],
+                page_id=config['facebook_page_id']
             )
             scheduler = Scheduler(db, facebook_handler)
         except Exception as e:
