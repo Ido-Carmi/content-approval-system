@@ -196,9 +196,14 @@ def _step_schedule(db, fb, entry, taken_slots: set) -> Optional[str]:
     log.info("[reconciler] step2 scheduling entry %d (#%d) at %s",
              eid, entry['post_number'], slot)
 
+    slot_dt = _parse_slot(slot)
+    if slot_dt is None:
+        log.error("[reconciler] step2 entry %d has unparseable scheduled_time %r — skipping", eid, slot)
+        return None
+
     for attempt in range(MAX_FB_RETRIES):
         try:
-            result = fb.schedule_post(text, slot)
+            result = fb.schedule_post(text, slot_dt)
             fb_id      = result['id']
             fb_slot    = result.get('scheduled_time', slot)
             post_num   = entry['post_number']
@@ -245,7 +250,7 @@ def _step_sync(db, fb, entry):
             result = fb.update_scheduled_post(
                 fb_id,
                 new_text=desired_text if (text_drift or num_drift) else None,
-                new_time=desired_slot if time_drift else None,
+                new_time=_parse_slot(desired_slot) if time_drift else None,
             )
             new_fb_id   = result['id']
             new_fb_slot = result.get('scheduled_time', desired_slot)
