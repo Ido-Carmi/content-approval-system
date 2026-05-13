@@ -138,6 +138,7 @@ def _step_delete(db, fb, entry):
                             fb_id, eid)
                 db.confirm_fb_deleted(eid)
                 return
+            _maybe_alert_token(exc)
             log.warning("[reconciler] step1 attempt %d failed for entry %d: %s",
                         attempt + 1, eid, exc)
             if attempt < MAX_FB_RETRIES - 1:
@@ -213,6 +214,7 @@ def _step_schedule(db, fb, entry, taken_slots: set) -> Optional[str]:
                      eid, fb_id, fb_slot)
             return fb_slot
         except Exception as exc:
+            _maybe_alert_token(exc)
             log.warning("[reconciler] step2 attempt %d failed for entry %d: %s",
                         attempt + 1, eid, exc)
             if attempt < MAX_FB_RETRIES - 1:
@@ -269,6 +271,7 @@ def _step_sync(db, fb, entry):
                 log.info("[reconciler] step3 entry %d returned to pending, freed slot #%s",
                          eid, freed_num)
                 return
+            _maybe_alert_token(exc)
             log.warning("[reconciler] step3 attempt %d failed for entry %d: %s",
                         attempt + 1, eid, exc)
             if attempt < MAX_FB_RETRIES - 1:
@@ -316,6 +319,22 @@ def _is_404(exc: Exception) -> bool:
     """Return True if the exception represents a Facebook 'not found' error."""
     msg = str(exc).lower()
     return '404' in msg or 'not found' in msg or 'does not exist' in msg
+
+
+def _maybe_alert_token(exc: Exception):
+    """Fire a token-invalid email alert if exc looks like a 190 OAuthException."""
+    err = str(exc)
+    if '"code":190' not in err and 'OAuthException' not in err and 'Cannot parse access token' not in err:
+        return
+    try:
+        from background_tasks import _send_token_alert, _notification_on_cooldown
+        from config import load_config
+        config = load_config()
+        if not _notification_on_cooldown(config, 'token_alert'):
+            log.warning("[reconciler] token invalid — sending alert")
+            _send_token_alert(config, expired=True)
+    except Exception as alert_exc:
+        log.error("[reconciler] failed to send token alert: %s", alert_exc)
 
 
 def _pick_next_free_slot(taken_slots: set) -> Optional[str]:

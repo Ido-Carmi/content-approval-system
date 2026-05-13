@@ -22,6 +22,22 @@ import queue as queue_mod
 log = logging.getLogger(__name__)
 
 MAX_RETRIES = 3
+
+
+def _maybe_alert_token(exc: Exception):
+    """Fire a token-invalid email alert if exc looks like a 190 OAuthException."""
+    err = str(exc)
+    if '"code":190' not in err and 'OAuthException' not in err and 'Cannot parse access token' not in err:
+        return
+    try:
+        from background_tasks import _send_token_alert, _notification_on_cooldown
+        from config import load_config
+        config = load_config()
+        if not _notification_on_cooldown(config, 'token_alert'):
+            log.warning("[comment-worker] token invalid — sending alert")
+            _send_token_alert(config, expired=True)
+    except Exception as alert_exc:
+        log.error("[comment-worker] failed to send token alert: %s", alert_exc)
 BACKOFF = [5, 15, 45]   # seconds between retries
 
 
@@ -89,6 +105,7 @@ def _handle_job(job):
             log.info("[comment-worker] job %d done (attempt %d)", job.journal_id, attempt + 1)
             return
         except Exception as exc:
+            _maybe_alert_token(exc)
             log.warning("[comment-worker] job %d attempt %d failed: %s",
                         job.journal_id, attempt + 1, exc)
             if attempt < MAX_RETRIES - 1:

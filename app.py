@@ -959,6 +959,8 @@ def settings_page():
 
         for key, value in secret_fields.items():
             if value.strip():
+                if key == 'facebook_access_token' and value.strip() != config.get('facebook_access_token', ''):
+                    config['facebook_token_saved_at'] = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
                 config[key] = value.strip()
 
         tiers_text = request.form.get('dynamic_tiers', '')

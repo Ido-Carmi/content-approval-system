@@ -8,7 +8,7 @@ import threading
 import time
 import traceback
 import pytz
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from config import load_config, save_config
 import extensions
@@ -203,8 +203,31 @@ def check_facebook_token_health():
             url = f"https://graph.facebook.com/v18.0/me?access_token={urllib.parse.quote(token)}"
             try:
                 with urllib.request.urlopen(urllib.request.Request(url), timeout=10) as resp:
-                    resp.read()
-                print("✅ Facebook token valid (add App Secret in settings for expiry check)")
+                    body = json.loads(resp.read())
+                if 'error' in body:
+                    msg = body['error'].get('message', '')
+                    print(f"🚨 Facebook token invalid! {msg}")
+                    _send_token_alert(config, expired=True)
+                else:
+                    # Check estimated expiry from save date (FB long-lived tokens last ~60 days)
+                    saved_at = config.get('facebook_token_saved_at')
+                    if saved_at:
+                        try:
+                            saved_dt  = datetime.strptime(saved_at, '%Y-%m-%dT%H:%M:%SZ')
+                            expires_dt = saved_dt + timedelta(days=60)
+                            days_left  = (expires_dt - datetime.now()).days
+                            if days_left <= 0:
+                                print(f"🚨 Facebook token likely expired (saved {saved_at}, ~60-day limit)")
+                                _send_token_alert(config, expired=True)
+                            elif days_left <= 7:
+                                print(f"⚠️  Facebook token expires in ~{days_left} day(s) (estimated from save date)")
+                                _send_token_alert(config, expired=False, days_left=days_left, expires_dt=expires_dt)
+                            else:
+                                print(f"✅ Facebook token valid — estimated expiry {expires_dt.strftime('%Y-%m-%d')} (~{days_left} days)")
+                        except ValueError:
+                            print("✅ Facebook token valid (add App Secret in settings for exact expiry)")
+                    else:
+                        print("✅ Facebook token valid (save token in settings to track expiry)")
             except urllib.error.HTTPError as e:
                 if e.code in (400, 401, 403):
                     print(f"🚨 Facebook token invalid! HTTP {e.code}")
@@ -568,7 +591,12 @@ def auto_comment_job():
 
                     print(f"   ✓ #{entry.get('post_number')} slot {slot} posted (text {idx + 1}/{len(group)})")
                 except Exception as e:
-                    print(f"   ✗ #{entry.get('post_number')} slot {slot} failed: {e}")
+                    err_str = str(e)
+                    print(f"   ✗ #{entry.get('post_number')} slot {slot} failed: {err_str}")
+                    if '"code":190' in err_str or 'OAuthException' in err_str or 'Cannot parse access token' in err_str:
+                        if not _notification_on_cooldown(config, 'token_alert'):
+                            print("🚨 Token invalid — sending alert")
+                            _send_token_alert(config, expired=True)
 
         if config_dirty:
             save_config(config)
