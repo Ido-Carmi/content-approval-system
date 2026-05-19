@@ -106,6 +106,14 @@ def _handle_job(job):
             return
         except Exception as exc:
             _maybe_alert_token(exc)
+            err_str = str(exc)
+            # 403/404 means the comment or post no longer exists — give up immediately,
+            # no point retrying or reverting status in DB.
+            if '403' in err_str or '404' in err_str or 'does not exist' in err_str:
+                log.warning("[comment-worker] job %d: comment/post gone (%s) — dropping",
+                            job.journal_id, err_str[:80])
+                job.failed(err_str)
+                return
             log.warning("[comment-worker] job %d attempt %d failed: %s",
                         job.journal_id, attempt + 1, exc)
             if attempt < MAX_RETRIES - 1:

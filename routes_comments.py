@@ -376,13 +376,16 @@ def register(app):
                         if post_id:
                             print(f"   🗑️  Post {post_id} deleted on Facebook — checking if it was scheduled")
                             try:
-                                from reconciler import signal_reconciler
-                                freed = extensions.db.return_post_to_pending_from_reconciler(post_id)
-                                if freed is not None:
-                                    print(f"   ↩️  Entry returned to pending (freed #{freed}) — signalling reconciler")
-                                    signal_reconciler()
+                                from reconciler import signal_reconciler, _reconciling_fb_ids
+                                if post_id in _reconciling_fb_ids:
+                                    print(f"   ℹ️  Post {post_id} is being rescheduled by reconciler — ignoring webhook")
                                 else:
-                                    print(f"   ℹ️  Post {post_id} not found as scheduled entry — ignoring")
+                                    freed = extensions.db.return_post_to_pending_from_reconciler(post_id)
+                                    if freed is not None:
+                                        print(f"   ↩️  Entry returned to pending (freed #{freed}) — signalling reconciler")
+                                        signal_reconciler()
+                                    else:
+                                        print(f"   ℹ️  Post {post_id} not found as scheduled entry — ignoring")
                             except Exception as _e:
                                 print(f"   ❌ Error handling post deletion: {_e}")
                         continue
@@ -394,7 +397,8 @@ def register(app):
                     post_id = value.get('post_id')
                     message = value.get('message', '')
                     sender_name = value.get('sender_name', 'Unknown')
-                    sender_id = value.get('sender_id', '')
+                    sender_id = (value.get('from', {}).get('id', '')
+                                 or value.get('sender_id', ''))
                     created_time = value.get('created_time', '')
                     parent_id = value.get('parent_id', '')
 

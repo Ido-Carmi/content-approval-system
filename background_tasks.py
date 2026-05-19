@@ -597,6 +597,10 @@ def auto_comment_job():
                         if not _notification_on_cooldown(config, 'token_alert'):
                             print("🚨 Token invalid — sending alert")
                             _send_token_alert(config, expired=True)
+                    elif 'does not exist' in err_str or '"error_subcode":33' in err_str or '"code":100' in err_str:
+                        # Post was deleted/published — mark slot done so we stop retrying
+                        extensions.db.mark_comment_posted(entry['id'], slot_bit)
+                        print(f"   ⚠️  Post no longer exists — marking slot {slot} as done")
 
         if config_dirty:
             save_config(config)

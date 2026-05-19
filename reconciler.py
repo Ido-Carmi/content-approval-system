@@ -28,6 +28,10 @@ import pytz
 log = logging.getLogger(__name__)
 
 ISRAEL_TZ = pytz.timezone('Asia/Jerusalem')
+
+# fb_ids currently being delete+recreated by step3.
+# The webhook checks this to avoid cascading reconciler-initiated deletions.
+_reconciling_fb_ids: set = set()
 PUBLISH_LAG_MINUTES = 2        # posts are considered published this many minutes after scheduled_time
 SAFETY_NET_INTERVAL = 30       # seconds between safety-net polls
 MAX_FB_RETRIES = 3
@@ -247,37 +251,41 @@ def _step_sync(db, fb, entry):
     log.info("[reconciler] step3 entry %d drift: time=%s text=%s num=%s",
              eid, time_drift, text_drift, num_drift)
 
-    for attempt in range(MAX_FB_RETRIES):
-        try:
-            result = fb.update_scheduled_post(
-                fb_id,
-                new_text=desired_text if (text_drift or num_drift) else None,
-                new_time=_parse_slot(desired_slot) if time_drift else None,
-            )
-            new_fb_id   = result['id']
-            new_fb_slot = result.get('scheduled_time', desired_slot)
-            db.confirm_synced(eid, new_fb_id, new_fb_slot, desired_num, desired_hash)
-            log.info("[reconciler] step3 synced entry %d old_fb=%s new_fb=%s",
-                     eid, fb_id, new_fb_id)
-            return
-        except Exception as exc:
-            if _is_404(exc):
-                # Post was deleted from FB externally — return it to pending
-                log.warning(
-                    "[reconciler] step3 FB post %s not found (404) — "
-                    "returning entry %d to pending", fb_id, eid
+    _reconciling_fb_ids.add(fb_id)
+    try:
+        for attempt in range(MAX_FB_RETRIES):
+            try:
+                result = fb.update_scheduled_post(
+                    fb_id,
+                    new_text=desired_text if (text_drift or num_drift) else None,
+                    new_time=_parse_slot(desired_slot) if time_drift else None,
                 )
-                freed_num = db.return_post_to_pending_from_reconciler(fb_id)
-                log.info("[reconciler] step3 entry %d returned to pending, freed slot #%s",
-                         eid, freed_num)
+                new_fb_id   = result['id']
+                new_fb_slot = result.get('scheduled_time', desired_slot)
+                db.confirm_synced(eid, new_fb_id, new_fb_slot, desired_num, desired_hash)
+                log.info("[reconciler] step3 synced entry %d old_fb=%s new_fb=%s",
+                         eid, fb_id, new_fb_id)
                 return
-            _maybe_alert_token(exc)
-            log.warning("[reconciler] step3 attempt %d failed for entry %d: %s",
-                        attempt + 1, eid, exc)
-            if attempt < MAX_FB_RETRIES - 1:
-                time.sleep(FB_RETRY_BACKOFF[attempt])
+            except Exception as exc:
+                if _is_404(exc):
+                    # Post was deleted from FB externally — return it to pending
+                    log.warning(
+                        "[reconciler] step3 FB post %s not found (404) — "
+                        "returning entry %d to pending", fb_id, eid
+                    )
+                    freed_num = db.return_post_to_pending_from_reconciler(fb_id)
+                    log.info("[reconciler] step3 entry %d returned to pending, freed slot #%s",
+                             eid, freed_num)
+                    return
+                _maybe_alert_token(exc)
+                log.warning("[reconciler] step3 attempt %d failed for entry %d: %s",
+                            attempt + 1, eid, exc)
+                if attempt < MAX_FB_RETRIES - 1:
+                    time.sleep(FB_RETRY_BACKOFF[attempt])
 
-    log.error("[reconciler] step3 permanently failed for entry %d (fb_id=%s)", eid, fb_id)
+        log.error("[reconciler] step3 permanently failed for entry %d (fb_id=%s)", eid, fb_id)
+    finally:
+        _reconciling_fb_ids.discard(fb_id)
 
 
 # ---------------------------------------------------------------------------
