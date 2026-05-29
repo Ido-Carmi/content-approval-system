@@ -105,8 +105,13 @@ def _run_cycle(db):
 
     # ── Step 2: schedule new posts ───────────────────────────────────────
     # Build in-memory set of already-taken slots so we don't double-book
-    # within a single cycle (DB slots are written by confirm_scheduled).
-    taken_slots: set = set(db.get_taken_fb_slots())
+    # within a single cycle.  Seed with BOTH confirmed FB slots and desired
+    # slots of entries already queued for scheduling this cycle, so that if
+    # two entries were approved with the same desired time (approve-route race)
+    # step2 will detect and reassign the second one.
+    fb_live      = set(db.get_taken_fb_slots())
+    desired_live = set(db.get_desired_slots())
+    taken_slots: set = fb_live | desired_live
     for entry in db.get_entries_needing_schedule():
         slot = _step_schedule(db, fb, entry, taken_slots)
         if slot:

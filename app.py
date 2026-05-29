@@ -221,12 +221,17 @@ def approve_entry(entry_id):
     edited_text = request.form.get('text', '') or json_body.get('text', '')
     comment_bitmask = int(request.form.get('comment_bitmask', 0) or json_body.get('comment_bitmask', 0) or 0)
 
-    # Pick a slot using local data only (no Facebook query — fast + race-safe)
+    # Pick a slot using local data only (no Facebook query — fast + race-safe).
+    # Combine desired (scheduled_time) and actual FB (fb_scheduled_time) slots so
+    # that slots freed in desired-state but still live on FB are not double-booked
+    # (e.g. after reschedule_canonical runs before reconciler finishes syncing).
     slot_iso = None
     if extensions.scheduler:
         try:
-            taken = extensions.db.get_desired_slots()
-            slot_dt = extensions.scheduler.get_next_available_slot_local(taken)
+            desired  = set(extensions.db.get_desired_slots())
+            fb_live  = set(extensions.db.get_taken_fb_slots())
+            taken    = list(desired | fb_live)
+            slot_dt  = extensions.scheduler.get_next_available_slot_local(taken)
             slot_iso = slot_dt.isoformat()
         except Exception as e:
             print(f"Slot picking error: {e}")
@@ -362,6 +367,18 @@ def sync_now():
 @app.route('/scheduled')
 def scheduled_page():
     return render_template('scheduled.html', posts=None, had_orphans=False, loading=True)
+
+
+@app.route('/reconciler-status')
+def reconciler_status():
+    """Return whether the reconciler has any pending work (entries needing FB sync)."""
+    db = extensions.db
+    busy = bool(
+        db.get_entries_needing_fb_delete() or
+        db.get_entries_needing_schedule() or
+        db.get_entries_needing_sync()
+    )
+    return jsonify({'busy': busy})
 
 @app.route('/scheduled-content')
 def scheduled_content():

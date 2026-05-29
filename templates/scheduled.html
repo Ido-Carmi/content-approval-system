@@ -290,6 +290,20 @@
     </div>
 </div>
 
+<!-- Reconciler status indicator (outside HTMX content, persists through reloads) -->
+<div class="d-flex justify-content-center mb-2" id="reconciler-status-row">
+    <div style="width: 100%; max-width: 900px; min-width: 700px;">
+        <div id="reconciler-status-bar"
+             class="d-flex align-items-center gap-2 px-3 py-2 rounded"
+             style="font-size: 0.88rem; transition: background 0.4s; background: #d1e7dd; color: #0a3622;">
+            <span id="reconciler-dot"
+                  style="width:10px; height:10px; border-radius:50%; background:#198754;
+                         display:inline-block; flex-shrink:0; transition: background 0.4s;"></span>
+            <span id="reconciler-text">פייסבוק מסונכרן</span>
+        </div>
+    </div>
+</div>
+
 <!-- Content loaded via HTMX -->
 <div id="scheduled-content-area"
      hx-get="/scheduled-content"
@@ -330,22 +344,86 @@
     0%, 100% { transform: scale(1); }
     50% { transform: scale(1.05); }
 }
+@keyframes dotPulse {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.3; }
+}
+.dot-pulsing { animation: dotPulse 0.9s ease-in-out infinite; }
 </style>
 
-<!-- 🔴 DEBUG MARKER: If you can see this text in page source, template renders here -->
 <div style="display: none;" id="template-rendered-marker">TEMPLATE RENDERED SUCCESSFULLY</div>
 
 <script>
-// Show loading indicator
-const loadingOverlay = document.getElementById('loading-overlay');
+// ── Loading overlay ──────────────────────────────────────────────────────────
+const loadingOverlay   = document.getElementById('loading-overlay');
 const loadingIndicator = document.getElementById('loading-indicator');
-const loadingText = document.getElementById('loading-text');
-const loadingSubtext = document.getElementById('loading-subtext');
+const loadingText      = document.getElementById('loading-text');
+const loadingSubtext   = document.getElementById('loading-subtext');
+
+// ── Reconciler status polling ────────────────────────────────────────────────
+const reconcilerDot  = document.getElementById('reconciler-dot');
+const reconcilerText = document.getElementById('reconciler-text');
+const reconcilerBar  = document.getElementById('reconciler-status-bar');
+
+let _statusPollTimer = null;
+let _pendingContentReload = false;
+
+function setReconcilerStatus(busy) {
+    if (busy) {
+        reconcilerDot.style.background = '#dc3545';
+        reconcilerDot.classList.add('dot-pulsing');
+        reconcilerBar.style.background = '#f8d7da';
+        reconcilerBar.style.color      = '#58151c';
+        reconcilerText.textContent     = 'מסנכרן עם פייסבוק...';
+    } else {
+        reconcilerDot.style.background = '#198754';
+        reconcilerDot.classList.remove('dot-pulsing');
+        reconcilerBar.style.background = '#d1e7dd';
+        reconcilerBar.style.color      = '#0a3622';
+        reconcilerText.textContent     = 'פייסבוק מסונכרן';
+    }
+}
+
+function pollReconcilerStatus() {
+    fetch('/reconciler-status')
+        .then(r => r.json())
+        .then(data => {
+            setReconcilerStatus(data.busy);
+            if (!data.busy && _pendingContentReload) {
+                _pendingContentReload = false;
+                stopStatusPolling();
+                reloadContent();
+            }
+        })
+        .catch(() => {});
+}
+
+function startStatusPolling() {
+    if (_statusPollTimer) return;
+    pollReconcilerStatus();                        // immediate first check
+    _statusPollTimer = setInterval(pollReconcilerStatus, 2000);
+}
+
+function stopStatusPolling() {
+    if (_statusPollTimer) { clearInterval(_statusPollTimer); _statusPollTimer = null; }
+}
+
+// Initial status check on page load (reconciler may already be running)
+document.addEventListener('DOMContentLoaded', () => {
+    pollReconcilerStatus();
+    startStatusPolling();  // keep polling every 2s always
+});
+
+// ── Content reload (HTMX refresh, no full page reload) ───────────────────────
+function reloadContent() {
+    // Re-trigger the HTMX content load
+    htmx.ajax('GET', '/scheduled-content', { target: '#scheduled-content-area', swap: 'innerHTML' });
+    hideLoading();
+}
 
 // Setup buttons after HTMX loads content
 document.body.addEventListener('htmx:afterSwap', function(event) {
     if (event.detail.target.id === 'scheduled-content-area') {
-        console.log('Content loaded via HTMX, setting up buttons...');
         setupButtons();
         updateCountSliderMax();
     }
@@ -444,12 +522,12 @@ function initSortable() {
                     showSuccess('הפוסטים עודכנו!', msg, true);
                 } else {
                     alert('שגיאה בסידור מחדש: ' + (data.error || 'unknown'));
-                    window.location.reload();
+                    reloadContent();
                 }
             })
             .catch(err => {
                 alert('שגיאה: ' + err.message);
-                window.location.reload();
+                reloadContent();
             });
         }
     });
@@ -531,15 +609,6 @@ function saveEdit(id) {
         return;
     }
     
-    // Save scroll position
-    try {
-        const scrollPos = window.pageYOffset;
-        sessionStorage.setItem('scrollPos', scrollPos);
-        console.log('Saved scroll position:', scrollPos);
-    } catch (e) {
-        console.log('Could not save scroll position (sessionStorage blocked)');
-    }
-    
     // Send to server
     console.log('Sending POST to /edit_scheduled/' + id);
     console.log('Request URL:', window.location.origin + '/edit_scheduled/' + id);
@@ -583,16 +652,7 @@ function swapPost(id, direction) {
     console.log('Direction:', direction);
     
     showLoading('מעדכן פוסטים...', 'מחליף סדר');
-    
-    // Save scroll position
-    try {
-        const scrollPos = window.pageYOffset;
-        sessionStorage.setItem('scrollPos', scrollPos);
-        console.log('Saved scroll position:', scrollPos);
-    } catch (e) {
-        console.log('Could not save scroll position (sessionStorage blocked)');
-    }
-    
+
     console.log('Sending POST to /swap_posts/' + id + '/' + direction);
     fetch('/swap_posts/' + id + '/' + direction, {
         method: 'POST'
@@ -627,10 +687,10 @@ function rescheduleCanonical(count) {
             showSuccess('התזמון עודכן!', `${data.updated} פוסטים פוזרו לפי האלגוריתם האוטומטי`, true);
         } else {
             alert('שגיאה: ' + (data.error || 'unknown'));
-            window.location.reload();
+            reloadContent();
         }
     })
-    .catch(err => { alert('שגיאה: ' + err.message); window.location.reload(); });
+    .catch(err => { alert('שגיאה: ' + err.message); reloadContent(); });
 }
 
 // Unschedule ALL posts
@@ -646,12 +706,12 @@ function unscheduleAll(count) {
             showSuccess('הכל הוחזר להמתנה!', `${data.count} פוסטים הוחזרו`, true);
         } else {
             alert('שגיאה: ' + (data.error || 'unknown'));
-            window.location.reload();
+            reloadContent();
         }
     })
     .catch(err => {
         alert('שגיאה: ' + err.message);
-        window.location.reload();
+        reloadContent();
     });
 }
 
@@ -661,16 +721,7 @@ function unschedulePost(id) {
     console.log('Entry ID:', id);
     
     showLoading('מעדכן פוסטים...', 'מחזיר להמתנה');
-    
-    // Save scroll position
-    try {
-        const scrollPos = window.pageYOffset;
-        sessionStorage.setItem('scrollPos', scrollPos);
-        console.log('Saved scroll position:', scrollPos);
-    } catch (e) {
-        console.log('Could not save scroll position (sessionStorage blocked)');
-    }
-    
+
     console.log('Sending POST to /unschedule/' + id);
     fetch('/unschedule/' + id, {
         method: 'POST'
@@ -694,26 +745,6 @@ function unschedulePost(id) {
     });
 }
 
-// Restore scroll position on page load
-window.addEventListener('load', function() {
-    console.log('=== PAGE LOAD ===');
-    
-    try {
-        const scrollPos = sessionStorage.getItem('scrollPos');
-        console.log('Stored scroll position:', scrollPos);
-        
-        if (scrollPos) {
-            console.log('Restoring scroll to:', scrollPos);
-            window.scrollTo(0, parseInt(scrollPos));
-            sessionStorage.removeItem('scrollPos');
-            console.log('✓ Scroll restored');
-        } else {
-            console.log('No scroll position to restore');
-        }
-    } catch (e) {
-        console.log('Could not access scroll position (sessionStorage blocked)');
-    }
-});
 
 // Helper functions for loading indicator
 function showLoading(message, subtext = '') {
@@ -725,30 +756,31 @@ function showLoading(message, subtext = '') {
     icon.className = 'bi bi-arrow-clockwise spin';
 }
 
-function showSuccess(message, subtext = '', autoRefresh = true) {
-    loadingText.textContent = message;
-    loadingSubtext.textContent = subtext;
+function showSuccess(message, subtext = '', waitForReconciler = true) {
+    loadingText.textContent    = message;
+    loadingSubtext.textContent = waitForReconciler ? 'ממתין לסנכרון עם פייסבוק...' : (subtext || '');
     loadingIndicator.style.background = '#198754';
     loadingIndicator.classList.add('pulse');
     const icon = document.querySelector('#loading-indicator i');
     icon.className = 'bi bi-check-circle-fill';
-    
-    if (autoRefresh) {
-        setTimeout(() => {
-            window.location.reload();
-        }, 1500);
+
+    if (waitForReconciler) {
+        // Mark busy immediately (action just changed desired state)
+        setReconcilerStatus(true);
+        _pendingContentReload = true;
+        startStatusPolling();
+    } else {
+        hideLoading();
     }
 }
 
 function hideLoading() {
+    loadingOverlay.style.opacity = '0';
     setTimeout(function() {
-        loadingOverlay.style.opacity = '0';
-        setTimeout(function() {
-            loadingOverlay.style.display = 'none';
-            loadingOverlay.style.opacity = '1';
-            loadingIndicator.classList.remove('pulse');
-        }, 300);
-    }, 1500);
+        loadingOverlay.style.display = 'none';
+        loadingOverlay.style.opacity = '1';
+        loadingIndicator.classList.remove('pulse');
+    }, 300);
 }
 
 // ── Quick reschedule for today ────────────────────────────────────────────────
@@ -857,10 +889,10 @@ function applyRescheduleToday() {
                 `מפוזרים בין ${startVal} ל-${endVal}`, true);
         } else {
             alert('שגיאה: ' + (data.error || 'unknown'));
-            window.location.reload();
+            reloadContent();
         }
     })
-    .catch(err => { alert('שגיאה: ' + err.message); window.location.reload(); });
+    .catch(err => { alert('שגיאה: ' + err.message); reloadContent(); });
 }
 
 function updateCountSliderMax() {
