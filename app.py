@@ -372,13 +372,24 @@ def scheduled_page():
 @app.route('/reconciler-status')
 def reconciler_status():
     """Return whether the reconciler has any pending work (entries needing FB sync)."""
+    from reconciler import _times_differ, text_hash, format_post_text
     db = extensions.db
-    busy = bool(
-        db.get_entries_needing_fb_delete() or
-        db.get_entries_needing_schedule() or
-        db.get_entries_needing_sync()
-    )
-    return jsonify({'busy': busy})
+
+    if db.get_entries_needing_fb_delete():
+        return jsonify({'busy': True})
+    if db.get_entries_needing_schedule():
+        return jsonify({'busy': True})
+
+    # get_entries_needing_sync() returns all scheduled+linked entries regardless of
+    # drift — the actual drift check is done in Python, same as _step_sync does.
+    for entry in db.get_entries_needing_sync():
+        desired_hash = text_hash(format_post_text(entry))
+        if (entry['post_number']       != entry.get('fb_post_number')
+                or desired_hash        != entry.get('fb_text_hash')
+                or _times_differ(entry.get('scheduled_time'), entry.get('fb_scheduled_time'))):
+            return jsonify({'busy': True})
+
+    return jsonify({'busy': False})
 
 @app.route('/scheduled-content')
 def scheduled_content():
