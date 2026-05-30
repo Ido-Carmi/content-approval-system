@@ -686,85 +686,156 @@ def instagram_daily_job():
     2. Fetch candidates, score by FB reactions + 2×comments, pick highest.
     3. Generate Hebrew image slides, upload to Cloudinary, publish to Instagram.
     """
+    print(f"\n{'='*60}")
+    print(f"📸 INSTAGRAM DAILY JOB STARTED")
+    print(f"{'='*60}")
+
     try:
+        # ── Config check ────────────────────────────────────────────────
+        print(f"\n[ig-job] STEP 1: Config check")
         config = load_config()
+        print(f"[ig-job]   instagram_enabled    = {config.get('instagram_enabled', False)}")
+        print(f"[ig-job]   instagram_ig_account = {config.get('instagram_ig_account_id', 'NOT SET')}")
+        print(f"[ig-job]   instagram_watermark  = {config.get('instagram_watermark', 'NOT SET')}")
+        print(f"[ig-job]   instagram_post_time  = {config.get('instagram_post_time', 'NOT SET')}")
+        print(f"[ig-job]   instagram_hashtags   = {config.get('instagram_hashtags', '')[:60]}")
+        print(f"[ig-job]   cloudinary_cloud     = {config.get('cloudinary_cloud_name', 'NOT SET')}")
+        print(f"[ig-job]   fb_token present     = {bool(config.get('facebook_access_token'))}")
 
         if not config.get('instagram_enabled', False):
+            print(f"[ig-job] ⚠️  instagram_enabled is False — skipping")
             return
 
         if not extensions.instagram_handler:
-            print("⚠️  Instagram: handler not initialised — check settings")
+            print(f"[ig-job] ❌ instagram_handler is None — missing config keys?")
+            print(f"[ig-job]    required: instagram_ig_account_id, cloudinary_cloud_name, "
+                  f"cloudinary_api_key, cloudinary_api_secret, facebook_access_token")
             return
 
+        print(f"[ig-job] ✅ config OK, handler is ready")
+
+        # ── Date window ──────────────────────────────────────────────────
+        print(f"\n[ig-job] STEP 2: Date window")
         israel_tz = pytz.timezone('Asia/Jerusalem')
         now       = datetime.now(israel_tz)
         weekday   = now.weekday()   # 0=Mon … 6=Sun
+        DAY_NAMES = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
+        print(f"[ig-job]   current Israel time = {now.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        print(f"[ig-job]   weekday = {weekday} ({DAY_NAMES[weekday]})")
 
         if weekday == 6:            # Sunday → cover Thu+Fri+Sat
             end_dt   = now.replace(hour=0, minute=0, second=0, microsecond=0)
             start_dt = end_dt - timedelta(days=3)
-            print(f"📸 Instagram: Sunday run — window {start_dt.date()} → {end_dt.date()}")
+            print(f"[ig-job]   Sunday mode: window = {start_dt.date()} (Thu) → {end_dt.date()} (Sun)")
         else:
             end_dt   = now.replace(hour=0, minute=0, second=0, microsecond=0)
             start_dt = end_dt - timedelta(days=1)
-            print(f"📸 Instagram: daily run — window {start_dt.date()}")
+            print(f"[ig-job]   Daily mode: window = {start_dt.date()} → {end_dt.date()}")
 
+        print(f"[ig-job]   start_iso = {start_dt.isoformat()}")
+        print(f"[ig-job]   end_iso   = {end_dt.isoformat()}")
+
+        # ── Fetch candidates ─────────────────────────────────────────────
+        print(f"\n[ig-job] STEP 3: Fetch candidates from instagram_post_log")
         candidates = extensions.db.get_best_post_for_instagram(
             start_dt.isoformat(), end_dt.isoformat()
         )
+        print(f"[ig-job]   found {len(candidates)} candidate(s) (ig_posted=0 in window)")
+
+        for i, c in enumerate(candidates):
+            print(f"[ig-job]   [{i}] id={c['id']} post=#{c['post_number']} "
+                  f"fb_post_id={c['fb_post_id']} "
+                  f"comment_count={c['comment_count']} "
+                  f"published_at={c['published_at']}")
 
         if not candidates:
-            print(f"ℹ️  Instagram: no published posts in window")
+            print(f"[ig-job] ℹ️  no candidates — nothing to post")
             return
 
-        # Score each candidate
+        # ── Score candidates ─────────────────────────────────────────────
+        print(f"\n[ig-job] STEP 4: Score candidates (reactions + 2×comments)")
         for c in candidates:
+            print(f"[ig-job]   fetching reactions for fb_post_id={c['fb_post_id']}")
             reactions = 0
             if extensions.facebook_handler:
-                reactions = extensions.facebook_handler.get_post_reactions_count(c['fb_post_id'])
-            c['score'] = reactions + c['comment_count'] * 2
+                try:
+                    reactions = extensions.facebook_handler.get_post_reactions_count(c['fb_post_id'])
+                    print(f"[ig-job]     reactions = {reactions}")
+                except Exception as re:
+                    print(f"[ig-job]     ⚠️  reactions fetch failed: {re} — using 0")
+            else:
+                print(f"[ig-job]     ⚠️  facebook_handler not available — reactions = 0")
+            c['reactions'] = reactions
+            c['score']     = reactions + c['comment_count'] * 2
+            print(f"[ig-job]   post #{c['post_number']}: reactions={reactions}, "
+                  f"comments={c['comment_count']}, score={c['score']}")
 
         best = max(candidates, key=lambda x: x['score'])
-        print(f"✅ Instagram: picked post #{best['post_number']} "
-              f"(score={best['score']}, reactions+comments)")
+        print(f"\n[ig-job]   ✅ best post: #{best['post_number']} "
+              f"(id={best['id']}, score={best['score']})")
+        print(f"[ig-job]   text preview: {best['text'][:80]}{'...' if len(best['text'])>80 else ''}")
 
-        # Generate slides
+        # ── Image generation ─────────────────────────────────────────────
+        print(f"\n[ig-job] STEP 5: Generate image slides")
         from image_generator import generate_confession_slides, slides_to_bytes
         watermark = config.get('instagram_watermark', 'וידויים צבאיים')
-        slides    = generate_confession_slides(
+        print(f"[ig-job]   watermark = '{watermark}'")
+        print(f"[ig-job]   full text ({len(best['text'])} chars): {best['text']}")
+
+        slides = generate_confession_slides(
             text=best['text'],
             post_number=best['post_number'],
             watermark=watermark,
         )
-        images_bytes = slides_to_bytes(slides)
-        print(f"   Generated {len(slides)} slide(s)")
+        print(f"[ig-job]   ✅ {len(slides)} slide(s) generated")
 
-        # Build caption
+        images_bytes = slides_to_bytes(slides)
+        total_kb = sum(len(b) for b in images_bytes) // 1024
+        print(f"[ig-job]   total size: {total_kb} KB across {len(images_bytes)} image(s)")
+
+        # ── Caption ──────────────────────────────────────────────────────
+        print(f"\n[ig-job] STEP 6: Build caption")
         caption  = f"#{best['post_number']}\n{best['text']}"
         hashtags = config.get('instagram_hashtags', '').strip()
         if hashtags:
             caption += f"\n.\n.\n{hashtags}"
+            print(f"[ig-job]   hashtags added: {hashtags[:60]}")
+        print(f"[ig-job]   caption total length: {len(caption)} chars")
+        print(f"[ig-job]   caption preview:\n---\n{caption[:200]}\n---")
 
+        # ── Publish ──────────────────────────────────────────────────────
+        print(f"\n[ig-job] STEP 7: Publish to Instagram")
         public_id = f"confessions/post_{best['post_number']}_{int(now.timestamp())}"
-        result    = extensions.instagram_handler.publish_post(
+        print(f"[ig-job]   public_id = {public_id}")
+
+        result = extensions.instagram_handler.publish_post(
             images_bytes=images_bytes,
             caption=caption,
             base_public_id=public_id,
         )
 
+        # ── Mark as posted ───────────────────────────────────────────────
+        print(f"\n[ig-job] STEP 8: Mark log entry {best['id']} as ig_posted")
         extensions.db.mark_ig_posted(best['id'])
+        print(f"[ig-job]   ✅ marked")
 
-        # Reset failure counter, record last post time
+        # ── Save last-post timestamp ─────────────────────────────────────
         cfg = load_config()
         cfg.pop('instagram_failure_count', None)
         cfg['instagram_last_post'] = now.strftime('%d/%m/%Y %H:%M')
         save_config(cfg)
+        print(f"[ig-job]   saved instagram_last_post = {cfg['instagram_last_post']}")
 
-        print(f"✅ Instagram post published: {result['ig_post_id']} "
-              f"({result['slides']} slide(s))")
+        print(f"\n{'='*60}")
+        print(f"✅ INSTAGRAM JOB COMPLETE")
+        print(f"   ig_post_id = {result['ig_post_id']}")
+        print(f"   slides     = {result['slides']}")
+        print(f"{'='*60}\n")
 
     except Exception as e:
-        print(f"❌ Instagram daily job error: {e}")
+        print(f"\n{'='*60}")
+        print(f"❌ INSTAGRAM JOB FAILED: {e}")
+        print(f"{'='*60}")
         traceback.print_exc()
         try:
             cfg   = load_config()

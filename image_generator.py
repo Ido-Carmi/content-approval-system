@@ -10,10 +10,8 @@ Each confession may span one or more slides:
 from __future__ import annotations
 
 import io
+import os
 from typing import Optional
-
-from PIL import Image, ImageDraw, ImageFont
-from bidi.algorithm import get_display
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -45,25 +43,37 @@ LINE_SPACING      = 16   # extra pixels between lines
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _load_font(path: str, size: int) -> ImageFont.FreeTypeFont:
+def _load_font(path: str, size: int):
+    from PIL import ImageFont
+    print(f"   [imggen] loading font: {path} size={size}")
+    if not os.path.exists(path):
+        print(f"   [imggen] ⚠️  font not found at {path}, falling back to default")
+        return ImageFont.load_default()
     try:
-        return ImageFont.truetype(path, size)
-    except OSError:
+        font = ImageFont.truetype(path, size)
+        print(f"   [imggen] ✓ font loaded: {os.path.basename(path)} {size}px")
+        return font
+    except Exception as e:
+        print(f"   [imggen] ❌ font load error: {e} — falling back to default")
         return ImageFont.load_default()
 
 
-def _line_height(font: ImageFont.FreeTypeFont, draw: ImageDraw.ImageDraw) -> int:
+def _line_height(font, draw) -> int:
     bb = draw.textbbox((0, 0), "אבג", font=font)
-    return (bb[3] - bb[1]) + LINE_SPACING
+    lh = (bb[3] - bb[1]) + LINE_SPACING
+    return lh
 
 
-def _wrap_rtl(text: str, font: ImageFont.FreeTypeFont,
-              max_width: int, draw: ImageDraw.ImageDraw) -> list[str]:
+def _wrap_rtl(text: str, font, max_width: int, draw) -> list[str]:
     """Word-wrap Hebrew text (logical order) to fit max_width px.
     Returns visual (bidi-reordered) lines ready for PIL right-anchored drawing."""
+    from bidi.algorithm import get_display
+
     paragraphs = text.split('\n')
+    print(f"   [imggen] wrapping {len(paragraphs)} paragraph(s), max_width={max_width}px")
     visual_lines: list[str] = []
-    for para in paragraphs:
+
+    for pi, para in enumerate(paragraphs):
         if not para.strip():
             visual_lines.append('')
             continue
@@ -72,60 +82,72 @@ def _wrap_rtl(text: str, font: ImageFont.FreeTypeFont,
         for word in words:
             test = ' '.join(current + [word])
             bb = draw.textbbox((0, 0), get_display(test), font=font)
-            if (bb[2] - bb[0]) > max_width and current:
+            word_w = bb[2] - bb[0]
+            if word_w > max_width and current:
                 visual_lines.append(get_display(' '.join(current)))
                 current = [word]
             else:
                 current.append(word)
         if current:
             visual_lines.append(get_display(' '.join(current)))
+
+    print(f"   [imggen] wrap result: {len(visual_lines)} visual line(s)")
+    for i, l in enumerate(visual_lines):
+        print(f"   [imggen]   line {i+1}: '{l[:60]}{'...' if len(l)>60 else ''}'")
     return visual_lines
 
 
 def _draw_slide(lines: list[str], post_number: int, watermark: str,
-                show_arrow: bool,
-                body_font: ImageFont.FreeTypeFont,
-                bold_font: ImageFont.FreeTypeFont) -> Image.Image:
+                show_arrow: bool, body_font, bold_font):
     """Render a single 1080×1080 slide and return a PIL Image."""
+    from PIL import Image, ImageDraw
+    from bidi.algorithm import get_display
+
     img  = Image.new('RGB', CANVAS, BG_COLOR)
     draw = ImageDraw.Draw(img)
 
     usable_w = CANVAS[0] - 2 * PAD
     right_x  = CANVAS[0] - PAD
 
+    print(f"   [imggen] drawing slide: {len(lines)} line(s), show_arrow={show_arrow}")
+
     # ── Header: post number ──────────────────────────────────────────────────
     header_font = _load_font(FONT_BOLD, FONT_SIZE_HEADER)
     num_text    = get_display(f"#{post_number}")
     draw.text((right_x, 55), num_text,
               font=header_font, fill=ACCENT_COLOR, anchor='ra')
+    print(f"   [imggen] header: #{post_number}")
 
     # Divider under header
     draw.line([(PAD, TOP_Y - 20), (CANVAS[0] - PAD, TOP_Y - 20)],
               fill=DIVIDER_COLOR, width=2)
 
     # ── Body text ─────────────────────────────────────────────────────────────
-    lh  = _line_height(body_font, draw)
-    y   = TOP_Y
+    lh = _line_height(body_font, draw)
+    y  = TOP_Y
     for line in lines:
         if line:
             draw.text((right_x, y), line,
                       font=body_font, fill=TEXT_COLOR, anchor='ra')
         y += lh
 
+    print(f"   [imggen] body text drawn, final y={y} (canvas height={CANVAS[1]})")
+
     # ── Footer divider + watermark ────────────────────────────────────────────
     draw.line([(PAD, FOOT_Y - 20), (CANVAS[0] - PAD, FOOT_Y - 20)],
               fill=DIVIDER_COLOR, width=2)
     wm_font = _load_font(FONT_BOLD, FONT_SIZE_WM)
-    draw.text((CANVAS[0] // 2, FOOT_Y + 10),
-              get_display(watermark),
+    wm_text = get_display(watermark)
+    draw.text((CANVAS[0] // 2, FOOT_Y + 10), wm_text,
               font=wm_font, fill=WATERMARK_COLOR, anchor='mm')
+    print(f"   [imggen] watermark: '{watermark}'")
 
     # ── "Swipe" arrow (non-final slides) ─────────────────────────────────────
     if show_arrow:
         arrow_font = _load_font(FONT_BOLD, FONT_SIZE_ARROW)
-        # Draw a left-pointing chevron (visually "swipe left" on Instagram RTL)
         draw.text((PAD + 10, FOOT_Y - 10), '❯',
                   font=arrow_font, fill=ARROW_COLOR, anchor='la')
+        print(f"   [imggen] swipe arrow drawn")
 
     return img
 
@@ -140,56 +162,81 @@ def generate_confession_slides(
     watermark: str = "וידויים צבאיים",
     body_font_path: Optional[str] = None,
     bold_font_path: Optional[str] = None,
-) -> list[Image.Image]:
+) -> list:
     """
     Generate one or more 1080×1080 slides for the given confession text.
-
-    If the text fits at FONT_SIZE_BODY on a single slide it returns a list of
-    one image.  Otherwise the text is split across multiple slides (up to 10),
-    each with a swipe-arrow except the last.
-
     Returns a list of PIL Image objects.
     """
+    from PIL import Image, ImageDraw
+
+    print(f"\n[imggen] === generate_confession_slides ===")
+    print(f"[imggen] post_number={post_number}, watermark='{watermark}'")
+    print(f"[imggen] text length={len(text)} chars")
+    print(f"[imggen] text preview: '{text[:80]}{'...' if len(text)>80 else ''}'")
+    print(f"[imggen] body_font_path override: {body_font_path or 'none (using default)'}")
+    print(f"[imggen] bold_font_path override: {bold_font_path or 'none (using default)'}")
+
     bp = body_font_path or FONT_BODY
     hp = bold_font_path or FONT_BOLD
 
     usable_w  = CANVAS[0] - 2 * PAD
-    text_area = FOOT_Y - 20 - TOP_Y   # max pixel height available for body text
+    text_area = FOOT_Y - 20 - TOP_Y
+    print(f"[imggen] canvas={CANVAS}, usable_w={usable_w}px, text_area_h={text_area}px")
 
-    # Use a temporary draw to measure text
+    # Temp image for measurement
     tmp_img  = Image.new('RGB', CANVAS, BG_COLOR)
     tmp_draw = ImageDraw.Draw(tmp_img)
 
-    # Try the default body font size; shrink down to FONT_SIZE_MIN
     font_size = FONT_SIZE_BODY
-    body_font = _load_font(bp, font_size)
-    bold_font = _load_font(hp, FONT_SIZE_HEADER)
+    print(f"[imggen] starting font size: {font_size}px, min: {FONT_SIZE_MIN}px")
 
+    body_font = _load_font(bp, font_size)
     all_lines = _wrap_rtl(text, body_font, usable_w, tmp_draw)
 
-    lh = _line_height(body_font, tmp_draw)
+    lh      = _line_height(body_font, tmp_draw)
     total_h = len(all_lines) * lh
 
+    print(f"[imggen] at {font_size}px: {len(all_lines)} lines, "
+          f"line_height={lh}px, total_h={total_h}px, text_area={text_area}px")
+
     # Shrink font until min size or fits in one slide
+    shrink_steps = 0
     while total_h > text_area and font_size > FONT_SIZE_MIN:
-        font_size -= 2
+        font_size  -= 2
+        shrink_steps += 1
         body_font  = _load_font(bp, font_size)
         all_lines  = _wrap_rtl(text, body_font, usable_w, tmp_draw)
         lh         = _line_height(body_font, tmp_draw)
         total_h    = len(all_lines) * lh
+        print(f"[imggen]   shrink → {font_size}px: {len(all_lines)} lines, "
+              f"total_h={total_h}px")
+
+    if shrink_steps:
+        print(f"[imggen] font shrunk {shrink_steps}x to {font_size}px")
+    else:
+        print(f"[imggen] no shrinking needed at {font_size}px")
 
     # Split lines into pages
     lines_per_page = max(1, text_area // lh)
+    print(f"[imggen] lines_per_page={lines_per_page} "
+          f"(text_area={text_area} // lh={lh})")
+
     pages: list[list[str]] = []
     for i in range(0, len(all_lines), lines_per_page):
         pages.append(all_lines[i:i + lines_per_page])
 
-    # Cap at 10 slides (Instagram carousel limit)
-    pages = pages[:10]
+    if len(pages) > 10:
+        print(f"[imggen] ⚠️  {len(pages)} pages exceeds IG limit of 10 — truncating")
+        pages = pages[:10]
 
+    print(f"[imggen] will generate {len(pages)} slide(s)")
+
+    bold_font = _load_font(hp, FONT_SIZE_HEADER)
     slides = []
     for idx, page_lines in enumerate(pages):
-        is_last   = (idx == len(pages) - 1)
+        is_last = (idx == len(pages) - 1)
+        print(f"\n[imggen] --- slide {idx+1}/{len(pages)} "
+              f"({'last' if is_last else 'has arrow'}) ---")
         slide = _draw_slide(
             lines=page_lines,
             post_number=post_number,
@@ -200,17 +247,22 @@ def generate_confession_slides(
         )
         slides.append(slide)
 
+    print(f"\n[imggen] ✅ done — {len(slides)} slide(s) generated")
     return slides
 
 
-def slides_to_bytes(slides: list[Image.Image]) -> list[bytes]:
+def slides_to_bytes(slides: list) -> list[bytes]:
     """Convert each PIL Image to JPEG bytes (quality 92)."""
+    print(f"[imggen] converting {len(slides)} slide(s) to JPEG bytes")
     result = []
-    for img in slides:
+    for i, img in enumerate(slides):
         buf = io.BytesIO()
         img.save(buf, format='JPEG', quality=92)
+        size_kb = buf.tell() // 1024
         buf.seek(0)
-        result.append(buf.read())
+        data = buf.read()
+        result.append(data)
+        print(f"[imggen]   slide {i+1}: {size_kb} KB")
     return result
 
 
@@ -218,7 +270,7 @@ def slides_to_bytes(slides: list[Image.Image]) -> list[bytes]:
 # Quick standalone test
 # ---------------------------------------------------------------------------
 if __name__ == '__main__':
-    import os, sys
+    import sys
     sample = (
         "אני חייל ביחידה קרבית ואני רוצה לספר על משהו שקרה לי לפני כמה חודשים. "
         "היינו בסיור לילי כשפתאום שמענו ירי מכיוון לא צפוי. "
@@ -226,6 +278,9 @@ if __name__ == '__main__':
         "לא הצלחתי להזיז את הרגליים. המחלקה שלי טיפלה במצב, "
         "ומאז אני חושב על זה כל לילה ותוהה אם אני מתאים לתפקיד."
     )
+    if len(sys.argv) > 1:
+        sample = sys.argv[1]
+
     slides = generate_confession_slides(sample, post_number=15467,
                                         watermark="וידויים צבאיים")
     out_dir = '/tmp/ig_test'
@@ -234,4 +289,4 @@ if __name__ == '__main__':
         path = f'{out_dir}/slide_{i+1}.jpg'
         slide.save(path, quality=92)
         print(f'Saved {path}')
-    print(f'Generated {len(slides)} slide(s)')
+    print(f'\n✅ Generated {len(slides)} slide(s) in {out_dir}/')

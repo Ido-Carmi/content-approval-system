@@ -65,7 +65,12 @@ def init_handlers():
 
     ig_keys = ('instagram_ig_account_id', 'cloudinary_cloud_name',
                'cloudinary_api_key', 'cloudinary_api_secret')
-    if all(config.get(k) for k in ig_keys) and config.get('facebook_access_token'):
+    missing = [k for k in ig_keys if not config.get(k)]
+    has_fb_token = bool(config.get('facebook_access_token'))
+    print(f"[extensions] Instagram init check:")
+    print(f"[extensions]   missing IG keys: {missing if missing else 'none'}")
+    print(f"[extensions]   facebook_access_token present: {has_fb_token}")
+    if not missing and has_fb_token:
         try:
             from instagram_handler import InstagramHandler
             instagram_handler = InstagramHandler(
@@ -77,4 +82,7 @@ def init_handlers():
             )
             print("✅ Instagram handler initialized")
         except Exception as e:
-            print(f"Failed to init Instagram: {e}")
+            print(f"[extensions] ❌ Failed to init Instagram: {e}")
+            import traceback; traceback.print_exc()
+    else:
+        print(f"[extensions] ⚠️  Instagram handler NOT initialized (missing keys or token)")
