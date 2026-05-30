@@ -302,11 +302,10 @@
                         </div>
                         {% endif %}
 
-                        <form method="POST" action="/instagram-post-now">
-                            <button type="submit" class="btn btn-outline-primary btn-sm">
-                                <i class="bi bi-instagram"></i> הרץ עכשיו (בדיקה)
-                            </button>
-                        </form>
+                        <button type="button" class="btn btn-outline-primary btn-sm"
+                                onclick="fetch('/instagram-post-now',{method:'POST'}).then(()=>alert('Instagram job started — check logs'))">
+                            <i class="bi bi-instagram"></i> הרץ עכשיו (בדיקה)
+                        </button>
                     </div>
                 </div>
             </div>
