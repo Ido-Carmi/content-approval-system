@@ -1053,12 +1053,35 @@ def settings_page():
 
     return render_template('settings.html', config=config, current_number=current_number)
 
+@app.route('/instagram-backfill', methods=['POST'])
+def instagram_backfill():
+    """Backfill instagram_post_log from existing published entries (one-time use)."""
+    days = int(request.form.get('days', 7))
+    count = extensions.db.backfill_instagram_post_log(days=days)
+    flash(f'✅ Backfill complete — {count} post(s) added to Instagram log', 'success')
+    return redirect(url_for('settings_page'))
+
+
 @app.route('/instagram-post-now', methods=['POST'])
 def instagram_post_now():
-    """Manually trigger the Instagram daily job for testing."""
+    """Manually trigger the Instagram daily job for testing (bypasses instagram_enabled check)."""
     from background_tasks import instagram_daily_job
     import threading
-    threading.Thread(target=instagram_daily_job, daemon=True).start()
+
+    def _run_forced():
+        from config import load_config, save_config
+        cfg = load_config()
+        was_enabled = cfg.get('instagram_enabled', False)
+        cfg['instagram_enabled'] = True
+        save_config(cfg)
+        try:
+            instagram_daily_job()
+        finally:
+            cfg2 = load_config()
+            cfg2['instagram_enabled'] = was_enabled
+            save_config(cfg2)
+
+    threading.Thread(target=_run_forced, daemon=True).start()
     flash('Instagram job started — check logs', 'info')
     return redirect(url_for('settings_page'))
 

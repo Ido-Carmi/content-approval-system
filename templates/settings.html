@@ -302,10 +302,19 @@
                         </div>
                         {% endif %}
 
-                        <button type="button" class="btn btn-outline-primary btn-sm"
-                                onclick="fetch('/instagram-post-now',{method:'POST'}).then(()=>alert('Instagram job started — check logs'))">
-                            <i class="bi bi-instagram"></i> הרץ עכשיו (בדיקה)
-                        </button>
+                        <div class="d-flex gap-2 flex-wrap">
+                            <button type="button" class="btn btn-outline-primary btn-sm"
+                                    onclick="fetch('/instagram-post-now',{method:'POST'}).then(()=>alert('Instagram job started — check logs'))">
+                                <i class="bi bi-instagram"></i> הרץ עכשיו (בדיקה)
+                            </button>
+                            <form method="POST" action="/instagram-backfill" style="display:inline">
+                                <input type="hidden" name="days" value="7">
+                                <button type="submit" class="btn btn-outline-secondary btn-sm"
+                                        title="מלא את רשימת הפוסטים מ-7 הימים האחרונים">
+                                    <i class="bi bi-arrow-repeat"></i> טען פוסטים קיימים (7 ימים)
+                                </button>
+                            </form>
+                        </div>
                     </div>
                 </div>
             </div>

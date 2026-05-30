@@ -2178,3 +2178,27 @@ class Database:
         conn.commit()
         conn.close()
 
+    def backfill_instagram_post_log(self, days: int = 7) -> int:
+        """Backfill instagram_post_log from existing published entries.
+        Copies entries published in the last N days that aren't already logged.
+        Returns number of rows inserted."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+        print(f"[ig-backfill] backfilling from entries published after {cutoff}")
+        cursor.execute('''
+            INSERT OR IGNORE INTO instagram_post_log (fb_post_id, post_number, text, published_at)
+            SELECT facebook_post_id, post_number, text,
+                   COALESCE(fb_published_at, approved_at, created_at)
+            FROM entries
+            WHERE status = 'published'
+              AND facebook_post_id IS NOT NULL
+              AND post_number IS NOT NULL
+              AND COALESCE(fb_published_at, approved_at, created_at) >= ?
+        ''', (cutoff,))
+        count = cursor.rowcount
+        conn.commit()
+        conn.close()
+        print(f"[ig-backfill] inserted {count} row(s) into instagram_post_log")
+        return count
+
