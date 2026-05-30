@@ -1,270 +1,256 @@
 """
 image_generator.py — Generate 1080×1080 Instagram slides for Hebrew confessions.
 
-Uses Cairo + Pango for text rendering — the only Python stack that handles
-Hebrew RTL text correctly out of the box (no manual bidi, no character reversal).
+Uses Pillow for image generation. Hebrew RTL is handled by reversing each line
+(line[::-1]) so the first Hebrew character ends up at the rightmost position
+when drawn right-aligned. Readers start from the right — correct for Hebrew.
 
-Install on server:
-    apt-get install -y python3-gi python3-gi-cairo gir1.2-pango-1.0 gir1.2-pangocairo-1.0
-    pip install pycairo PyGObject
+Font: NotoSansHebrew (apt-get install fonts-noto-core fonts-noto).
 """
 from __future__ import annotations
 import io
 import os
+import re
 from typing import Optional
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-CANVAS_W = 1080
-CANVAS_H = 1080
-PAD      = 80
+CANVAS  = (1080, 1080)
+PAD     = 80
+TOP_Y   = 150       # y where body text starts
+FOOT_Y  = CANVAS[1] - 90
 
-BG_COLOR        = (40/255,  55/255,  30/255)   # dark army green
-TEXT_COLOR      = (1.0,     210/255, 0.0)       # yellow
-ACCENT_COLOR    = (1.0,     210/255, 0.0)       # gold header
-DIVIDER_COLOR   = (70/255,  90/255,  50/255)
-WATERMARK_COLOR = (150/255, 170/255, 120/255)
-ARROW_COLOR     = (180/255, 200/255, 150/255)
+BG_COLOR        = (40,  55,  30)    # dark army green
+TEXT_COLOR      = (255, 210,   0)   # yellow body text
+ACCENT_COLOR    = (255, 210,   0)   # gold post number
+DIVIDER_COLOR   = (70,  90,  50)
+WATERMARK_COLOR = (150, 170, 120)
+ARROW_COLOR     = (180, 200, 150)
 
-FONT_FAMILY   = "Noto Sans Hebrew"
-FONT_SIZE_BODY   = 52
-FONT_SIZE_HEADER = 56
+FONT_SIZE_BODY   = 58
+FONT_SIZE_HEADER = 58
 FONT_SIZE_WM     = 34
+FONT_SIZE_ARROW  = 60
 FONT_SIZE_MIN    = 40
-LINE_SPACING     = 6    # extra pixels between lines (Pango already adds some)
-
-TOP_Y   = 160           # y where body text starts
-FOOT_Y  = CANVAS_H - 90
+LINE_SPACING     = 18
 
 
 # ---------------------------------------------------------------------------
-# Cairo / Pango helpers
+# Font discovery
 # ---------------------------------------------------------------------------
 
-def _get_cairo_context(surface):
-    import cairo
-    return cairo.Context(surface)
+def _find_font(candidates: list[str]) -> str:
+    for path in candidates:
+        if os.path.exists(path):
+            print(f"   [imggen] font found: {path}")
+            return path
+    print(f"   [imggen] ⚠️  no font found in candidates, using default")
+    return candidates[0]
 
 
-def _make_pango_layout(ctx, text: str, font_size: int, width_px: int):
-    """Create a Pango layout with RTL alignment for Hebrew text."""
-    import gi
-    gi.require_version('Pango', '1.0')
-    gi.require_version('PangoCairo', '1.0')
-    from gi.repository import Pango, PangoCairo
-
-    layout = PangoCairo.create_layout(ctx)
-    layout.set_text(text, -1)
-
-    # Hebrew is RTL — Pango handles it automatically
-    layout.set_alignment(Pango.Alignment.CENTER)
-    layout.set_width(width_px * Pango.SCALE)
-
-    fd = Pango.FontDescription(f"{FONT_FAMILY} {font_size}")
-    layout.set_font_description(fd)
-
-    return layout
-
-
-def _draw_pango_layout(ctx, layout, x: float, y: float, color: tuple):
-    import gi
-    gi.require_version('PangoCairo', '1.0')
-    from gi.repository import PangoCairo
-
-    ctx.set_source_rgb(*color)
-    ctx.move_to(x, y)
-    PangoCairo.show_layout(ctx, layout)
-
-
-def _layout_height(layout) -> int:
-    """Return the pixel height of a rendered Pango layout."""
-    import gi
-    gi.require_version('Pango', '1.0')
-    from gi.repository import Pango
-    _w, h = layout.get_size()
-    return h // Pango.SCALE
-
-
-def _layout_line_height(ctx, font_size: int) -> int:
-    """Return approximate single-line height for a given font size."""
-    import gi
-    gi.require_version('Pango', '1.0')
-    gi.require_version('PangoCairo', '1.0')
-    from gi.repository import Pango, PangoCairo
-    layout = PangoCairo.create_layout(ctx)
-    layout.set_text("אבג", -1)
-    fd = Pango.FontDescription(f"{FONT_FAMILY} {font_size}")
-    layout.set_font_description(fd)
-    _w, h = layout.get_size()
-    return h // Pango.SCALE + LINE_SPACING
+FONT_BODY = _find_font([
+    '/usr/share/fonts/truetype/noto/NotoSansHebrew-Regular.ttf',
+    '/usr/share/fonts/truetype/noto/NotoSansHebrew[wdth,wght].ttf',
+    '/usr/share/fonts/noto/NotoSansHebrew-Regular.ttf',
+    '/usr/share/fonts/truetype/culmus/MiriamCLM-Book.ttf',
+    '/usr/share/fonts/truetype/freefont/FreeSans.ttf',
+])
+FONT_BOLD = _find_font([
+    '/usr/share/fonts/truetype/noto/NotoSansHebrew-Bold.ttf',
+    '/usr/share/fonts/truetype/noto/NotoSansHebrew[wdth,wght].ttf',
+    '/usr/share/fonts/noto/NotoSansHebrew-Bold.ttf',
+    '/usr/share/fonts/truetype/culmus/MiriamCLM-Bold.ttf',
+    '/usr/share/fonts/truetype/noto/NotoSansHebrew-Regular.ttf',
+    '/usr/share/fonts/truetype/freefont/FreeSans.ttf',
+])
 
 
 # ---------------------------------------------------------------------------
-# Slide renderer
+# Helpers
 # ---------------------------------------------------------------------------
 
-def _render_slide(surface, text: str, post_number: int, watermark: str,
-                  show_arrow: bool):
-    """Draw all elements onto an existing Cairo ImageSurface."""
-    import cairo
-
-    ctx = _get_cairo_context(surface)
-    usable_w = CANVAS_W - 2 * PAD
-
-    # ── Background ────────────────────────────────────────────────────────
-    ctx.set_source_rgb(*BG_COLOR)
-    ctx.paint()
-
-    # ── Header: post number ───────────────────────────────────────────────
-    header_layout = _make_pango_layout(ctx, f"#{post_number}", FONT_SIZE_HEADER, usable_w)
-    _draw_pango_layout(ctx, header_layout, PAD, 40, ACCENT_COLOR)
-    print(f"   [imggen] header: #{post_number}")
-
-    # ── Divider ───────────────────────────────────────────────────────────
-    ctx.set_source_rgb(*DIVIDER_COLOR)
-    ctx.set_line_width(2)
-    ctx.move_to(PAD, TOP_Y - 20)
-    ctx.line_to(CANVAS_W - PAD, TOP_Y - 20)
-    ctx.stroke()
-
-    # ── Body text ─────────────────────────────────────────────────────────
-    text_area_h = FOOT_Y - 20 - TOP_Y
-    body_layout  = _make_pango_layout(ctx, text, FONT_SIZE_BODY, usable_w)
-    body_h       = _layout_height(body_layout)
-
-    # Shrink font until text fits
-    font_size = FONT_SIZE_BODY
-    while body_h > text_area_h and font_size > FONT_SIZE_MIN:
-        font_size -= 2
-        body_layout = _make_pango_layout(ctx, text, font_size, usable_w)
-        body_h      = _layout_height(body_layout)
-        print(f"   [imggen] shrink → {font_size}px, height={body_h}px")
-
-    body_y = TOP_Y + max(0, (text_area_h - body_h) // 2)
-    print(f"   [imggen] body: font={font_size}px, height={body_h}px, y={body_y}")
-    _draw_pango_layout(ctx, body_layout, PAD, body_y, TEXT_COLOR)
-
-    # ── Footer divider + watermark ────────────────────────────────────────
-    ctx.set_source_rgb(*DIVIDER_COLOR)
-    ctx.move_to(PAD, FOOT_Y - 20)
-    ctx.line_to(CANVAS_W - PAD, FOOT_Y - 20)
-    ctx.stroke()
-
-    wm_layout = _make_pango_layout(ctx, watermark, FONT_SIZE_WM, usable_w)
-    _draw_pango_layout(ctx, wm_layout, PAD, FOOT_Y + 5, WATERMARK_COLOR)
-
-    # ── Swipe arrow (non-final slides) ────────────────────────────────────
-    if show_arrow:
-        arrow_layout = _make_pango_layout(ctx, "❯", FONT_SIZE_HEADER, 100)
-        _draw_pango_layout(ctx, arrow_layout, PAD, FOOT_Y - 10, ARROW_COLOR)
-        print(f"   [imggen] swipe arrow drawn")
+def _load_font(path: str, size: int):
+    from PIL import ImageFont
+    if not os.path.exists(path):
+        print(f"   [imggen] ⚠️  font missing: {path}, using default")
+        return ImageFont.load_default()
+    try:
+        f = ImageFont.truetype(path, size)
+        print(f"   [imggen] ✓ {os.path.basename(path)} {size}px")
+        return f
+    except Exception as e:
+        print(f"   [imggen] ❌ font error: {e}")
+        return ImageFont.load_default()
 
 
-# ---------------------------------------------------------------------------
-# Carousel split (by character count, then Pango decides line breaks)
-# ---------------------------------------------------------------------------
+def _line_height(font, draw) -> int:
+    from PIL import ImageDraw
+    bb = draw.textbbox((0, 0), "אבג", font=font)
+    return (bb[3] - bb[1]) + LINE_SPACING
 
-def _split_into_pages(text: str, ctx, font_size: int, usable_w: int,
-                      text_area_h: int) -> list[str]:
-    """Split text into page-sized chunks based on what fits in text_area_h."""
-    paragraphs = text.split('\n')
-    pages: list[str] = []
-    current_paras: list[str] = []
-
-    for para in paragraphs:
-        test_text = '\n'.join(current_paras + [para]).strip()
-        if not test_text:
-            current_paras.append(para)
-            continue
-        layout = _make_pango_layout(ctx, test_text, font_size, usable_w)
-        h = _layout_height(layout)
-        if h > text_area_h and current_paras:
-            pages.append('\n'.join(current_paras).strip())
-            current_paras = [para]
-        else:
-            current_paras.append(para)
-
-    if current_paras:
-        remaining = '\n'.join(current_paras).strip()
-        if remaining:
-            pages.append(remaining)
-
-    return pages[:10]  # Instagram carousel max 10 slides
-
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
 
 def _clean_text(text: str) -> str:
-    """Remove characters Cairo/Pango can't render (emoji, etc.)."""
-    import re
+    """Strip emoji and non-Hebrew/ASCII characters that PIL can't render."""
     result = []
     for ch in text:
         cp = ord(ch)
-        if (0x0020 <= cp <= 0x007E        # Basic ASCII
-                or 0x05B0 <= cp <= 0x05FF  # Hebrew
-                or 0x2000 <= cp <= 0x206F  # General punctuation
-                or ch in '\n'):
+        if (0x0020 <= cp <= 0x007E or 0x05B0 <= cp <= 0x05FF or ch == '\n'):
             result.append(ch)
         else:
             result.append(' ')
     return re.sub(r'  +', ' ', ''.join(result)).strip()
 
 
+def _wrap_rtl(text: str, font, max_width: int, draw) -> list[str]:
+    """
+    Wrap Hebrew text into lines that fit max_width pixels.
+    Each line is returned REVERSED (line[::-1]) so that when PIL draws it
+    right-aligned, the FIRST Hebrew character sits at the right edge —
+    exactly where a right-to-left reader starts.
+    """
+    paragraphs = text.split('\n')
+    visual_lines: list[str] = []
+
+    for para in paragraphs:
+        if not para.strip():
+            visual_lines.append('')
+            continue
+        words = para.split()
+        current: list[str] = []
+        for word in words:
+            test    = ' '.join(current + [word])
+            bb      = draw.textbbox((0, 0), test[::-1], font=font)
+            line_w  = bb[2] - bb[0]
+            if line_w > max_width and current:
+                visual_lines.append(' '.join(current)[::-1])
+                current = [word]
+            else:
+                current.append(word)
+        if current:
+            visual_lines.append(' '.join(current)[::-1])
+
+    print(f"   [imggen] {len(visual_lines)} line(s) after wrap")
+    for i, l in enumerate(visual_lines):
+        print(f"   [imggen]   [{i+1}] '{l[:50]}'")
+    return visual_lines
+
+
+# ---------------------------------------------------------------------------
+# Slide renderer
+# ---------------------------------------------------------------------------
+
+def _draw_slide(lines: list[str], post_number: int, watermark: str,
+                show_arrow: bool, body_font, bold_font):
+    from PIL import Image, ImageDraw
+
+    img  = Image.new('RGB', CANVAS, BG_COLOR)
+    draw = ImageDraw.Draw(img)
+
+    right_x  = CANVAS[0] - PAD
+
+    # ── Header: post number (right-aligned, plain ASCII — no reversal needed) ─
+    draw.text((right_x, 45), f"#{post_number}",
+              font=bold_font, fill=ACCENT_COLOR, anchor='ra')
+
+    # ── Dividers ──────────────────────────────────────────────────────────────
+    draw.line([(PAD, TOP_Y - 12), (CANVAS[0] - PAD, TOP_Y - 12)],
+              fill=DIVIDER_COLOR, width=2)
+    draw.line([(PAD, FOOT_Y - 20), (CANVAS[0] - PAD, FOOT_Y - 20)],
+              fill=DIVIDER_COLOR, width=2)
+
+    # ── Body text — RIGHT-ALIGNED so Hebrew readers start from the right ──────
+    lh           = _line_height(body_font, draw)
+    text_area_h  = FOOT_Y - 20 - TOP_Y
+    total_text_h = len(lines) * lh
+    y = TOP_Y + max(0, (text_area_h - total_text_h) // 2)
+
+    for line in lines:
+        if line:
+            draw.text((right_x, y), line,
+                      font=body_font, fill=TEXT_COLOR, anchor='ra')
+        y += lh
+
+    # ── Watermark (centered) ──────────────────────────────────────────────────
+    wm_font = _load_font(FONT_BODY, FONT_SIZE_WM)
+    draw.text((CANVAS[0] // 2, FOOT_Y + 10),
+              watermark[::-1],
+              font=wm_font, fill=WATERMARK_COLOR, anchor='mm')
+
+    # ── Swipe arrow on non-final slides ───────────────────────────────────────
+    if show_arrow:
+        draw.text((PAD + 10, FOOT_Y - 10), '❮',
+                  font=body_font, fill=ARROW_COLOR, anchor='la')
+
+    return img
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
 def generate_confession_slides(
     text: str,
     post_number: int,
     watermark: str = "וידויים צבאיים",
-    body_font_path: Optional[str] = None,   # unused — Pango uses system fonts
+    body_font_path: Optional[str] = None,
     bold_font_path:  Optional[str] = None,
 ) -> list:
-    """Generate 1080×1080 Cairo ImageSurface slides. Returns list of surfaces."""
-    import cairo
-    import gi
-    gi.require_version('Pango', '1.0')
-    gi.require_version('PangoCairo', '1.0')
-    from gi.repository import Pango, PangoCairo
+    """Generate 1080×1080 PIL Image slides. Returns list of PIL Images."""
+    from PIL import Image, ImageDraw
 
-    print(f"\n[imggen] === generate_confession_slides (Cairo+Pango) ===")
-    print(f"[imggen] post_number={post_number}, watermark='{watermark}'")
+    print(f"\n[imggen] === generate_confession_slides ===")
+    print(f"[imggen] post #{post_number}  |  font: {os.path.basename(FONT_BODY)}")
 
     text = _clean_text(text)
     print(f"[imggen] text ({len(text)} chars): {text[:100]}")
 
-    usable_w   = CANVAS_W - 2 * PAD
-    text_area_h = FOOT_Y - 20 - TOP_Y
+    bp = body_font_path or FONT_BODY
+    hp = bold_font_path or FONT_BOLD
 
-    # Use a dummy surface to measure text
-    dummy = cairo.ImageSurface(cairo.FORMAT_RGB24, CANVAS_W, CANVAS_H)
-    dummy_ctx = cairo.Context(dummy)
+    usable_w  = CANVAS[0] - 2 * PAD
+    text_area = FOOT_Y - 20 - TOP_Y
 
-    pages = _split_into_pages(text, dummy_ctx, FONT_SIZE_BODY, usable_w, text_area_h)
-    print(f"[imggen] {len(pages)} page(s)")
+    tmp_img  = Image.new('RGB', CANVAS, BG_COLOR)
+    tmp_draw = ImageDraw.Draw(tmp_img)
+
+    # Find the right font size
+    font_size = FONT_SIZE_BODY
+    body_font = _load_font(bp, font_size)
+    lines     = _wrap_rtl(text, body_font, usable_w, tmp_draw)
+    lh        = _line_height(body_font, tmp_draw)
+
+    while len(lines) * lh > text_area and font_size > FONT_SIZE_MIN:
+        font_size -= 2
+        body_font  = _load_font(bp, font_size)
+        lines      = _wrap_rtl(text, body_font, usable_w, tmp_draw)
+        lh         = _line_height(body_font, tmp_draw)
+
+    print(f"[imggen] final font={font_size}px, lines={len(lines)}, "
+          f"total_h={len(lines)*lh}px / {text_area}px available")
+
+    bold_font = _load_font(hp, FONT_SIZE_HEADER)
+
+    # Split into pages (carousel)
+    lines_per_page = max(1, text_area // lh)
+    pages = [lines[i:i+lines_per_page] for i in range(0, len(lines), lines_per_page)]
+    pages = pages[:10]
+    print(f"[imggen] {len(pages)} slide(s)")
 
     slides = []
-    for idx, page_text in enumerate(pages):
+    for idx, page_lines in enumerate(pages):
         is_last = (idx == len(pages) - 1)
-        surface  = cairo.ImageSurface(cairo.FORMAT_RGB24, CANVAS_W, CANVAS_H)
-        _render_slide(surface, page_text, post_number, watermark, show_arrow=not is_last)
-        slides.append(surface)
-        print(f"[imggen] slide {idx+1}/{len(pages)} rendered")
+        slide   = _draw_slide(page_lines, post_number, watermark,
+                               show_arrow=not is_last,
+                               body_font=body_font, bold_font=bold_font)
+        slides.append(slide)
 
     return slides
 
 
 def slides_to_bytes(slides: list) -> list[bytes]:
-    """Convert each Cairo ImageSurface to JPEG bytes."""
-    from PIL import Image as PilImage
     result = []
-    for i, surface in enumerate(slides):
-        # Cairo gives us RGB24 (4 bytes/pixel, no alpha channel used)
-        w, h    = surface.get_width(), surface.get_height()
-        data    = bytes(surface.get_data())
-        # Cairo RGB24 is BGRX — need to swap channels and drop padding
-        img = PilImage.frombuffer('RGBA', (w, h), data, 'raw', 'BGRA', 0, 1)
-        img = img.convert('RGB')
+    for i, img in enumerate(slides):
         buf = io.BytesIO()
         img.save(buf, format='JPEG', quality=92)
         size_kb = buf.tell() // 1024
@@ -278,23 +264,14 @@ def slides_to_bytes(slides: list) -> list[bytes]:
 # Standalone test
 # ---------------------------------------------------------------------------
 if __name__ == '__main__':
-    import sys, os
-    sample = (
-        "אני חייל ביחידה קרבית ואני רוצה לספר על משהו שקרה לי לפני כמה חודשים. "
-        "היינו בסיור לילי כשפתאום שמענו ירי מכיוון לא צפוי. "
-        "כולם שכבו על הקרקע ואני פשוט קפאתי על המקום לשנייה."
-    )
-    if len(sys.argv) > 1:
-        sample = sys.argv[1]
-
-    slides = generate_confession_slides(sample, post_number=15467,
-                                        watermark="וידויים צבאיים")
-    imgs   = slides_to_bytes(slides)
-    out_dir = '/tmp/ig_test'
-    os.makedirs(out_dir, exist_ok=True)
-    for i, data in enumerate(imgs):
-        path = f'{out_dir}/slide_{i+1}.jpg'
-        with open(path, 'wb') as f:
-            f.write(data)
+    import sys
+    sample = (sys.argv[1] if len(sys.argv) > 1 else
+              "עכשיו מדברים שוב על גיוס מילואים לצפון, "
+              "אחרי שהיינו שם כבר חודשיים. "
+              "ומפה מתחיל הצרות האמיתיות.")
+    slides = generate_confession_slides(sample, 15467, "וידויים צבאיים")
+    os.makedirs('/tmp/ig_test', exist_ok=True)
+    for i, slide in enumerate(slides):
+        path = f'/tmp/ig_test/slide_{i+1}.jpg'
+        slide.save(path, quality=92)
         print(f'Saved {path}')
-    print(f'\n✅ {len(slides)} slide(s) in {out_dir}/')
