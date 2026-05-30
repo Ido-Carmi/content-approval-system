@@ -84,14 +84,19 @@ print(f"[imggen] RAQM support: {HAS_RAQM}")
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _load_font(path: str, size: int):
+def _load_font(path: str, size: int, weight: int = 400):
     from PIL import ImageFont
     if not os.path.exists(path):
         print(f"   [imggen] ⚠️  font missing: {path}, using default")
         return ImageFont.load_default()
     try:
         f = ImageFont.truetype(path, size)
-        print(f"   [imggen] ✓ {os.path.basename(path)} {size}px")
+        # Set variable font weight axis if supported (Pillow 9.2+)
+        try:
+            f.set_variation_by_axes([weight])
+            print(f"   [imggen] ✓ {os.path.basename(path)} {size}px weight={weight}")
+        except Exception:
+            print(f"   [imggen] ✓ {os.path.basename(path)} {size}px (fixed weight)")
         return f
     except Exception as e:
         print(f"   [imggen] ❌ font error: {e}")
@@ -274,7 +279,7 @@ def generate_confession_slides(
     print(f"[imggen] final font={font_size}px, lines={len(lines)}, "
           f"total_h={len(lines)*lh}px / {text_area}px available")
 
-    bold_font = _load_font(hp, FONT_SIZE_HEADER)
+    bold_font = _load_font(hp, FONT_SIZE_HEADER, weight=700)
 
     # Split into pages — evenly, splitting at sentence endings when possible
     import math
