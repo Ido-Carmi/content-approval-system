@@ -128,6 +128,27 @@ def _wrap_rtl(text: str, font, max_width: int, draw) -> list[str]:
         words = para.split()
         current: list[str] = []
         for word in words:
+            # If a single word is wider than max_width, break it at character level
+            single_bb = draw.textbbox((0, 0), word if HAS_RAQM else word[::-1], font=font)
+            if single_bb[2] - single_bb[0] > max_width:
+                if current:
+                    done = ' '.join(current)
+                    visual_lines.append(done if HAS_RAQM else done[::-1])
+                    current = []
+                # Break word into chunks that fit
+                chunk = ''
+                for ch in word:
+                    test_chunk = chunk + ch
+                    bb = draw.textbbox((0, 0), test_chunk if HAS_RAQM else test_chunk[::-1], font=font)
+                    if bb[2] - bb[0] > max_width and chunk:
+                        visual_lines.append(chunk if HAS_RAQM else chunk[::-1])
+                        chunk = ch
+                    else:
+                        chunk = test_chunk
+                if chunk:
+                    current = [chunk]
+                continue
+
             test     = ' '.join(current + [word])
             measure  = test if HAS_RAQM else test[::-1]
             bb       = draw.textbbox((0, 0), measure, font=font)
