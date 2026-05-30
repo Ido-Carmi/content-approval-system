@@ -249,53 +249,62 @@ def generate_confession_slides(
 
     bold_font = _load_font(hp, FONT_SIZE_HEADER)
 
-    # Split into pages at paragraph boundaries — never mid-sentence
+    # Split into pages — respect paragraph boundaries, distribute evenly
     import math
+
     lines_per_page = max(1, text_area // lh)
 
-    # Group lines back into paragraphs (empty line = paragraph break)
-    paragraphs: list[list[str]] = []
+    # Reconstruct paragraphs from wrapped lines (blank line = separator)
+    paragraphs: list[list[str]] = []   # list of non-empty paragraph line-lists
     current_para: list[str] = []
     for line in lines:
         if line == '':
             if current_para:
                 paragraphs.append(current_para)
                 current_para = []
-            paragraphs.append([])   # keep blank line as separator
         else:
             current_para.append(line)
     if current_para:
         paragraphs.append(current_para)
 
-    # Pack paragraphs onto slides — only split between paragraphs
+    total_lines = sum(len(p) for p in paragraphs)
+    n_slides    = min(10, max(1, math.ceil(total_lines / lines_per_page)))
+    target      = math.ceil(total_lines / n_slides)   # aim for this many lines/slide
+
+    print(f"[imggen] {total_lines} lines → target {n_slides} slide(s), ~{target} lines each")
+
+    # Greedy fill to target; when a paragraph would overflow, start new slide
     pages: list[list[str]] = []
     current_page: list[str] = []
 
     for para in paragraphs:
-        if not para:                # blank line between paragraphs
-            if current_page:
-                current_page.append('')
-            continue
-        if len(current_page) + len(para) > lines_per_page and current_page:
+        if not current_page:
+            current_page = list(para)
+        elif len(current_page) + len(para) <= target:
+            current_page.append('')    # blank line between paragraphs
+            current_page.extend(para)
+        else:
             pages.append(current_page)
             current_page = list(para)
-        else:
-            current_page.extend(para)
 
     if current_page:
         pages.append(current_page)
 
-    # Safety: if a single paragraph exceeds one slide, force-split it
+    # Force-split any single page that still exceeds lines_per_page
     final_pages: list[list[str]] = []
     for page in pages:
-        if len(page) <= lines_per_page:
+        content = [l for l in page if l]   # count non-blank lines
+        if len(content) <= lines_per_page:
             final_pages.append(page)
         else:
             for i in range(0, len(page), lines_per_page):
-                final_pages.append(page[i:i+lines_per_page])
+                chunk = page[i:i+lines_per_page]
+                if any(l for l in chunk):  # skip blank-only chunks
+                    final_pages.append(chunk)
 
-    pages = final_pages[:10]
-    print(f"[imggen] {len(pages)} slide(s) (paragraph-aware split)")
+    # Remove any accidentally empty pages
+    pages = [p for p in final_pages if any(l for l in p)][:10]
+    print(f"[imggen] {len(pages)} slide(s) (paragraph-aware, even split)")
 
     slides = []
     for idx, page_lines in enumerate(pages):
