@@ -679,194 +679,211 @@ def _watchdog():
         time.sleep(120)
 
 
-def instagram_daily_job(force_all: bool = False):
+def _parse_fb_datetime(s):
+    """Parse an ISO timestamp from Facebook (+0000) or the log (+03:00) to tz-aware dt.
+    Accepts None/empty and returns None."""
+    if not s:
+        return None
+    try:
+        return datetime.strptime(s, '%Y-%m-%dT%H:%M:%S%z')   # FB form: +0000
+    except ValueError:
+        pass
+    try:
+        return datetime.fromisoformat(s)                     # log form: +03:00
+    except ValueError:
+        return None
+
+
+def _instagram_window_start(now, israel_tz, lookback_days: int = 1):
+    """Floor datetime for eligible post targets: walk back from today, skipping
+    Shabbat/holiday days, until `lookback_days` postable days have passed.
+
+    On a normal weekday this is "yesterday 00:00" (the previous day).
+    On Sunday it walks past Fri+Sat to Thursday → covers the whole weekend.
+    After a holiday it walks past the holiday similarly. Posts whose target is
+    older than this floor are treated as stale (historical backfill) and skipped.
     """
-    Daily Instagram job.
-    force_all=True: ignore date window, pick from ALL available unposted entries (for testing).
+    from datetime import time as _dt_time
+    scheduler = extensions.scheduler
+    day     = now.date()
+    counted = 0
+    guard   = 0
+    while counted < lookback_days and guard < 30:
+        guard += 1
+        day = day - timedelta(days=1)
+        if scheduler and scheduler.should_skip_date(day):
+            continue   # weekend / holiday doesn't count as a postable day
+        counted += 1
+    return israel_tz.localize(datetime.combine(day, _dt_time(0, 0)))
+
+
+def _publish_instagram_entry(entry: dict, config: dict, now) -> dict:
+    """Generate slides + caption for one log entry and publish to Instagram.
+    Marks the entry ig_posted on success. Returns the publish result dict.
+    Raises on failure (caller handles)."""
+    fb          = extensions.facebook_handler
+    post_number = entry['post_number']
+
+    # Resolve text: strip "#number\n" prefix, prefer full text from Facebook
+    raw_text = entry.get('text') or ''
+    if raw_text.startswith('#'):
+        parts = raw_text.split('\n', 1)
+        clean_text = parts[1].strip() if len(parts) > 1 else raw_text
+    else:
+        clean_text = raw_text.strip()
+
+    if fb:
+        fb_text = fb.get_post_full_text(entry['fb_post_id'])
+        if fb_text:
+            if fb_text.startswith('#'):
+                p = fb_text.split('\n', 1)
+                fb_text = p[1].strip() if len(p) > 1 else fb_text
+            if len(fb_text) > len(clean_text):
+                clean_text = fb_text
+    print(f"[ig-job]   text for #{post_number}: {len(clean_text)} chars")
+
+    from image_generator import generate_confession_slides, slides_to_bytes
+    watermark = config.get('instagram_watermark', 'וידויים צבאיים')
+    slides       = generate_confession_slides(text=clean_text,
+                                              post_number=post_number,
+                                              watermark=watermark)
+    images_bytes = slides_to_bytes(slides)
+    print(f"[ig-job]   #{post_number}: {len(slides)} slide(s)")
+
+    hashtags = config.get('instagram_hashtags', '').strip()
+    caption  = f"#{post_number}"
+    if hashtags:
+        caption += f"\n.\n.\n{hashtags}"
+
+    public_id = f"confessions/post_{post_number}_{int(now.timestamp())}"
+    result    = extensions.instagram_handler.publish_post(
+        images_bytes=images_bytes, caption=caption, base_public_id=public_id)
+
+    extensions.db.mark_ig_posted(entry['id'])
+    print(f"[ig-job]   ✅ #{post_number} published → {result['ig_post_id']}")
+
+    cfg = load_config()
+    cfg.pop('instagram_failure_count', None)
+    cfg['instagram_last_post'] = now.strftime('%d/%m/%Y %H:%M')
+    save_config(cfg)
+    return result
+
+
+def instagram_engagement_job(force_all: bool = False):
+    """
+    Engagement-based Instagram publisher (runs every ~15 min).
+
+    For every Facebook post in the log that hasn't been posted to Instagram:
+      • compute target time = original FB publish time + delay_hours (default 24h)
+      • once now >= target time, read total engagement (reactions + comments)
+        - if engagement > threshold (default 150) → publish to Instagram
+        - otherwise → mark skipped (don't re-check)
+      • before the target time, leave it pending
+
+    force_all=True (manual test): publish the single highest-engagement pending
+    post immediately, ignoring the timing and threshold.
     """
     print(f"\n{'='*60}")
-    print(f"📸 INSTAGRAM DAILY JOB STARTED")
+    print(f"📸 INSTAGRAM ENGAGEMENT JOB (force_all={force_all})")
     print(f"{'='*60}")
 
     try:
-        # ── Config check ────────────────────────────────────────────────
-        print(f"\n[ig-job] STEP 1: Config check")
         config = load_config()
-        print(f"[ig-job]   instagram_enabled    = {config.get('instagram_enabled', False)}")
-        print(f"[ig-job]   instagram_ig_account = {config.get('instagram_ig_account_id', 'NOT SET')}")
-        print(f"[ig-job]   instagram_watermark  = {config.get('instagram_watermark', 'NOT SET')}")
-        print(f"[ig-job]   instagram_post_time  = {config.get('instagram_post_time', 'NOT SET')}")
-        print(f"[ig-job]   instagram_hashtags   = {config.get('instagram_hashtags', '')[:60]}")
-        print(f"[ig-job]   cloudinary_cloud     = {config.get('cloudinary_cloud_name', 'NOT SET')}")
-        print(f"[ig-job]   fb_token present     = {bool(config.get('facebook_access_token'))}")
-
-        if not config.get('instagram_enabled', False):
-            print(f"[ig-job] ⚠️  instagram_enabled is False — skipping")
+        if not config.get('instagram_enabled', False) and not force_all:
             return
 
         if not extensions.instagram_handler:
-            print(f"[ig-job] ❌ instagram_handler is None — missing config keys?")
-            print(f"[ig-job]    required: instagram_ig_account_id, cloudinary_cloud_name, "
-                  f"cloudinary_api_key, cloudinary_api_secret, facebook_access_token")
+            print(f"[ig-job] ❌ instagram_handler not initialised — check settings")
             return
 
-        print(f"[ig-job] ✅ config OK, handler is ready")
+        fb            = extensions.facebook_handler
+        israel_tz     = pytz.timezone('Asia/Jerusalem')
+        now           = datetime.now(israel_tz)
+        threshold     = int(config.get('instagram_engagement_threshold', 150))
+        delay_hours   = float(config.get('instagram_delay_hours', 24))
+        lookback_days = int(config.get('instagram_lookback_days', 1))
+        print(f"[ig-job] now={now.strftime('%Y-%m-%d %H:%M %Z')}, "
+              f"threshold={threshold}, delay={delay_hours}h, lookback={lookback_days} postable day(s)")
 
-        # ── Date window ──────────────────────────────────────────────────
-        print(f"\n[ig-job] STEP 2: Date window")
-        israel_tz = pytz.timezone('Asia/Jerusalem')
-        now       = datetime.now(israel_tz)
-        weekday   = now.weekday()   # 0=Mon … 6=Sun
-        DAY_NAMES = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
-        print(f"[ig-job]   current Israel time = {now.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-        print(f"[ig-job]   weekday = {weekday} ({DAY_NAMES[weekday]})")
-        print(f"[ig-job]   force_all = {force_all}")
-
-        if force_all:
-            start_iso = '2000-01-01T00:00:00+00:00'
-            end_iso   = now.isoformat()
-            print(f"[ig-job]   FORCE MODE: picking from all available posts")
-        elif weekday == 6:          # Sunday → cover Thu+Fri+Sat
-            end_dt   = now.replace(hour=0, minute=0, second=0, microsecond=0)
-            start_dt = end_dt - timedelta(days=3)
-            start_iso, end_iso = start_dt.isoformat(), end_dt.isoformat()
-            print(f"[ig-job]   Sunday mode: window = {start_dt.date()} (Thu) → {end_dt.date()} (Sun)")
-        else:
-            end_dt   = now.replace(hour=0, minute=0, second=0, microsecond=0)
-            start_dt = end_dt - timedelta(days=1)
-            start_iso, end_iso = start_dt.isoformat(), end_dt.isoformat()
-            print(f"[ig-job]   Daily mode: window = {start_dt.date()} → {end_dt.date()}")
-
-        print(f"[ig-job]   start_iso = {start_iso}")
-        print(f"[ig-job]   end_iso   = {end_iso}")
-
-        # ── Fetch candidates ─────────────────────────────────────────────
-        print(f"\n[ig-job] STEP 3: Fetch candidates from instagram_post_log")
-        candidates = extensions.db.get_best_post_for_instagram(start_iso, end_iso)
-        print(f"[ig-job]   found {len(candidates)} candidate(s) (ig_posted=0 in window)")
-
-        for i, c in enumerate(candidates):
-            print(f"[ig-job]   [{i}] id={c['id']} post=#{c['post_number']} "
-                  f"fb_post_id={c['fb_post_id']} "
-                  f"comment_count={c['comment_count']} "
-                  f"published_at={c['published_at']}")
-
+        candidates = extensions.db.get_pending_instagram_posts()
+        print(f"[ig-job] {len(candidates)} pending post(s)")
         if not candidates:
-            print(f"[ig-job] ℹ️  no candidates — nothing to post")
             return
 
-        # ── Score candidates ─────────────────────────────────────────────
-        print(f"\n[ig-job] STEP 4: Score candidates (reactions + 2×comments)")
+        # ── Test mode: publish the single most-engaging pending post now ──────
+        if force_all:
+            for c in candidates:
+                eng = fb.get_post_engagement(c['fb_post_id']) if fb else {}
+                c['total'] = eng.get('total', 0)
+                print(f"[ig-job]   #{c['post_number']}: engagement={c['total']}")
+            best = max(candidates, key=lambda x: x['total'])
+            print(f"[ig-job] FORCE: publishing #{best['post_number']} "
+                  f"(engagement={best['total']})")
+            _publish_instagram_entry(best, config, now)
+            print(f"{'='*60}\n✅ INSTAGRAM FORCE JOB COMPLETE\n{'='*60}")
+            return
+
+        # ── Don't publish during Shabbat / holidays — defer to next posting day ──
+        scheduler = extensions.scheduler
+        if scheduler and scheduler.should_skip_date(now.date()):
+            print(f"[ig-job] today ({now.date()}) is Shabbat/holiday — deferring all posts")
+            return
+
+        # Eligibility floor: posts whose 24h target is older than this are stale.
+        # Walks back over weekend/holiday so Sunday covers Thu–Sat, etc.
+        window_start = _instagram_window_start(now, israel_tz, lookback_days)
+        print(f"[ig-job] eligibility window start = {window_start.strftime('%Y-%m-%d %H:%M')} "
+              f"(targets older than this are treated as stale)")
+
+        # ── Normal mode: evaluate each post at its 24h mark ──────────────────
+        published = skipped = waiting = 0
         for c in candidates:
-            print(f"[ig-job]   fetching reactions for fb_post_id={c['fb_post_id']}")
-            reactions = 0
-            if extensions.facebook_handler:
+            eng        = fb.get_post_engagement(c['fb_post_id']) if fb else {}
+            created    = eng.get('created_time') or c.get('published_at')
+            created_dt = _parse_fb_datetime(created)
+            total      = eng.get('total', 0)
+
+            if created_dt is None:
+                print(f"[ig-job]   #{c['post_number']}: unparseable time {created!r} — skipping")
+                extensions.db.mark_ig_skipped(c['id'])
+                skipped += 1
+                continue
+
+            target = created_dt + timedelta(hours=delay_hours)
+            if now < target:
+                print(f"[ig-job]   #{c['post_number']}: not yet — target {target.astimezone(israel_tz).strftime('%Y-%m-%d %H:%M')} "
+                      f"(engagement so far {total})")
+                waiting += 1
+                continue
+
+            # Stale: target predates the lookback window (historical backfill) — skip
+            if target < window_start:
+                print(f"[ig-job]   #{c['post_number']}: target {target.astimezone(israel_tz).strftime('%Y-%m-%d %H:%M')} "
+                      f"predates window — stale, skipping")
+                extensions.db.mark_ig_skipped(c['id'])
+                skipped += 1
+                continue
+
+            # Past the 24h mark and within the window — decide on engagement now
+            if total > threshold:
+                print(f"[ig-job]   #{c['post_number']}: engagement {total} > {threshold} → publishing")
                 try:
-                    reactions = extensions.facebook_handler.get_post_reactions_count(c['fb_post_id'])
-                    print(f"[ig-job]     reactions = {reactions}")
-                except Exception as re:
-                    print(f"[ig-job]     ⚠️  reactions fetch failed: {re} — using 0")
+                    _publish_instagram_entry(c, config, now)
+                    published += 1
+                except Exception as pub_exc:
+                    print(f"[ig-job]   ❌ #{c['post_number']} publish failed: {pub_exc}")
+                    traceback.print_exc()
             else:
-                print(f"[ig-job]     ⚠️  facebook_handler not available — reactions = 0")
-            c['reactions'] = reactions
-            c['score']     = reactions + c['comment_count'] * 2
-            print(f"[ig-job]   post #{c['post_number']}: reactions={reactions}, "
-                  f"comments={c['comment_count']}, score={c['score']}")
-
-        best = max(candidates, key=lambda x: x['score'])
-        print(f"\n[ig-job]   ✅ best post: #{best['post_number']} "
-              f"(id={best['id']}, score={best['score']})")
-        print(f"[ig-job]   raw text: {best['text'][:120]}")
-
-        # Strip the "#number\n" prefix that post_tracking stores as part of the text
-        raw_text = best['text'] or ''
-        if raw_text.startswith('#'):
-            lines = raw_text.split('\n', 1)
-            clean_text = lines[1].strip() if len(lines) > 1 else raw_text
-        else:
-            clean_text = raw_text.strip()
-        print(f"[ig-job]   stored text ({len(clean_text)} chars): {clean_text[:80]}")
-
-        # Always fetch full post text from Facebook — DB text may be truncated
-        if extensions.facebook_handler:
-            print(f"[ig-job]   fetching full text from Facebook for {best['fb_post_id']}")
-            fb_text = extensions.facebook_handler.get_post_full_text(best['fb_post_id'])
-            if fb_text:
-                # Strip "#number\n" prefix if present
-                if fb_text.startswith('#'):
-                    parts = fb_text.split('\n', 1)
-                    fb_text = parts[1].strip() if len(parts) > 1 else fb_text
-                if len(fb_text) > len(clean_text):
-                    print(f"[ig-job]   ✅ full text from FB: {len(fb_text)} chars "
-                          f"(was {len(clean_text)} chars in DB)")
-                    clean_text = fb_text
-                else:
-                    print(f"[ig-job]   FB text same length ({len(fb_text)} chars) — using DB text")
-            else:
-                print(f"[ig-job]   ⚠️  could not fetch from FB — using stored text")
-
-        print(f"[ig-job]   final text ({len(clean_text)} chars): {clean_text[:120]}")
-
-        # ── Image generation ─────────────────────────────────────────────
-        print(f"\n[ig-job] STEP 5: Generate image slides")
-        from image_generator import generate_confession_slides, slides_to_bytes
-        watermark = config.get('instagram_watermark', 'וידויים צבאיים')
-        print(f"[ig-job]   watermark = '{watermark}'")
-
-        slides = generate_confession_slides(
-            text=clean_text,
-            post_number=best['post_number'],
-            watermark=watermark,
-        )
-        print(f"[ig-job]   ✅ {len(slides)} slide(s) generated")
-
-        images_bytes = slides_to_bytes(slides)
-        total_kb = sum(len(b) for b in images_bytes) // 1024
-        print(f"[ig-job]   total size: {total_kb} KB across {len(images_bytes)} image(s)")
-
-        # ── Caption (number + hashtags only — body text is in the image) ────────
-        print(f"\n[ig-job] STEP 6: Build caption")
-        hashtags = config.get('instagram_hashtags', '').strip()
-        caption  = f"#{best['post_number']}"
-        if hashtags:
-            caption += f"\n.\n.\n{hashtags}"
-            print(f"[ig-job]   hashtags: {hashtags[:60]}")
-        print(f"[ig-job]   caption total length: {len(caption)} chars")
-        print(f"[ig-job]   caption preview:\n---\n{caption[:200]}\n---")
-
-        # ── Publish ──────────────────────────────────────────────────────
-        print(f"\n[ig-job] STEP 7: Publish to Instagram")
-        public_id = f"confessions/post_{best['post_number']}_{int(now.timestamp())}"
-        print(f"[ig-job]   public_id = {public_id}")
-
-        result = extensions.instagram_handler.publish_post(
-            images_bytes=images_bytes,
-            caption=caption,
-            base_public_id=public_id,
-        )
-
-        # ── Mark as posted ───────────────────────────────────────────────
-        print(f"\n[ig-job] STEP 8: Mark log entry {best['id']} as ig_posted")
-        extensions.db.mark_ig_posted(best['id'])
-        print(f"[ig-job]   ✅ marked")
-
-        # ── Save last-post timestamp ─────────────────────────────────────
-        cfg = load_config()
-        cfg.pop('instagram_failure_count', None)
-        cfg['instagram_last_post'] = now.strftime('%d/%m/%Y %H:%M')
-        save_config(cfg)
-        print(f"[ig-job]   saved instagram_last_post = {cfg['instagram_last_post']}")
+                print(f"[ig-job]   #{c['post_number']}: engagement {total} ≤ {threshold} → skip")
+                extensions.db.mark_ig_skipped(c['id'])
+                skipped += 1
 
         print(f"\n{'='*60}")
-        print(f"✅ INSTAGRAM JOB COMPLETE")
-        print(f"   ig_post_id = {result['ig_post_id']}")
-        print(f"   slides     = {result['slides']}")
+        print(f"✅ INSTAGRAM JOB DONE — published={published}, skipped={skipped}, waiting={waiting}")
         print(f"{'='*60}\n")
 
     except Exception as e:
-        print(f"\n{'='*60}")
-        print(f"❌ INSTAGRAM JOB FAILED: {e}")
-        print(f"{'='*60}")
+        print(f"\n❌ INSTAGRAM JOB FAILED: {e}")
         traceback.print_exc()
         try:
             cfg   = load_config()
@@ -875,7 +892,7 @@ def instagram_daily_job(force_all: bool = False):
             save_config(cfg)
             if count >= 3 and cfg.get('notifications_enabled') and cfg.get('notification_emails'):
                 send_notification_email(
-                    f"🚨 Instagram פוסט יומי נכשל {count} פעמים ברצף",
+                    f"🚨 Instagram פוסט נכשל {count} פעמים ברצף",
                     f"<html><body style='direction:rtl;font-family:Arial;padding:20px'>"
                     f"<h3>שגיאה בפרסום ל-Instagram</h3>"
                     f"<p><code>{e}</code></p>"
@@ -885,6 +902,11 @@ def instagram_daily_job(force_all: bool = False):
                 )
         except Exception:
             pass
+
+
+# Backwards-compatible alias (app.py route + scheduler still reference this name)
+def instagram_daily_job(force_all: bool = False):
+    return instagram_engagement_job(force_all=force_all)
 
 
 def start_scheduler():
@@ -919,15 +941,10 @@ def start_scheduler():
     schedule.every(6).hours.do(check_and_send_notifications)
     schedule.every(1).minutes.do(auto_comment_job)
 
-    ig_cfg = load_config()
-    ig_time = ig_cfg.get('instagram_post_time', '12:00')
-    try:
-        ig_h, ig_m = map(int, ig_time.split(':'))
-        ig_local_h = (ig_h - offset) % 24
-        schedule.every().day.at(f"{ig_local_h:02d}:{ig_m:02d}").do(instagram_daily_job)
-        print(f"   - Instagram daily job at {ig_time} Israel time ({ig_local_h:02d}:{ig_m:02d} server time)")
-    except Exception as e:
-        print(f"⚠️  Instagram schedule error: {e}")
+    # Instagram engagement job — hourly. Publishes each post ~24h after its FB
+    # publish time, skipping Shabbat/holidays (deferred to the next posting day).
+    schedule.every().hour.do(instagram_engagement_job)
+    print(f"   - Instagram engagement job every hour")
 
     # ── Reconciler thread ────────────────────────────────────────────────────
     from reconciler import reconciler_loop

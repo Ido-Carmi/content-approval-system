@@ -215,6 +215,30 @@ class FacebookHandler:
             pass
         return ''
 
+    def get_post_engagement(self, post_id: str) -> dict:
+        """Fetch reactions + comments totals and the original publish time in one call.
+        Returns {'reactions', 'comments', 'total', 'created_time'}. Zeros on error."""
+        url = f"{self.api_base}/{post_id}"
+        params = {
+            'access_token': self.access_token,
+            'fields': 'created_time,reactions.summary(total_count),comments.summary(total_count)',
+        }
+        try:
+            resp = requests.get(url, params=params, timeout=10)
+            if resp.status_code == 200:
+                d = resp.json()
+                reactions = d.get('reactions', {}).get('summary', {}).get('total_count', 0)
+                comments  = d.get('comments', {}).get('summary', {}).get('total_count', 0)
+                return {
+                    'reactions':    reactions,
+                    'comments':     comments,
+                    'total':        reactions + comments,
+                    'created_time': d.get('created_time', ''),
+                }
+        except Exception:
+            pass
+        return {'reactions': 0, 'comments': 0, 'total': 0, 'created_time': ''}
+
     def get_post_reactions_count(self, post_id: str) -> int:
         """Return total reaction count for a published post. Returns 0 on any error."""
         url = f"{self.api_base}/{post_id}/reactions"

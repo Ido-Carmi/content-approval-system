@@ -249,6 +249,12 @@ class Database:
         cursor.execute(
             'CREATE INDEX IF NOT EXISTS idx_ig_log_published ON instagram_post_log(published_at)'
         )
+        # ig_skipped: 1 = evaluated at the 24h mark but engagement was below threshold
+        try:
+            cursor.execute('ALTER TABLE instagram_post_log ADD COLUMN ig_skipped INTEGER DEFAULT 0')
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass  # Column already exists
 
         conn.commit()
         conn.close()
@@ -2167,6 +2173,26 @@ class Database:
         conn.close()
         return [dict(r) for r in rows]
 
+    def get_pending_instagram_posts(self) -> List[Dict]:
+        """Return all instagram_post_log entries not yet posted or skipped.
+        Each row includes comment_count from hidden_comments (fallback only —
+        the job fetches authoritative engagement from Facebook)."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT l.id, l.fb_post_id, l.post_number, l.text, l.published_at,
+                   COUNT(hc.id) AS comment_count
+            FROM instagram_post_log l
+            LEFT JOIN hidden_comments hc ON hc.post_id = l.fb_post_id
+            WHERE l.ig_posted = 0
+              AND COALESCE(l.ig_skipped, 0) = 0
+            GROUP BY l.id
+            ORDER BY l.published_at ASC
+        ''')
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+
     def mark_ig_posted(self, log_id: int):
         """Mark an instagram_post_log entry as posted."""
         conn = self.get_connection()
@@ -2174,6 +2200,17 @@ class Database:
         cursor.execute(
             'UPDATE instagram_post_log SET ig_posted=1, ig_posted_at=? WHERE id=?',
             (datetime.now().isoformat(), log_id)
+        )
+        conn.commit()
+        conn.close()
+
+    def mark_ig_skipped(self, log_id: int):
+        """Mark an entry as evaluated-but-below-threshold so it isn't re-checked."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            'UPDATE instagram_post_log SET ig_skipped=1 WHERE id=?',
+            (log_id,)
         )
         conn.commit()
         conn.close()

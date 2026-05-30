@@ -251,11 +251,19 @@
                             <small class="text-muted">מזהה חשבון ה-IG Business (שונה מ-Page ID של פייסבוק)</small>
                         </div>
 
-                        <div class="mb-3">
-                            <label class="form-label fw-bold">שעת פרסום (שעון ישראל)</label>
-                            <input type="time" name="instagram_post_time" class="form-control"
-                                   value="{{ config.instagram_post_time or '12:00' }}">
-                            <small class="text-muted">ברירת מחדל 12:00. שינוי שעה דורש הפעלה מחדש של השרת.</small>
+                        <div class="row">
+                            <div class="col-6 mb-3">
+                                <label class="form-label fw-bold">סף מעורבות (לייקים+תגובות)</label>
+                                <input type="number" name="instagram_engagement_threshold" class="form-control"
+                                       min="0" value="{{ config.instagram_engagement_threshold or 150 }}">
+                                <small class="text-muted">פוסט יפורסם רק אם המעורבות מעל סף זה.</small>
+                            </div>
+                            <div class="col-6 mb-3">
+                                <label class="form-label fw-bold">השהיה (שעות אחרי הפרסום בפייסבוק)</label>
+                                <input type="number" name="instagram_delay_hours" class="form-control"
+                                       min="0" step="0.5" value="{{ config.instagram_delay_hours or 24 }}">
+                                <small class="text-muted">הפוסט יעלה לאינסטגרם בדיוק כעבור זמן זה.</small>
+                            </div>
                         </div>
 
                         <div class="mb-3">

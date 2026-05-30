@@ -988,7 +988,8 @@ def settings_page():
             'webhook_batch_timeout_minutes':  int(request.form.get('webhook_batch_timeout_minutes', 5)),
             'instagram_enabled':             request.form.get('instagram_enabled') == 'on',
             'instagram_ig_account_id':       request.form.get('instagram_ig_account_id', '').strip(),
-            'instagram_post_time':           request.form.get('instagram_post_time', '12:00'),
+            'instagram_engagement_threshold': int(request.form.get('instagram_engagement_threshold', 150) or 150),
+            'instagram_delay_hours':         float(request.form.get('instagram_delay_hours', 24) or 24),
             'instagram_hashtags':            request.form.get('instagram_hashtags', '').strip(),
             'instagram_watermark':           request.form.get('instagram_watermark', 'וידויים צבאיים').strip(),
         })
@@ -1062,7 +1063,7 @@ def instagram_backfill():
     if reset:
         conn   = extensions.db.get_connection()
         cursor = conn.cursor()
-        cursor.execute('UPDATE instagram_post_log SET ig_posted=0, ig_posted_at=NULL')
+        cursor.execute('UPDATE instagram_post_log SET ig_posted=0, ig_posted_at=NULL, ig_skipped=0')
         reset_count = cursor.rowcount
         conn.commit()
         conn.close()
