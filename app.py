@@ -1074,7 +1074,7 @@ def instagram_post_now():
         cfg['instagram_enabled'] = True
         save_config(cfg)
         try:
-            instagram_daily_job()
+            instagram_daily_job(force_all=True)
         finally:
             cfg2 = load_config()
             cfg2['instagram_enabled'] = was_enabled

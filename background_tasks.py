@@ -679,12 +679,10 @@ def _watchdog():
         time.sleep(120)
 
 
-def instagram_daily_job():
+def instagram_daily_job(force_all: bool = False):
     """
-    Daily Instagram job:
-    1. Determine date window (Sun → Thu+Fri+Sat; other days → yesterday).
-    2. Fetch candidates, score by FB reactions + 2×comments, pick highest.
-    3. Generate Hebrew image slides, upload to Cloudinary, publish to Instagram.
+    Daily Instagram job.
+    force_all=True: ignore date window, pick from ALL available unposted entries (for testing).
     """
     print(f"\n{'='*60}")
     print(f"📸 INSTAGRAM DAILY JOB STARTED")
@@ -722,24 +720,29 @@ def instagram_daily_job():
         DAY_NAMES = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
         print(f"[ig-job]   current Israel time = {now.strftime('%Y-%m-%d %H:%M:%S %Z')}")
         print(f"[ig-job]   weekday = {weekday} ({DAY_NAMES[weekday]})")
+        print(f"[ig-job]   force_all = {force_all}")
 
-        if weekday == 6:            # Sunday → cover Thu+Fri+Sat
+        if force_all:
+            start_iso = '2000-01-01T00:00:00+00:00'
+            end_iso   = now.isoformat()
+            print(f"[ig-job]   FORCE MODE: picking from all available posts")
+        elif weekday == 6:          # Sunday → cover Thu+Fri+Sat
             end_dt   = now.replace(hour=0, minute=0, second=0, microsecond=0)
             start_dt = end_dt - timedelta(days=3)
+            start_iso, end_iso = start_dt.isoformat(), end_dt.isoformat()
             print(f"[ig-job]   Sunday mode: window = {start_dt.date()} (Thu) → {end_dt.date()} (Sun)")
         else:
             end_dt   = now.replace(hour=0, minute=0, second=0, microsecond=0)
             start_dt = end_dt - timedelta(days=1)
+            start_iso, end_iso = start_dt.isoformat(), end_dt.isoformat()
             print(f"[ig-job]   Daily mode: window = {start_dt.date()} → {end_dt.date()}")
 
-        print(f"[ig-job]   start_iso = {start_dt.isoformat()}")
-        print(f"[ig-job]   end_iso   = {end_dt.isoformat()}")
+        print(f"[ig-job]   start_iso = {start_iso}")
+        print(f"[ig-job]   end_iso   = {end_iso}")
 
         # ── Fetch candidates ─────────────────────────────────────────────
         print(f"\n[ig-job] STEP 3: Fetch candidates from instagram_post_log")
-        candidates = extensions.db.get_best_post_for_instagram(
-            start_dt.isoformat(), end_dt.isoformat()
-        )
+        candidates = extensions.db.get_best_post_for_instagram(start_iso, end_iso)
         print(f"[ig-job]   found {len(candidates)} candidate(s) (ig_posted=0 in window)")
 
         for i, c in enumerate(candidates):
