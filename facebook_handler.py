@@ -203,20 +203,36 @@ class FacebookHandler:
         else:
             raise Exception(f"Facebook API error: {response.text}")
 
+    def get_post_reactions_count(self, post_id: str) -> int:
+        """Return total reaction count for a published post. Returns 0 on any error."""
+        url = f"{self.api_base}/{post_id}/reactions"
+        params = {
+            'access_token': self.access_token,
+            'summary':      'total_count',
+            'limit':        '0',
+        }
+        try:
+            resp = requests.get(url, params=params, timeout=10)
+            if resp.status_code == 200:
+                return resp.json().get('summary', {}).get('total_count', 0)
+        except Exception:
+            pass
+        return 0
+
     def test_connection(self) -> bool:
         """
         Test if the Page Access Token is valid
-        
+
         Returns:
             True if connection successful
         """
         url = f"{self.api_base}/{self.page_id}"
-        
+
         params = {
             'access_token': self.access_token,
             'fields': 'id,name'
         }
-        
+
         response = requests.get(url, params=params)
-        
+
         return response.status_code == 200

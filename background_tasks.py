@@ -679,6 +679,112 @@ def _watchdog():
         time.sleep(120)
 
 
+def instagram_daily_job():
+    """
+    Daily Instagram job:
+    1. Determine date window (Sun → Thu+Fri+Sat; other days → yesterday).
+    2. Fetch candidates, score by FB reactions + 2×comments, pick highest.
+    3. Generate Hebrew image slides, upload to Cloudinary, publish to Instagram.
+    """
+    try:
+        config = load_config()
+
+        if not config.get('instagram_enabled', False):
+            return
+
+        if not extensions.instagram_handler:
+            print("⚠️  Instagram: handler not initialised — check settings")
+            return
+
+        israel_tz = pytz.timezone('Asia/Jerusalem')
+        now       = datetime.now(israel_tz)
+        weekday   = now.weekday()   # 0=Mon … 6=Sun
+
+        if weekday == 6:            # Sunday → cover Thu+Fri+Sat
+            end_dt   = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            start_dt = end_dt - timedelta(days=3)
+            print(f"📸 Instagram: Sunday run — window {start_dt.date()} → {end_dt.date()}")
+        else:
+            end_dt   = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            start_dt = end_dt - timedelta(days=1)
+            print(f"📸 Instagram: daily run — window {start_dt.date()}")
+
+        candidates = extensions.db.get_best_post_for_instagram(
+            start_dt.isoformat(), end_dt.isoformat()
+        )
+
+        if not candidates:
+            print(f"ℹ️  Instagram: no published posts in window")
+            return
+
+        # Score each candidate
+        for c in candidates:
+            reactions = 0
+            if extensions.facebook_handler:
+                reactions = extensions.facebook_handler.get_post_reactions_count(c['fb_post_id'])
+            c['score'] = reactions + c['comment_count'] * 2
+
+        best = max(candidates, key=lambda x: x['score'])
+        print(f"✅ Instagram: picked post #{best['post_number']} "
+              f"(score={best['score']}, reactions+comments)")
+
+        # Generate slides
+        from image_generator import generate_confession_slides, slides_to_bytes
+        watermark = config.get('instagram_watermark', 'וידויים צבאיים')
+        slides    = generate_confession_slides(
+            text=best['text'],
+            post_number=best['post_number'],
+            watermark=watermark,
+        )
+        images_bytes = slides_to_bytes(slides)
+        print(f"   Generated {len(slides)} slide(s)")
+
+        # Build caption
+        caption  = f"#{best['post_number']}\n{best['text']}"
+        hashtags = config.get('instagram_hashtags', '').strip()
+        if hashtags:
+            caption += f"\n.\n.\n{hashtags}"
+
+        public_id = f"confessions/post_{best['post_number']}_{int(now.timestamp())}"
+        result    = extensions.instagram_handler.publish_post(
+            images_bytes=images_bytes,
+            caption=caption,
+            base_public_id=public_id,
+        )
+
+        extensions.db.mark_ig_posted(best['id'])
+
+        # Reset failure counter, record last post time
+        cfg = load_config()
+        cfg.pop('instagram_failure_count', None)
+        cfg['instagram_last_post'] = now.strftime('%d/%m/%Y %H:%M')
+        save_config(cfg)
+
+        print(f"✅ Instagram post published: {result['ig_post_id']} "
+              f"({result['slides']} slide(s))")
+
+    except Exception as e:
+        print(f"❌ Instagram daily job error: {e}")
+        traceback.print_exc()
+        try:
+            cfg   = load_config()
+            count = cfg.get('instagram_failure_count', 0) + 1
+            cfg['instagram_failure_count'] = count
+            save_config(cfg)
+            if count >= 3 and cfg.get('notifications_enabled') and cfg.get('notification_emails'):
+                send_notification_email(
+                    f"🚨 Instagram פוסט יומי נכשל {count} פעמים ברצף",
+                    f"<html><body style='direction:rtl;font-family:Arial;padding:20px'>"
+                    f"<h3>שגיאה בפרסום ל-Instagram</h3>"
+                    f"<p><code>{e}</code></p>"
+                    f"<p>בדוק הגדרות Instagram ו-Cloudinary בהגדרות המערכת.</p>"
+                    f"</body></html>",
+                    cfg['notification_emails'],
+                )
+        except Exception:
+            pass
+
+
 def start_scheduler():
     """Set up scheduled jobs and start the scheduler + watchdog threads."""
     global _scheduler_thread
@@ -710,6 +816,16 @@ def start_scheduler():
 
     schedule.every(6).hours.do(check_and_send_notifications)
     schedule.every(1).minutes.do(auto_comment_job)
+
+    ig_cfg = load_config()
+    ig_time = ig_cfg.get('instagram_post_time', '12:00')
+    try:
+        ig_h, ig_m = map(int, ig_time.split(':'))
+        ig_local_h = (ig_h - offset) % 24
+        schedule.every().day.at(f"{ig_local_h:02d}:{ig_m:02d}").do(instagram_daily_job)
+        print(f"   - Instagram daily job at {ig_time} Israel time ({ig_local_h:02d}:{ig_m:02d} server time)")
+    except Exception as e:
+        print(f"⚠️  Instagram schedule error: {e}")
 
     # ── Reconciler thread ────────────────────────────────────────────────────
     from reconciler import reconciler_loop

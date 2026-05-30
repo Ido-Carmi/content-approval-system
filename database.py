@@ -232,9 +232,27 @@ class Database:
             )
         ''')
         
+        # Instagram post log — lightweight record of published posts for the IG daily job.
+        # Kept separate so it survives cleanup_old_entries() which deletes published entries.
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS instagram_post_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fb_post_id TEXT UNIQUE NOT NULL,
+                post_number INTEGER,
+                text TEXT NOT NULL,
+                published_at TEXT NOT NULL,
+                ig_posted INTEGER DEFAULT 0,
+                ig_posted_at TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        cursor.execute(
+            'CREATE INDEX IF NOT EXISTS idx_ig_log_published ON instagram_post_log(published_at)'
+        )
+
         conn.commit()
         conn.close()
-    
+
     def add_entry(self, timestamp: str, text: str) -> bool:
         """
         Add a new entry if timestamp hasn't been processed
@@ -1850,10 +1868,23 @@ class Database:
 
     def mark_published_if_past(self, cutoff_iso: str) -> int:
         """Mark scheduled+linked posts whose scheduled_time < cutoff as published.
+        Also logs newly published posts to instagram_post_log.
         Returns count of rows updated."""
         conn = self.get_connection()
         cursor = conn.cursor()
         now_iso = datetime.now().isoformat()
+
+        # Capture rows BEFORE the update so we can log them
+        cursor.execute('''
+            SELECT facebook_post_id, post_number, text, scheduled_time
+            FROM entries
+            WHERE status = 'scheduled'
+              AND facebook_post_id IS NOT NULL
+              AND scheduled_time IS NOT NULL
+              AND scheduled_time < ?
+        ''', (cutoff_iso,))
+        to_publish = cursor.fetchall()
+
         cursor.execute('''
             UPDATE entries
             SET status = 'published',
@@ -1864,6 +1895,16 @@ class Database:
               AND scheduled_time < ?
         ''', (now_iso, cutoff_iso))
         count = cursor.rowcount
+
+        # Log to instagram_post_log (INSERT OR IGNORE so restarts don't double-log)
+        for row in to_publish:
+            cursor.execute('''
+                INSERT OR IGNORE INTO instagram_post_log
+                    (fb_post_id, post_number, text, published_at)
+                VALUES (?, ?, ?, ?)
+            ''', (row['facebook_post_id'], row['post_number'], row['text'],
+                  row['scheduled_time']))
+
         conn.commit()
         conn.close()
         return count
@@ -2100,4 +2141,40 @@ class Database:
         rows = cursor.fetchall()
         conn.close()
         return [dict(row) for row in rows]
+
+    # -------------------------------------------------------------------------
+    # Instagram helpers
+    # -------------------------------------------------------------------------
+
+    def get_best_post_for_instagram(self, start_iso: str, end_iso: str) -> List[Dict]:
+        """Return all unposted instagram_post_log entries in [start_iso, end_iso).
+        Includes comment_count from hidden_comments.
+        Caller scores each entry (reactions + comment_count*2) and picks the max."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT l.id, l.fb_post_id, l.post_number, l.text, l.published_at,
+                   COUNT(hc.id) AS comment_count
+            FROM instagram_post_log l
+            LEFT JOIN hidden_comments hc ON hc.post_id = l.fb_post_id
+            WHERE l.published_at >= ?
+              AND l.published_at <  ?
+              AND l.ig_posted = 0
+            GROUP BY l.id
+            ORDER BY l.published_at ASC
+        ''', (start_iso, end_iso))
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+
+    def mark_ig_posted(self, log_id: int):
+        """Mark an instagram_post_log entry as posted."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            'UPDATE instagram_post_log SET ig_posted=1, ig_posted_at=? WHERE id=?',
+            (datetime.now().isoformat(), log_id)
+        )
+        conn.commit()
+        conn.close()
 

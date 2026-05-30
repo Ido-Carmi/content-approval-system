@@ -956,10 +956,13 @@ def settings_page():
         config = load_config()
 
         secret_fields = {
-            'facebook_access_token': request.form.get('facebook_access_token', ''),
-            'facebook_app_secret':   request.form.get('facebook_app_secret', ''),
-            'resend_api_key':        request.form.get('resend_api_key', ''),
-            'openai_api_key':        request.form.get('openai_api_key', ''),
+            'facebook_access_token':  request.form.get('facebook_access_token', ''),
+            'facebook_app_secret':    request.form.get('facebook_app_secret', ''),
+            'resend_api_key':         request.form.get('resend_api_key', ''),
+            'openai_api_key':         request.form.get('openai_api_key', ''),
+            'cloudinary_cloud_name':  request.form.get('cloudinary_cloud_name', ''),
+            'cloudinary_api_key':     request.form.get('cloudinary_api_key', ''),
+            'cloudinary_api_secret':  request.form.get('cloudinary_api_secret', ''),
         }
 
         config.update({
@@ -983,6 +986,11 @@ def settings_page():
             'webhook_verify_token':           request.form.get('webhook_verify_token', ''),
             'webhook_batch_size':             int(request.form.get('webhook_batch_size', 10)),
             'webhook_batch_timeout_minutes':  int(request.form.get('webhook_batch_timeout_minutes', 5)),
+            'instagram_enabled':             request.form.get('instagram_enabled') == 'on',
+            'instagram_ig_account_id':       request.form.get('instagram_ig_account_id', '').strip(),
+            'instagram_post_time':           request.form.get('instagram_post_time', '12:00'),
+            'instagram_hashtags':            request.form.get('instagram_hashtags', '').strip(),
+            'instagram_watermark':           request.form.get('instagram_watermark', 'וידויים צבאיים').strip(),
         })
 
         for key, value in secret_fields.items():
@@ -1034,7 +1042,8 @@ def settings_page():
     config = load_config()
     current_number = extensions.db.get_current_post_number()
 
-    secret_keys = ['facebook_access_token', 'facebook_app_secret', 'resend_api_key', 'openai_api_key']
+    secret_keys = ['facebook_access_token', 'facebook_app_secret', 'resend_api_key', 'openai_api_key',
+                   'cloudinary_cloud_name', 'cloudinary_api_key', 'cloudinary_api_secret']
     for key in secret_keys:
         if config.get(key):
             config[key + '_set'] = True
@@ -1043,6 +1052,16 @@ def settings_page():
             config[key + '_set'] = False
 
     return render_template('settings.html', config=config, current_number=current_number)
+
+@app.route('/instagram-post-now', methods=['POST'])
+def instagram_post_now():
+    """Manually trigger the Instagram daily job for testing."""
+    from background_tasks import instagram_daily_job
+    import threading
+    threading.Thread(target=instagram_daily_job, daemon=True).start()
+    flash('Instagram job started — check logs', 'info')
+    return redirect(url_for('settings_page'))
+
 
 @app.route('/set_post_number', methods=['POST'])
 def set_post_number():

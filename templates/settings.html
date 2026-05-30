@@ -229,6 +229,88 @@
                 </div>
             </div>
 
+            <!-- Instagram Daily Post -->
+            <div class="card mb-3">
+                <div class="card-header" data-bs-toggle="collapse" data-bs-target="#instagramSettings" style="cursor: pointer;">
+                    <h5 class="mb-0"><i class="bi bi-instagram"></i> Instagram — פוסט יומי</h5>
+                </div>
+                <div id="instagramSettings" class="collapse">
+                    <div class="card-body">
+
+                        <div class="form-check mb-3">
+                            <input type="checkbox" name="instagram_enabled" class="form-check-input"
+                                   id="igEnabled" {{' checked' if config.instagram_enabled}}>
+                            <label class="form-check-label" for="igEnabled">פרסם פוסט יומי ל-Instagram</label>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Instagram Business Account ID</label>
+                            <input type="text" name="instagram_ig_account_id" class="form-control"
+                                   value="{{ config.instagram_ig_account_id or '' }}"
+                                   placeholder="17841XXXXXXXXX">
+                            <small class="text-muted">מזהה חשבון ה-IG Business (שונה מ-Page ID של פייסבוק)</small>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">שעת פרסום (שעון ישראל)</label>
+                            <input type="time" name="instagram_post_time" class="form-control"
+                                   value="{{ config.instagram_post_time or '12:00' }}">
+                            <small class="text-muted">ברירת מחדל 12:00. שינוי שעה דורש הפעלה מחדש של השרת.</small>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">האשטאגים לפוסט</label>
+                            <textarea name="instagram_hashtags" class="form-control" rows="3"
+                                      placeholder="#וידויים #צבא #idf" dir="rtl">{{ config.instagram_hashtags or '' }}</textarea>
+                            <small class="text-muted">יתווספו בסוף הפוסט. כל שורה / מופרד ברווחים.</small>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">טקסט Watermark בתמונה</label>
+                            <input type="text" name="instagram_watermark" class="form-control" dir="rtl"
+                                   value="{{ config.instagram_watermark or 'וידויים צבאיים' }}">
+                        </div>
+
+                        <hr>
+                        <h6 class="text-muted mb-3">Cloudinary — אחסון תמונות</h6>
+                        <small class="text-muted d-block mb-3">נדרש לפרסום תמונות. חשבון חינמי ב-<a href="https://cloudinary.com" target="_blank">cloudinary.com</a></small>
+
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Cloud Name</label>
+                            <input type="password" name="cloudinary_cloud_name" class="form-control" autocomplete="off"
+                                   placeholder="{% if config.cloudinary_cloud_name_set %}מוגדר ✓{% else %}my-cloud-name{% endif %}">
+                            {% if config.cloudinary_cloud_name_set %}<small class="text-success"><i class="bi bi-check-circle"></i> מוגדר</small>{% endif %}
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">API Key</label>
+                            <input type="password" name="cloudinary_api_key" class="form-control" autocomplete="off"
+                                   placeholder="{% if config.cloudinary_api_key_set %}מוגדר ✓{% else %}123456789012345{% endif %}">
+                            {% if config.cloudinary_api_key_set %}<small class="text-success"><i class="bi bi-check-circle"></i> מוגדר</small>{% endif %}
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">API Secret</label>
+                            <input type="password" name="cloudinary_api_secret" class="form-control" autocomplete="off"
+                                   placeholder="{% if config.cloudinary_api_secret_set %}מוגדר ✓{% else %}xxxxxxxxxxxxxxxx{% endif %}">
+                            {% if config.cloudinary_api_secret_set %}<small class="text-success"><i class="bi bi-check-circle"></i> מוגדר</small>{% endif %}
+                        </div>
+
+                        {% if config.instagram_last_post %}
+                        <div class="alert alert-success py-1 mb-3">
+                            <small><i class="bi bi-check-circle"></i> פוסט אחרון: {{ config.instagram_last_post }}</small>
+                        </div>
+                        {% endif %}
+
+                        <form method="POST" action="/instagram-post-now">
+                            <button type="submit" class="btn btn-outline-primary btn-sm">
+                                <i class="bi bi-instagram"></i> הרץ עכשיו (בדיקה)
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
             <!-- Advanced Settings -->
             <div class="card mb-3">
                 <div class="card-header bg-danger text-white" data-bs-toggle="collapse" data-bs-target="#dangerSettings" style="cursor: pointer;">

@@ -13,6 +13,7 @@ scheduler = None
 facebook_handler = None
 facebook_comments_handler = None
 sheets_handler = None
+instagram_handler = None
 notifications = NotificationHandler()
 
 # Reconciler wakeup signal — set() wakes the reconciler immediately
@@ -28,8 +29,8 @@ first_queued_time = None
 
 
 def init_handlers():
-    """(Re-)initialise Facebook, Scheduler, and Sheets handlers from config."""
-    global scheduler, facebook_handler, facebook_comments_handler, sheets_handler
+    """(Re-)initialise Facebook, Scheduler, Sheets, and Instagram handlers from config."""
+    global scheduler, facebook_handler, facebook_comments_handler, sheets_handler, instagram_handler
 
     from config import load_config
     from facebook_handler import FacebookHandler
@@ -61,3 +62,19 @@ def init_handlers():
             )
         except Exception as e:
             print(f"Failed to init Sheets: {e}")
+
+    ig_keys = ('instagram_ig_account_id', 'cloudinary_cloud_name',
+               'cloudinary_api_key', 'cloudinary_api_secret')
+    if all(config.get(k) for k in ig_keys) and config.get('facebook_access_token'):
+        try:
+            from instagram_handler import InstagramHandler
+            instagram_handler = InstagramHandler(
+                ig_business_account_id=config['instagram_ig_account_id'],
+                access_token=config['facebook_access_token'],
+                cloudinary_cloud_name=config['cloudinary_cloud_name'],
+                cloudinary_api_key=config['cloudinary_api_key'],
+                cloudinary_api_secret=config['cloudinary_api_secret'],
+            )
+            print("✅ Instagram handler initialized")
+        except Exception as e:
+            print(f"Failed to init Instagram: {e}")

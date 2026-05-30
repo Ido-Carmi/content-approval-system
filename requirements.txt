@@ -28,3 +28,8 @@ openai>=1.0.0
 
 # Email (via HTTPS API, no SMTP needed)
 resend>=2.0.0
+
+# Instagram / image generation
+Pillow>=10.0.0
+python-bidi>=0.4.2
+cloudinary>=1.36.0
