@@ -56,7 +56,7 @@ FONT_SIZE_BODY    = 58
 FONT_SIZE_HEADER  = 56
 FONT_SIZE_WM      = 36
 FONT_SIZE_ARROW   = 60
-FONT_SIZE_MIN     = 30
+FONT_SIZE_MIN     = 40
 LINE_SPACING      = 20   # extra pixels between lines
 
 
@@ -130,21 +130,21 @@ def _draw_slide(lines: list[str], post_number: int, watermark: str,
     img  = Image.new('RGB', CANVAS, BG_COLOR)
     draw = ImageDraw.Draw(img)
 
+    right_x  = CANVAS[0] - PAD
     center_x = CANVAS[0] // 2
 
     print(f"   [imggen] drawing slide: {len(lines)} line(s), show_arrow={show_arrow}")
 
-    # ── Header: post number (center, no bidi — pure ASCII) ───────────────────
-    header_font = _load_font(FONT_BOLD, FONT_SIZE_HEADER)
-    draw.text((center_x, 55), f"#{post_number}",
-              font=header_font, fill=ACCENT_COLOR, anchor='ma')
+    # ── Header: post number — right-aligned, use body font (bold may be missing) ──
+    draw.text((right_x, 55), f"#{post_number}",
+              font=body_font, fill=ACCENT_COLOR, anchor='ra')
     print(f"   [imggen] header: #{post_number}")
 
     # Divider under header
     draw.line([(PAD, TOP_Y - 20), (CANVAS[0] - PAD, TOP_Y - 20)],
               fill=DIVIDER_COLOR, width=2)
 
-    # ── Body text (centered) ──────────────────────────────────────────────────
+    # ── Body text — right-aligned (correct for Hebrew RTL) ───────────────────
     lh = _line_height(body_font, draw)
     # Vertically center the text block in the available area
     text_area_h = FOOT_Y - 20 - TOP_Y
@@ -152,26 +152,24 @@ def _draw_slide(lines: list[str], post_number: int, watermark: str,
     y = TOP_Y + max(0, (text_area_h - total_text_h) // 2)
     for line in lines:
         if line:
-            draw.text((center_x, y), line,
-                      font=body_font, fill=TEXT_COLOR, anchor='ma')
+            draw.text((right_x, y), line,
+                      font=body_font, fill=TEXT_COLOR, anchor='ra')
         y += lh
 
-    print(f"   [imggen] body text drawn, final y={y} (canvas height={CANVAS[1]})")
+    print(f"   [imggen] body text drawn, final y={y}")
 
     # ── Footer divider + watermark ────────────────────────────────────────────
     draw.line([(PAD, FOOT_Y - 20), (CANVAS[0] - PAD, FOOT_Y - 20)],
               fill=DIVIDER_COLOR, width=2)
-    wm_font = _load_font(FONT_BOLD, FONT_SIZE_WM)
     wm_text = get_display(watermark, base_dir='R')
     draw.text((center_x, FOOT_Y + 10), wm_text,
-              font=wm_font, fill=WATERMARK_COLOR, anchor='mm')
+              font=body_font, fill=WATERMARK_COLOR, anchor='mm')
     print(f"   [imggen] watermark: '{watermark}'")
 
     # ── "Swipe" arrow (non-final slides) ─────────────────────────────────────
     if show_arrow:
-        arrow_font = _load_font(FONT_BOLD, FONT_SIZE_ARROW)
         draw.text((PAD + 10, FOOT_Y - 10), '❯',
-                  font=arrow_font, fill=ARROW_COLOR, anchor='la')
+                  font=body_font, fill=ARROW_COLOR, anchor='la')
         print(f"   [imggen] swipe arrow drawn")
 
     return img
