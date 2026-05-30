@@ -85,12 +85,28 @@ def _line_height(font, draw) -> int:
     return lh
 
 
-def _wrap_rtl(text: str, font, max_width: int, draw) -> list[str]:
-    """Word-wrap Hebrew text (logical order) to fit max_width px.
-    Forces RTL base direction so Hebrew is always rendered right-to-left.
-    Returns visual (bidi-reordered) lines ready for PIL center-anchored drawing."""
-    from bidi.algorithm import get_display
+def _clean_text(text: str) -> str:
+    """Remove characters the Hebrew font can't render (emoji, special symbols).
+    Keeps Hebrew, ASCII, common punctuation."""
+    import re
+    result = []
+    for ch in text:
+        cp = ord(ch)
+        if (0x0020 <= cp <= 0x007E       # Basic ASCII (letters, digits, punctuation)
+                or 0x05B0 <= cp <= 0x05FF  # Hebrew characters + vowels
+                or ch in '\n'):
+            result.append(ch)
+        else:
+            result.append(' ')             # Replace emoji / special chars with space
+    cleaned = re.sub(r'  +', ' ', ''.join(result)).strip()
+    return cleaned
 
+
+def _wrap_rtl(text: str, font, max_width: int, draw) -> list[str]:
+    """Word-wrap Hebrew text and prepare each line for RTL display in PIL.
+    Strategy: wrap in logical order, then reverse each line's characters.
+    Simple reversal == bidi for pure Hebrew and is far more predictable.
+    Returns lines ready for PIL center-anchored drawing."""
     paragraphs = text.split('\n')
     print(f"   [imggen] wrapping {len(paragraphs)} paragraph(s), max_width={max_width}px")
     visual_lines: list[str] = []
@@ -103,17 +119,16 @@ def _wrap_rtl(text: str, font, max_width: int, draw) -> list[str]:
         current: list[str] = []
         for word in words:
             test = ' '.join(current + [word])
-            # Force RTL base direction — critical for Hebrew starting with punctuation/numbers
-            visual_test = get_display(test, base_dir='R')
-            bb = draw.textbbox((0, 0), visual_test, font=font)
+            # Measure the reversed form (what PIL will actually draw)
+            bb = draw.textbbox((0, 0), test[::-1], font=font)
             word_w = bb[2] - bb[0]
             if word_w > max_width and current:
-                visual_lines.append(get_display(' '.join(current), base_dir='R'))
+                visual_lines.append(' '.join(current)[::-1])
                 current = [word]
             else:
                 current.append(word)
         if current:
-            visual_lines.append(get_display(' '.join(current), base_dir='R'))
+            visual_lines.append(' '.join(current)[::-1])
 
     print(f"   [imggen] wrap result: {len(visual_lines)} visual line(s)")
     for i, l in enumerate(visual_lines):
@@ -125,7 +140,6 @@ def _draw_slide(lines: list[str], post_number: int, watermark: str,
                 show_arrow: bool, body_font, bold_font):
     """Render a single 1080×1080 slide and return a PIL Image."""
     from PIL import Image, ImageDraw
-    from bidi.algorithm import get_display
 
     img  = Image.new('RGB', CANVAS, BG_COLOR)
     draw = ImageDraw.Draw(img)
@@ -144,16 +158,15 @@ def _draw_slide(lines: list[str], post_number: int, watermark: str,
     draw.line([(PAD, TOP_Y - 20), (CANVAS[0] - PAD, TOP_Y - 20)],
               fill=DIVIDER_COLOR, width=2)
 
-    # ── Body text — right-aligned (correct for Hebrew RTL) ───────────────────
+    # ── Body text — centered horizontally, centered vertically ──────────────
     lh = _line_height(body_font, draw)
-    # Vertically center the text block in the available area
     text_area_h = FOOT_Y - 20 - TOP_Y
     total_text_h = len(lines) * lh
     y = TOP_Y + max(0, (text_area_h - total_text_h) // 2)
     for line in lines:
         if line:
-            draw.text((right_x, y), line,
-                      font=body_font, fill=TEXT_COLOR, anchor='ra')
+            draw.text((center_x, y), line,
+                      font=body_font, fill=TEXT_COLOR, anchor='ma')
         y += lh
 
     print(f"   [imggen] body text drawn, final y={y}")
@@ -161,7 +174,7 @@ def _draw_slide(lines: list[str], post_number: int, watermark: str,
     # ── Footer divider + watermark ────────────────────────────────────────────
     draw.line([(PAD, FOOT_Y - 20), (CANVAS[0] - PAD, FOOT_Y - 20)],
               fill=DIVIDER_COLOR, width=2)
-    wm_text = get_display(watermark, base_dir='R')
+    wm_text = watermark[::-1]
     draw.text((center_x, FOOT_Y + 10), wm_text,
               font=body_font, fill=WATERMARK_COLOR, anchor='mm')
     print(f"   [imggen] watermark: '{watermark}'")
@@ -191,10 +204,14 @@ def generate_confession_slides(
     Returns a list of PIL Image objects.
     """
     from PIL import Image, ImageDraw
-
     print(f"\n[imggen] === generate_confession_slides ===")
+    print(f"[imggen] reversal test: 'שלום'[::-1]='{' שלום'[::-1].strip()}'  (expect 'םולש')")
+    print(f"[imggen] font BODY = {FONT_BODY}")
     print(f"[imggen] post_number={post_number}, watermark='{watermark}'")
-    print(f"[imggen] text length={len(text)} chars")
+
+    # Clean text before rendering
+    text = _clean_text(text)
+    print(f"[imggen] text length={len(text)} chars after cleaning")
     print(f"[imggen] text preview: '{text[:80]}{'...' if len(text)>80 else ''}'")
     print(f"[imggen] body_font_path override: {body_font_path or 'none (using default)'}")
     print(f"[imggen] bold_font_path override: {bold_font_path or 'none (using default)'}")
