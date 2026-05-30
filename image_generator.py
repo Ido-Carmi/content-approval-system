@@ -21,12 +21,12 @@ PAD     = 80
 TOP_Y   = 150       # y where body text starts
 FOOT_Y  = CANVAS[1] - 90
 
-BG_COLOR        = (40,  55,  30)    # dark army green
-TEXT_COLOR      = (255, 210,   0)   # yellow body text
-ACCENT_COLOR    = (255, 210,   0)   # gold post number
-DIVIDER_COLOR   = (70,  90,  50)
-WATERMARK_COLOR = (150, 170, 120)
-ARROW_COLOR     = (180, 200, 150)
+BG_COLOR        = (0x49, 0x6b, 0x35)   # #496b35 army green
+TEXT_COLOR      = (0xff, 0xc9, 0x45)   # #ffc945 yellow
+ACCENT_COLOR    = (0xff, 0xc9, 0x45)   # #ffc945 yellow
+DIVIDER_COLOR   = (0x5c, 0x84, 0x42)   # slightly lighter green
+WATERMARK_COLOR = (0x9b, 0xb8, 0x7a)   # muted olive
+ARROW_COLOR     = (0xcc, 0xe0, 0xa0)   # light olive
 
 FONT_SIZE_BODY   = 70
 FONT_SIZE_HEADER = 62
@@ -49,16 +49,21 @@ def _find_font(candidates: list[str]) -> str:
     return candidates[0]
 
 
-# DejaVu Sans covers Hebrew AND full ASCII (digits, punctuation, #)
-# NotoSansHebrew covers Hebrew but NOT ASCII — produces □ for digits/punctuation
+# Assistant is the preferred Hebrew font (Google Fonts, clean modern look).
+# Falls back to DejaVu (full Unicode) then Noto Hebrew.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+
 FONT_BODY = _find_font([
+    os.path.join(_HERE, 'fonts', 'Assistant.ttf'),
+    os.path.join(_HERE, 'fonts', 'Assistant-Regular.ttf'),
     '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
     '/usr/share/fonts/truetype/noto/NotoSansHebrew-Regular.ttf',
-    '/usr/share/fonts/truetype/noto/NotoSansHebrew[wdth,wght].ttf',
     '/usr/share/fonts/truetype/culmus/MiriamCLM-Book.ttf',
     '/usr/share/fonts/truetype/freefont/FreeSans.ttf',
 ])
 FONT_BOLD = _find_font([
+    os.path.join(_HERE, 'fonts', 'Assistant.ttf'),
+    os.path.join(_HERE, 'fonts', 'Assistant-Bold.ttf'),
     '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
     '/usr/share/fonts/truetype/noto/NotoSansHebrew-Bold.ttf',
     '/usr/share/fonts/truetype/culmus/MiriamCLM-Bold.ttf',
