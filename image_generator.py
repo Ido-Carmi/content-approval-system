@@ -22,12 +22,12 @@ PAD     = 80           # horizontal padding
 TOP_Y   = 160          # y where body text starts (below header)
 FOOT_Y  = CANVAS[1] - 90  # y of watermark baseline
 
-BG_COLOR        = (18, 18, 18)
-TEXT_COLOR      = (235, 235, 230)
-ACCENT_COLOR    = (255, 210, 0)    # gold — post number
-DIVIDER_COLOR   = (55, 55, 55)
-WATERMARK_COLOR = (130, 130, 130)
-ARROW_COLOR     = (180, 180, 180)
+BG_COLOR        = (40, 55, 30)      # dark army green
+TEXT_COLOR      = (255, 210, 0)     # yellow
+ACCENT_COLOR    = (255, 210, 0)     # gold — post number
+DIVIDER_COLOR   = (70, 90, 50)      # slightly lighter green
+WATERMARK_COLOR = (150, 170, 120)   # muted olive
+ARROW_COLOR     = (180, 200, 150)   # light olive
 
 FONT_BODY   = '/usr/share/fonts/truetype/noto/NotoSansHebrew-Regular.ttf'
 FONT_BOLD   = '/usr/share/fonts/truetype/noto/NotoSansHebrew-Bold.ttf'

@@ -776,17 +776,25 @@ def instagram_daily_job(force_all: bool = False):
         best = max(candidates, key=lambda x: x['score'])
         print(f"\n[ig-job]   ✅ best post: #{best['post_number']} "
               f"(id={best['id']}, score={best['score']})")
-        print(f"[ig-job]   text preview: {best['text'][:80]}{'...' if len(best['text'])>80 else ''}")
+        print(f"[ig-job]   raw text: {best['text'][:120]}")
+
+        # Strip the "#number\n" prefix that post_tracking stores as part of the text
+        raw_text = best['text'] or ''
+        if raw_text.startswith('#'):
+            lines = raw_text.split('\n', 1)
+            clean_text = lines[1].strip() if len(lines) > 1 else raw_text
+        else:
+            clean_text = raw_text.strip()
+        print(f"[ig-job]   clean text ({len(clean_text)} chars): {clean_text[:120]}")
 
         # ── Image generation ─────────────────────────────────────────────
         print(f"\n[ig-job] STEP 5: Generate image slides")
         from image_generator import generate_confession_slides, slides_to_bytes
         watermark = config.get('instagram_watermark', 'וידויים צבאיים')
         print(f"[ig-job]   watermark = '{watermark}'")
-        print(f"[ig-job]   full text ({len(best['text'])} chars): {best['text']}")
 
         slides = generate_confession_slides(
-            text=best['text'],
+            text=clean_text,
             post_number=best['post_number'],
             watermark=watermark,
         )
@@ -798,7 +806,7 @@ def instagram_daily_job(force_all: bool = False):
 
         # ── Caption ──────────────────────────────────────────────────────
         print(f"\n[ig-job] STEP 6: Build caption")
-        caption  = f"#{best['post_number']}\n{best['text']}"
+        caption  = f"#{best['post_number']}\n{clean_text}"
         hashtags = config.get('instagram_hashtags', '').strip()
         if hashtags:
             caption += f"\n.\n.\n{hashtags}"
