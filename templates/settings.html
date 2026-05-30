@@ -307,13 +307,11 @@
                                     onclick="fetch('/instagram-post-now',{method:'POST'}).then(()=>alert('Instagram job started — check logs'))">
                                 <i class="bi bi-instagram"></i> הרץ עכשיו (בדיקה)
                             </button>
-                            <form method="POST" action="/instagram-backfill" style="display:inline">
-                                <input type="hidden" name="days" value="7">
-                                <button type="submit" class="btn btn-outline-secondary btn-sm"
-                                        title="מלא את רשימת הפוסטים מ-7 הימים האחרונים">
-                                    <i class="bi bi-arrow-repeat"></i> טען פוסטים קיימים (7 ימים)
-                                </button>
-                            </form>
+                            <button type="button" class="btn btn-outline-secondary btn-sm"
+                                    title="מלא את רשימת הפוסטים מ-7 הימים האחרונים"
+                                    onclick="fetch('/instagram-backfill',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'days=7'}).then(r=>r.json()).then(d=>alert(d.message)).catch(()=>alert('שגיאה — בדוק לוגים'))">
+                                <i class="bi bi-arrow-repeat"></i> טען פוסטים קיימים (7 ימים)
+                            </button>
                         </div>
                     </div>
                 </div>

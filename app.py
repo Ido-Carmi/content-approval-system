@@ -1058,8 +1058,7 @@ def instagram_backfill():
     """Backfill instagram_post_log from existing published entries (one-time use)."""
     days = int(request.form.get('days', 7))
     count = extensions.db.backfill_instagram_post_log(days=days)
-    flash(f'✅ Backfill complete — {count} post(s) added to Instagram log', 'success')
-    return redirect(url_for('settings_page'))
+    return jsonify({'ok': True, 'message': f'✅ {count} פוסטים נטענו ללוג Instagram'})
 
 
 @app.route('/instagram-post-now', methods=['POST'])
