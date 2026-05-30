@@ -804,13 +804,13 @@ def instagram_daily_job(force_all: bool = False):
         total_kb = sum(len(b) for b in images_bytes) // 1024
         print(f"[ig-job]   total size: {total_kb} KB across {len(images_bytes)} image(s)")
 
-        # ── Caption ──────────────────────────────────────────────────────
+        # ── Caption (number + hashtags only — body text is in the image) ────────
         print(f"\n[ig-job] STEP 6: Build caption")
-        caption  = f"#{best['post_number']}\n{clean_text}"
         hashtags = config.get('instagram_hashtags', '').strip()
+        caption  = f"#{best['post_number']}"
         if hashtags:
             caption += f"\n.\n.\n{hashtags}"
-            print(f"[ig-job]   hashtags added: {hashtags[:60]}")
+            print(f"[ig-job]   hashtags: {hashtags[:60]}")
         print(f"[ig-job]   caption total length: {len(caption)} chars")
         print(f"[ig-job]   caption preview:\n---\n{caption[:200]}\n---")
 

@@ -52,12 +52,12 @@ FONT_BOLD = _find_font([
     '/usr/share/fonts/truetype/culmus/MiriamCLM-Bold.ttf',
     '/usr/share/fonts/truetype/freefont/FreeSansBold.ttf',
 ])
-FONT_SIZE_BODY    = 44
-FONT_SIZE_HEADER  = 52
-FONT_SIZE_WM      = 32
-FONT_SIZE_ARROW   = 56
+FONT_SIZE_BODY    = 58
+FONT_SIZE_HEADER  = 56
+FONT_SIZE_WM      = 36
+FONT_SIZE_ARROW   = 60
 FONT_SIZE_MIN     = 30
-LINE_SPACING      = 16   # extra pixels between lines
+LINE_SPACING      = 20   # extra pixels between lines
 
 
 # ---------------------------------------------------------------------------
@@ -87,14 +87,15 @@ def _line_height(font, draw) -> int:
 
 def _wrap_rtl(text: str, font, max_width: int, draw) -> list[str]:
     """Word-wrap Hebrew text (logical order) to fit max_width px.
-    Returns visual (bidi-reordered) lines ready for PIL right-anchored drawing."""
+    Forces RTL base direction so Hebrew is always rendered right-to-left.
+    Returns visual (bidi-reordered) lines ready for PIL center-anchored drawing."""
     from bidi.algorithm import get_display
 
     paragraphs = text.split('\n')
     print(f"   [imggen] wrapping {len(paragraphs)} paragraph(s), max_width={max_width}px")
     visual_lines: list[str] = []
 
-    for pi, para in enumerate(paragraphs):
+    for para in paragraphs:
         if not para.strip():
             visual_lines.append('')
             continue
@@ -102,15 +103,17 @@ def _wrap_rtl(text: str, font, max_width: int, draw) -> list[str]:
         current: list[str] = []
         for word in words:
             test = ' '.join(current + [word])
-            bb = draw.textbbox((0, 0), get_display(test), font=font)
+            # Force RTL base direction — critical for Hebrew starting with punctuation/numbers
+            visual_test = get_display(test, base_dir='R')
+            bb = draw.textbbox((0, 0), visual_test, font=font)
             word_w = bb[2] - bb[0]
             if word_w > max_width and current:
-                visual_lines.append(get_display(' '.join(current)))
+                visual_lines.append(get_display(' '.join(current), base_dir='R'))
                 current = [word]
             else:
                 current.append(word)
         if current:
-            visual_lines.append(get_display(' '.join(current)))
+            visual_lines.append(get_display(' '.join(current), base_dir='R'))
 
     print(f"   [imggen] wrap result: {len(visual_lines)} visual line(s)")
     for i, l in enumerate(visual_lines):
@@ -127,29 +130,30 @@ def _draw_slide(lines: list[str], post_number: int, watermark: str,
     img  = Image.new('RGB', CANVAS, BG_COLOR)
     draw = ImageDraw.Draw(img)
 
-    usable_w = CANVAS[0] - 2 * PAD
-    right_x  = CANVAS[0] - PAD
+    center_x = CANVAS[0] // 2
 
     print(f"   [imggen] drawing slide: {len(lines)} line(s), show_arrow={show_arrow}")
 
-    # ── Header: post number ──────────────────────────────────────────────────
+    # ── Header: post number (center, no bidi — pure ASCII) ───────────────────
     header_font = _load_font(FONT_BOLD, FONT_SIZE_HEADER)
-    num_text    = get_display(f"#{post_number}")
-    draw.text((right_x, 55), num_text,
-              font=header_font, fill=ACCENT_COLOR, anchor='ra')
+    draw.text((center_x, 55), f"#{post_number}",
+              font=header_font, fill=ACCENT_COLOR, anchor='ma')
     print(f"   [imggen] header: #{post_number}")
 
     # Divider under header
     draw.line([(PAD, TOP_Y - 20), (CANVAS[0] - PAD, TOP_Y - 20)],
               fill=DIVIDER_COLOR, width=2)
 
-    # ── Body text ─────────────────────────────────────────────────────────────
+    # ── Body text (centered) ──────────────────────────────────────────────────
     lh = _line_height(body_font, draw)
-    y  = TOP_Y
+    # Vertically center the text block in the available area
+    text_area_h = FOOT_Y - 20 - TOP_Y
+    total_text_h = len(lines) * lh
+    y = TOP_Y + max(0, (text_area_h - total_text_h) // 2)
     for line in lines:
         if line:
-            draw.text((right_x, y), line,
-                      font=body_font, fill=TEXT_COLOR, anchor='ra')
+            draw.text((center_x, y), line,
+                      font=body_font, fill=TEXT_COLOR, anchor='ma')
         y += lh
 
     print(f"   [imggen] body text drawn, final y={y} (canvas height={CANVAS[1]})")
@@ -158,8 +162,8 @@ def _draw_slide(lines: list[str], post_number: int, watermark: str,
     draw.line([(PAD, FOOT_Y - 20), (CANVAS[0] - PAD, FOOT_Y - 20)],
               fill=DIVIDER_COLOR, width=2)
     wm_font = _load_font(FONT_BOLD, FONT_SIZE_WM)
-    wm_text = get_display(watermark)
-    draw.text((CANVAS[0] // 2, FOOT_Y + 10), wm_text,
+    wm_text = get_display(watermark, base_dir='R')
+    draw.text((center_x, FOOT_Y + 10), wm_text,
               font=wm_font, fill=WATERMARK_COLOR, anchor='mm')
     print(f"   [imggen] watermark: '{watermark}'")
 
