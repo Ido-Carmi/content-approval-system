@@ -49,21 +49,30 @@ def _find_font(candidates: list[str]) -> str:
     return candidates[0]
 
 
+# DejaVu Sans covers Hebrew AND full ASCII (digits, punctuation, #)
+# NotoSansHebrew covers Hebrew but NOT ASCII — produces □ for digits/punctuation
 FONT_BODY = _find_font([
+    '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
     '/usr/share/fonts/truetype/noto/NotoSansHebrew-Regular.ttf',
     '/usr/share/fonts/truetype/noto/NotoSansHebrew[wdth,wght].ttf',
-    '/usr/share/fonts/noto/NotoSansHebrew-Regular.ttf',
     '/usr/share/fonts/truetype/culmus/MiriamCLM-Book.ttf',
     '/usr/share/fonts/truetype/freefont/FreeSans.ttf',
 ])
 FONT_BOLD = _find_font([
+    '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
     '/usr/share/fonts/truetype/noto/NotoSansHebrew-Bold.ttf',
-    '/usr/share/fonts/truetype/noto/NotoSansHebrew[wdth,wght].ttf',
-    '/usr/share/fonts/noto/NotoSansHebrew-Bold.ttf',
     '/usr/share/fonts/truetype/culmus/MiriamCLM-Bold.ttf',
-    '/usr/share/fonts/truetype/noto/NotoSansHebrew-Regular.ttf',
-    '/usr/share/fonts/truetype/freefont/FreeSans.ttf',
+    '/usr/share/fonts/truetype/freefont/FreeSansBold.ttf',
 ])
+
+# Check if Pillow was compiled with RAQM (proper RTL shaping engine).
+# If yes, we can draw Hebrew directly without manual character reversal.
+try:
+    from PIL import features as _pil_features
+    HAS_RAQM = _pil_features.check_feature('raqm')
+except Exception:
+    HAS_RAQM = False
+print(f"[imggen] RAQM support: {HAS_RAQM}")
 
 
 # ---------------------------------------------------------------------------
@@ -119,18 +128,21 @@ def _wrap_rtl(text: str, font, max_width: int, draw) -> list[str]:
         words = para.split()
         current: list[str] = []
         for word in words:
-            test    = ' '.join(current + [word])
-            bb      = draw.textbbox((0, 0), test[::-1], font=font)
-            line_w  = bb[2] - bb[0]
+            test     = ' '.join(current + [word])
+            measure  = test if HAS_RAQM else test[::-1]
+            bb       = draw.textbbox((0, 0), measure, font=font)
+            line_w   = bb[2] - bb[0]
             if line_w > max_width and current:
-                visual_lines.append(' '.join(current)[::-1])
+                done = ' '.join(current)
+                visual_lines.append(done if HAS_RAQM else done[::-1])
                 current = [word]
             else:
                 current.append(word)
         if current:
-            visual_lines.append(' '.join(current)[::-1])
+            line = ' '.join(current)
+            visual_lines.append(line if HAS_RAQM else line[::-1])
 
-    print(f"   [imggen] {len(visual_lines)} line(s) after wrap")
+    print(f"   [imggen] RAQM={HAS_RAQM}, {len(visual_lines)} line(s) after wrap")
     for i, l in enumerate(visual_lines):
         print(f"   [imggen]   [{i+1}] '{l[:50]}'")
     return visual_lines
@@ -159,7 +171,7 @@ def _draw_slide(lines: list[str], post_number: int, watermark: str,
     draw.line([(PAD, FOOT_Y - 20), (CANVAS[0] - PAD, FOOT_Y - 20)],
               fill=DIVIDER_COLOR, width=2)
 
-    # ── Body text — RIGHT-ALIGNED so Hebrew readers start from the right ──────
+    # ── Body text — RIGHT-ALIGNED, RTL direction ──────────────────────────────
     lh           = _line_height(body_font, draw)
     text_area_h  = FOOT_Y - 20 - TOP_Y
     total_text_h = len(lines) * lh
@@ -167,8 +179,15 @@ def _draw_slide(lines: list[str], post_number: int, watermark: str,
 
     for line in lines:
         if line:
-            draw.text((right_x, y), line,
-                      font=body_font, fill=TEXT_COLOR, anchor='ra')
+            if HAS_RAQM:
+                # RAQM handles RTL shaping — draw the original (non-reversed) text
+                draw.text((right_x, y), line,
+                          font=body_font, fill=TEXT_COLOR, anchor='ra',
+                          direction='rtl', language='he')
+            else:
+                # No RAQM — use manual reversal so PIL's LTR drawing reads RTL
+                draw.text((right_x, y), line,
+                          font=body_font, fill=TEXT_COLOR, anchor='ra')
         y += lh
 
     # ── Watermark (centered) ──────────────────────────────────────────────────
