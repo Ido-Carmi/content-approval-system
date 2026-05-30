@@ -171,13 +171,14 @@ def _draw_slide(lines: list[str], post_number: int, watermark: str,
     draw.line([(PAD, FOOT_Y - 20), (CANVAS[0] - PAD, FOOT_Y - 20)],
               fill=DIVIDER_COLOR, width=2)
 
-    # ── Body text — RIGHT-ALIGNED, RTL direction ──────────────────────────────
+    # ── Body text — centered horizontally, starts near top ───────────────────
     lh           = _line_height(body_font, draw)
     text_area_h  = FOOT_Y - 20 - TOP_Y
     total_text_h = len(lines) * lh
-    y = TOP_Y + max(0, (text_area_h - total_text_h) // 2)
-
+    top_pad      = min(30, max(0, (text_area_h - total_text_h) // 4))
+    y        = TOP_Y + top_pad
     center_x = CANVAS[0] // 2
+
     for line in lines:
         if line:
             if HAS_RAQM:
