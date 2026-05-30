@@ -29,8 +29,29 @@ DIVIDER_COLOR   = (70, 90, 50)      # slightly lighter green
 WATERMARK_COLOR = (150, 170, 120)   # muted olive
 ARROW_COLOR     = (180, 200, 150)   # light olive
 
-FONT_BODY   = '/usr/share/fonts/truetype/noto/NotoSansHebrew-Regular.ttf'
-FONT_BOLD   = '/usr/share/fonts/truetype/noto/NotoSansHebrew-Bold.ttf'
+def _find_font(candidates: list[str]) -> str:
+    """Return the first font path that exists on this system."""
+    for path in candidates:
+        if os.path.exists(path):
+            print(f"   [imggen] ✓ font found: {path}")
+            return path
+    print(f"   [imggen] ⚠️  none of these fonts found: {candidates}")
+    return candidates[0]  # will trigger fallback in _load_font
+
+FONT_BODY = _find_font([
+    '/usr/share/fonts/truetype/noto/NotoSansHebrew-Regular.ttf',
+    '/usr/share/fonts/truetype/noto/NotoSansHebrew[wdth,wght].ttf',
+    '/usr/share/fonts/noto/NotoSansHebrew-Regular.ttf',
+    '/usr/share/fonts/truetype/culmus/MiriamCLM-Book.ttf',
+    '/usr/share/fonts/truetype/freefont/FreeSans.ttf',
+])
+FONT_BOLD = _find_font([
+    '/usr/share/fonts/truetype/noto/NotoSansHebrew-Bold.ttf',
+    '/usr/share/fonts/truetype/noto/NotoSansHebrew[wdth,wght].ttf',
+    '/usr/share/fonts/noto/NotoSansHebrew-Bold.ttf',
+    '/usr/share/fonts/truetype/culmus/MiriamCLM-Bold.ttf',
+    '/usr/share/fonts/truetype/freefont/FreeSansBold.ttf',
+])
 FONT_SIZE_BODY    = 44
 FONT_SIZE_HEADER  = 52
 FONT_SIZE_WM      = 32
