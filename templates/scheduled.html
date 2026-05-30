@@ -391,7 +391,6 @@ function pollReconcilerStatus() {
             setReconcilerStatus(data.busy);
             if (!data.busy && _pendingContentReload) {
                 _pendingContentReload = false;
-                stopStatusPolling();
                 reloadContent();
             }
         })

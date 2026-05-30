@@ -238,7 +238,9 @@ def check_facebook_token_health():
 
 
 def _send_token_alert(config, expired, days_left=None, expires_dt=None):
-    """Send email alert about Facebook token expiry or invalidity."""
+    """Send email alert about Facebook token expiry or invalidity.
+    Writes a cooldown timestamp so callers that use _notification_on_cooldown
+    won't re-alert for 24 hours."""
     notification_emails = config.get('notification_emails', [])
     if not notification_emails or not config.get('notifications_enabled'):
         return
@@ -267,6 +269,13 @@ def _send_token_alert(config, expired, days_left=None, expires_dt=None):
 </body></html>"""
 
     send_notification_email(subject, body, notification_emails)
+
+    # Record cooldown so _notification_on_cooldown suppresses repeats for 24 h
+    try:
+        config['token_alert'] = datetime.now().isoformat()
+        save_config(config)
+    except Exception as e:
+        print(f"⚠️  Could not save token alert cooldown: {e}")
 
 
 # ============================================================================
