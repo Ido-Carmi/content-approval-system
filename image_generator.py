@@ -227,12 +227,18 @@ def _draw_slide(lines: list[str], post_number: int, watermark: str,
               watermark,
               font=wm_font, fill=WATERMARK_COLOR, anchor='mm')
 
-    # ── Swipe arrow on non-final slides — drawn as triangle, no font needed ───
+    # ── Swipe arrow — proper → arrow below the footer divider ────────────────
     if show_arrow:
-        ax = CANVAS[0] - PAD - 5
-        ay = FOOT_Y - 5
-        s  = 22  # size
-        draw.polygon([(ax - s*2, ay - s), (ax, ay), (ax - s*2, ay + s)],
+        ax  = CANVAS[0] - PAD - 10   # rightmost point of arrowhead
+        ay  = FOOT_Y + 28            # below the divider line
+        sw  = 40                     # shaft length
+        hw  = 18                     # arrowhead width
+        hh  = 12                     # arrowhead half-height
+        # Shaft
+        draw.line([(ax - sw - hw, ay), (ax - hw, ay)],
+                  fill=ARROW_COLOR, width=5)
+        # Arrowhead (filled triangle)
+        draw.polygon([(ax - hw, ay - hh), (ax, ay), (ax - hw, ay + hh)],
                      fill=ARROW_COLOR)
 
     return img
@@ -331,8 +337,13 @@ def generate_confession_slides(
                 cur.append('')   # preserve paragraph gap within a slide
             continue
 
-        # Close current slide once we've hit the target — unless it's the last slide
-        if cur_n >= target and len(pages) < n_slides - 1:
+        # Hard limit: never exceed lines_per_page on any slide
+        hard_overflow = (cur_n + len(wl) > lines_per_page) and cur
+
+        # Soft limit: close slide once we hit target (unless last slide)
+        soft_limit = (cur_n >= target) and (len(pages) < n_slides - 1)
+
+        if hard_overflow or soft_limit:
             while cur and not cur[-1]:
                 cur.pop()
             pages.append(cur)
