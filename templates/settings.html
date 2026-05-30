@@ -308,9 +308,9 @@
                                 <i class="bi bi-instagram"></i> הרץ עכשיו (בדיקה)
                             </button>
                             <button type="button" class="btn btn-outline-secondary btn-sm"
-                                    title="מלא את רשימת הפוסטים מ-7 הימים האחרונים"
-                                    onclick="fetch('/instagram-backfill',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'days=7'}).then(r=>r.json()).then(d=>alert(d.message)).catch(()=>alert('שגיאה — בדוק לוגים'))">
-                                <i class="bi bi-arrow-repeat"></i> טען פוסטים קיימים (7 ימים)
+                                    title="טען פוסטים ואפס דגלי ig_posted לבדיקה"
+                                    onclick="fetch('/instagram-backfill',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'days=30&reset=1'}).then(r=>r.json()).then(d=>alert(d.message)).catch(()=>alert('שגיאה — בדוק לוגים'))">
+                                <i class="bi bi-arrow-repeat"></i> טען + אפס (בדיקה)
                             </button>
                         </div>
                     </div>

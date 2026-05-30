@@ -1055,9 +1055,18 @@ def settings_page():
 
 @app.route('/instagram-backfill', methods=['POST'])
 def instagram_backfill():
-    """Backfill instagram_post_log from existing published entries (one-time use)."""
-    days = int(request.form.get('days', 7))
+    """Backfill instagram_post_log and reset ig_posted flags for testing."""
+    days  = int(request.form.get('days', 7))
+    reset = request.form.get('reset') == '1'
     count = extensions.db.backfill_instagram_post_log(days=days)
+    if reset:
+        conn   = extensions.db.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('UPDATE instagram_post_log SET ig_posted=0, ig_posted_at=NULL')
+        reset_count = cursor.rowcount
+        conn.commit()
+        conn.close()
+        return jsonify({'ok': True, 'message': f'✅ {count} נטענו, {reset_count} אופסו לבדיקה'})
     return jsonify({'ok': True, 'message': f'✅ {count} פוסטים נטענו ללוג Instagram'})
 
 
