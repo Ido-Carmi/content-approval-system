@@ -21,12 +21,12 @@ PAD     = 80
 TOP_Y   = 150       # y where body text starts
 FOOT_Y  = CANVAS[1] - 90
 
-BG_COLOR        = (0x49, 0x6b, 0x35)   # #496b35 army green
-TEXT_COLOR      = (0xff, 0xc9, 0x45)   # #ffc945 yellow
-ACCENT_COLOR    = (0xff, 0xc9, 0x45)   # #ffc945 yellow
-DIVIDER_COLOR   = (0x5c, 0x84, 0x42)   # slightly lighter green
-WATERMARK_COLOR = (0x9b, 0xb8, 0x7a)   # muted olive
-ARROW_COLOR     = (0xcc, 0xe0, 0xa0)   # light olive
+BG_COLOR        = (0x46, 0x65, 0x29)   # #466529
+TEXT_COLOR      = (0xfa, 0xca, 0x19)   # #FACA19
+ACCENT_COLOR    = (0xfa, 0xca, 0x19)   # #FACA19
+DIVIDER_COLOR   = (0x57, 0x7a, 0x33)   # slightly lighter green
+WATERMARK_COLOR = (0x99, 0xb3, 0x72)   # muted olive
+ARROW_COLOR     = (0xcc, 0xdf, 0xa0)   # light olive
 
 FONT_SIZE_BODY   = 70
 FONT_SIZE_HEADER = 62
@@ -227,10 +227,13 @@ def _draw_slide(lines: list[str], post_number: int, watermark: str,
               watermark,
               font=wm_font, fill=WATERMARK_COLOR, anchor='mm')
 
-    # ── Swipe arrow on non-final slides — right side, pointing right ──────────
+    # ── Swipe arrow on non-final slides — drawn as triangle, no font needed ───
     if show_arrow:
-        draw.text((right_x - 10, FOOT_Y - 10), '❯',
-                  font=body_font, fill=ARROW_COLOR, anchor='ra')
+        ax = CANVAS[0] - PAD - 5
+        ay = FOOT_Y - 5
+        s  = 22  # size
+        draw.polygon([(ax - s*2, ay - s), (ax, ay), (ax - s*2, ay + s)],
+                     fill=ARROW_COLOR)
 
     return img
 
@@ -281,43 +284,70 @@ def generate_confession_slides(
 
     bold_font = _load_font(hp, FONT_SIZE_HEADER, weight=700)
 
-    # Split into pages — evenly, splitting at sentence endings when possible
-    import math
+    # Sentence-aware slide distribution:
+    # 1. Split text into sentences
+    # 2. Wrap each sentence to know its line count
+    # 3. Distribute sentences across slides as evenly as possible
+    #    (last slide is allowed to be lighter)
+    import math, re as _re
 
     lines_per_page = max(1, text_area // lh)
-    n_slides = min(10, max(1, math.ceil(len(lines) / lines_per_page)))
-    target   = math.ceil(len(lines) / n_slides)
 
-    print(f"[imggen] {len(lines)} lines → {n_slides} slide(s), target ~{target} lines each")
+    # Split into sentences at . ? ! and paragraph breaks
+    raw_sentences: list[str] = []
+    for para in text.split('\n'):
+        para = para.strip()
+        if not para:
+            raw_sentences.append('')        # paragraph break
+            continue
+        parts = _re.split(r'(?<=[.?!…])\s+', para)
+        for p in parts:
+            if p.strip():
+                raw_sentences.append(p.strip())
 
-    def _best_split(lines: list[str], target_idx: int) -> int:
-        """Find the best line index to split at, near target_idx.
-        Prefers lines ending a sentence (. ? !) within ±3 lines."""
-        enders = set('.?!…')
-        best = target_idx
-        for offset in range(0, min(4, len(lines))):
-            for idx in (target_idx - offset, target_idx + offset):
-                if 0 < idx <= len(lines):
-                    prev = lines[idx - 1].rstrip() if lines[idx - 1] else ''
-                    if prev and prev[-1] in enders:
-                        return idx
-        return best
+    # Wrap each sentence independently
+    sent_wrapped: list[tuple[bool, list[str]]] = []   # (is_break, lines)
+    for s in raw_sentences:
+        if not s:
+            sent_wrapped.append((True, []))
+        else:
+            wl = _wrap_rtl(s, body_font, usable_w, tmp_draw)
+            sent_wrapped.append((False, wl))
+
+    total_content = sum(len(wl) for brk, wl in sent_wrapped if not brk)
+    n_slides = min(10, max(1, math.ceil(total_content / lines_per_page)))
+    target   = total_content / n_slides      # float — aim for this per slide
+
+    print(f"[imggen] {len(raw_sentences)} sentence(s), {total_content} lines "
+          f"→ {n_slides} slide(s), target={target:.1f} lines/slide")
 
     pages: list[list[str]] = []
-    remaining = list(lines)
-    while remaining and len(pages) < 10:
-        if len(pages) == n_slides - 1 or len(remaining) <= lines_per_page:
-            # Last slide gets everything left
-            pages.append(remaining)
-            break
-        split_at = _best_split(remaining, target)
-        split_at = max(1, min(split_at, lines_per_page, len(remaining) - 1))
-        pages.append(remaining[:split_at])
-        remaining = remaining[split_at:]
+    cur:   list[str]       = []
+    cur_n: float           = 0.0
 
-    # Remove blank-only pages
-    pages = [p for p in pages if any(l for l in p)]
-    print(f"[imggen] {len(pages)} slide(s) after split")
+    for is_brk, wl in sent_wrapped:
+        if is_brk:
+            if cur:
+                cur.append('')   # preserve paragraph gap within a slide
+            continue
+
+        # Close current slide once we've hit the target — unless it's the last slide
+        if cur_n >= target and len(pages) < n_slides - 1:
+            while cur and not cur[-1]:
+                cur.pop()
+            pages.append(cur)
+            cur, cur_n = list(wl), float(len(wl))
+        else:
+            cur.extend(wl)
+            cur_n += len(wl)
+
+    if cur:
+        while cur and not cur[-1]:
+            cur.pop()
+        pages.append(cur)
+
+    pages = [p for p in pages if any(l for l in p)][:10]
+    print(f"[imggen] {len(pages)} slide(s) after sentence distribution")
 
     slides = []
     for idx, page_lines in enumerate(pages):
