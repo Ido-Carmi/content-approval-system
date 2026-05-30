@@ -2179,13 +2179,29 @@ class Database:
         conn.close()
 
     def backfill_instagram_post_log(self, days: int = 7) -> int:
-        """Backfill instagram_post_log from existing published entries.
-        Copies entries published in the last N days that aren't already logged.
+        """Backfill instagram_post_log from post_tracking (survives cleanup_old_entries).
+        post_tracking keeps posts for 30 days and has post_id, post_number, post_text, published_at.
+        Falls back to entries table as secondary source.
         Returns number of rows inserted."""
         conn = self.get_connection()
         cursor = conn.cursor()
         cutoff = (datetime.now() - timedelta(days=days)).isoformat()
-        print(f"[ig-backfill] backfilling from entries published after {cutoff}")
+        print(f"[ig-backfill] backfilling from post_tracking published after {cutoff}")
+
+        # Primary source: post_tracking (survives cleanup, has published_at)
+        cursor.execute('''
+            INSERT OR IGNORE INTO instagram_post_log (fb_post_id, post_number, text, published_at)
+            SELECT post_id, post_number, post_text, published_at
+            FROM post_tracking
+            WHERE post_number IS NOT NULL
+              AND post_text IS NOT NULL
+              AND post_text != ''
+              AND published_at >= ?
+        ''', (cutoff,))
+        count = cursor.rowcount
+        print(f"[ig-backfill] inserted {count} row(s) from post_tracking")
+
+        # Secondary source: entries table (may still have some published entries)
         cursor.execute('''
             INSERT OR IGNORE INTO instagram_post_log (fb_post_id, post_number, text, published_at)
             SELECT facebook_post_id, post_number, text,
@@ -2194,11 +2210,13 @@ class Database:
             WHERE status = 'published'
               AND facebook_post_id IS NOT NULL
               AND post_number IS NOT NULL
-              AND COALESCE(fb_published_at, approved_at, created_at) >= ?
-        ''', (cutoff,))
-        count = cursor.rowcount
+        ''')
+        count2 = cursor.rowcount
+        print(f"[ig-backfill] inserted {count2} additional row(s) from entries table")
+
         conn.commit()
         conn.close()
-        print(f"[ig-backfill] inserted {count} row(s) into instagram_post_log")
-        return count
+        total = count + count2
+        print(f"[ig-backfill] total: {total} row(s) in instagram_post_log")
+        return total
 
