@@ -28,12 +28,12 @@ DIVIDER_COLOR   = (70,  90,  50)
 WATERMARK_COLOR = (150, 170, 120)
 ARROW_COLOR     = (180, 200, 150)
 
-FONT_SIZE_BODY   = 58
-FONT_SIZE_HEADER = 58
-FONT_SIZE_WM     = 34
-FONT_SIZE_ARROW  = 60
-FONT_SIZE_MIN    = 50
-LINE_SPACING     = 18
+FONT_SIZE_BODY   = 70
+FONT_SIZE_HEADER = 62
+FONT_SIZE_WM     = 36
+FONT_SIZE_ARROW  = 70
+FONT_SIZE_MIN    = 60
+LINE_SPACING     = 28
 
 
 # ---------------------------------------------------------------------------
@@ -177,29 +177,28 @@ def _draw_slide(lines: list[str], post_number: int, watermark: str,
     total_text_h = len(lines) * lh
     y = TOP_Y + max(0, (text_area_h - total_text_h) // 2)
 
+    center_x = CANVAS[0] // 2
     for line in lines:
         if line:
             if HAS_RAQM:
-                # RAQM handles RTL shaping — draw the original (non-reversed) text
-                draw.text((right_x, y), line,
-                          font=body_font, fill=TEXT_COLOR, anchor='ra',
+                draw.text((center_x, y), line,
+                          font=body_font, fill=TEXT_COLOR, anchor='ma',
                           direction='rtl', language='he')
             else:
-                # No RAQM — use manual reversal so PIL's LTR drawing reads RTL
-                draw.text((right_x, y), line,
-                          font=body_font, fill=TEXT_COLOR, anchor='ra')
+                draw.text((center_x, y), line,
+                          font=body_font, fill=TEXT_COLOR, anchor='ma')
         y += lh
 
-    # ── Watermark (centered, never reversed — English text) ───────────────────
+    # ── Watermark (centered) ──────────────────────────────────────────────────
     wm_font = _load_font(FONT_BODY, FONT_SIZE_WM)
     draw.text((CANVAS[0] // 2, FOOT_Y + 10),
               watermark,
               font=wm_font, fill=WATERMARK_COLOR, anchor='mm')
 
-    # ── Swipe arrow on non-final slides ───────────────────────────────────────
+    # ── Swipe arrow on non-final slides — right side, pointing right ──────────
     if show_arrow:
-        draw.text((PAD + 10, FOOT_Y - 10), '❮',
-                  font=body_font, fill=ARROW_COLOR, anchor='la')
+        draw.text((right_x - 10, FOOT_Y - 10), '❯',
+                  font=body_font, fill=ARROW_COLOR, anchor='ra')
 
     return img
 
@@ -250,11 +249,17 @@ def generate_confession_slides(
 
     bold_font = _load_font(hp, FONT_SIZE_HEADER)
 
-    # Split into pages (carousel)
+    # Split into pages (carousel) — distribute evenly across slides
+    import math
     lines_per_page = max(1, text_area // lh)
-    pages = [lines[i:i+lines_per_page] for i in range(0, len(lines), lines_per_page)]
+    n_slides = min(10, math.ceil(len(lines) / lines_per_page))
+    if n_slides > 1:
+        lines_per_slide = math.ceil(len(lines) / n_slides)
+    else:
+        lines_per_slide = lines_per_page
+    pages = [lines[i:i+lines_per_slide] for i in range(0, len(lines), lines_per_slide)]
     pages = pages[:10]
-    print(f"[imggen] {len(pages)} slide(s)")
+    print(f"[imggen] {len(pages)} slide(s), ~{lines_per_slide} lines/slide")
 
     slides = []
     for idx, page_lines in enumerate(pages):
