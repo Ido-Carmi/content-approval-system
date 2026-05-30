@@ -32,7 +32,7 @@ FONT_SIZE_BODY   = 58
 FONT_SIZE_HEADER = 58
 FONT_SIZE_WM     = 34
 FONT_SIZE_ARROW  = 60
-FONT_SIZE_MIN    = 40
+FONT_SIZE_MIN    = 50
 LINE_SPACING     = 18
 
 
@@ -190,10 +190,10 @@ def _draw_slide(lines: list[str], post_number: int, watermark: str,
                           font=body_font, fill=TEXT_COLOR, anchor='ra')
         y += lh
 
-    # ── Watermark (centered) ──────────────────────────────────────────────────
+    # ── Watermark (centered, never reversed — English text) ───────────────────
     wm_font = _load_font(FONT_BODY, FONT_SIZE_WM)
     draw.text((CANVAS[0] // 2, FOOT_Y + 10),
-              watermark[::-1],
+              watermark,
               font=wm_font, fill=WATERMARK_COLOR, anchor='mm')
 
     # ── Swipe arrow on non-final slides ───────────────────────────────────────

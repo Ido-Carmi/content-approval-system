@@ -2188,20 +2188,27 @@ class Database:
         cutoff = (datetime.now() - timedelta(days=days)).isoformat()
         print(f"[ig-backfill] backfilling from post_tracking published after {cutoff}")
 
-        # Primary source: post_tracking (survives cleanup, has published_at)
+        # Prefer full text from entries; fall back to post_tracking (truncated to ~200 chars)
         cursor.execute('''
             INSERT OR IGNORE INTO instagram_post_log (fb_post_id, post_number, text, published_at)
-            SELECT post_id, post_number, post_text, published_at
-            FROM post_tracking
-            WHERE post_number IS NOT NULL
-              AND post_text IS NOT NULL
-              AND post_text != ''
-              AND published_at >= ?
+            SELECT
+                pt.post_id,
+                pt.post_number,
+                COALESCE(
+                    (SELECT e.text FROM entries e
+                     WHERE e.facebook_post_id = pt.post_id LIMIT 1),
+                    pt.post_text
+                ) AS text,
+                pt.published_at
+            FROM post_tracking pt
+            WHERE pt.post_number IS NOT NULL
+              AND (pt.post_text IS NOT NULL AND pt.post_text != '')
+              AND pt.published_at >= ?
         ''', (cutoff,))
         count = cursor.rowcount
-        print(f"[ig-backfill] inserted {count} row(s) from post_tracking")
+        print(f"[ig-backfill] inserted {count} row(s) (full text from entries where available)")
 
-        # Secondary source: entries table (may still have some published entries)
+        # Also pull any published entries not yet in the log
         cursor.execute('''
             INSERT OR IGNORE INTO instagram_post_log (fb_post_id, post_number, text, published_at)
             SELECT facebook_post_id, post_number, text,
@@ -2213,6 +2220,22 @@ class Database:
         ''')
         count2 = cursor.rowcount
         print(f"[ig-backfill] inserted {count2} additional row(s) from entries table")
+
+        # Update existing rows whose text came from post_tracking (short) with full text
+        cursor.execute('''
+            UPDATE instagram_post_log
+            SET text = (
+                SELECT e.text FROM entries e
+                WHERE e.facebook_post_id = instagram_post_log.fb_post_id LIMIT 1
+            )
+            WHERE EXISTS (
+                SELECT 1 FROM entries e
+                WHERE e.facebook_post_id = instagram_post_log.fb_post_id
+            )
+              AND LENGTH(text) < 300
+        ''')
+        updated = cursor.rowcount
+        print(f"[ig-backfill] updated {updated} row(s) with full text from entries")
 
         conn.commit()
         conn.close()
