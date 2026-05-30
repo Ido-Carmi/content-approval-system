@@ -785,7 +785,27 @@ def instagram_daily_job(force_all: bool = False):
             clean_text = lines[1].strip() if len(lines) > 1 else raw_text
         else:
             clean_text = raw_text.strip()
-        print(f"[ig-job]   clean text ({len(clean_text)} chars): {clean_text[:120]}")
+        print(f"[ig-job]   stored text ({len(clean_text)} chars): {clean_text[:80]}")
+
+        # Always fetch full post text from Facebook — DB text may be truncated
+        if extensions.facebook_handler:
+            print(f"[ig-job]   fetching full text from Facebook for {best['fb_post_id']}")
+            fb_text = extensions.facebook_handler.get_post_full_text(best['fb_post_id'])
+            if fb_text:
+                # Strip "#number\n" prefix if present
+                if fb_text.startswith('#'):
+                    parts = fb_text.split('\n', 1)
+                    fb_text = parts[1].strip() if len(parts) > 1 else fb_text
+                if len(fb_text) > len(clean_text):
+                    print(f"[ig-job]   ✅ full text from FB: {len(fb_text)} chars "
+                          f"(was {len(clean_text)} chars in DB)")
+                    clean_text = fb_text
+                else:
+                    print(f"[ig-job]   FB text same length ({len(fb_text)} chars) — using DB text")
+            else:
+                print(f"[ig-job]   ⚠️  could not fetch from FB — using stored text")
+
+        print(f"[ig-job]   final text ({len(clean_text)} chars): {clean_text[:120]}")
 
         # ── Image generation ─────────────────────────────────────────────
         print(f"\n[ig-job] STEP 5: Generate image slides")

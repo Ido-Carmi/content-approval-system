@@ -203,6 +203,18 @@ class FacebookHandler:
         else:
             raise Exception(f"Facebook API error: {response.text}")
 
+    def get_post_full_text(self, post_id: str) -> str:
+        """Fetch the full message text of a published Facebook post. Returns '' on error."""
+        url = f"{self.api_base}/{post_id}"
+        params = {'access_token': self.access_token, 'fields': 'message'}
+        try:
+            resp = requests.get(url, params=params, timeout=10)
+            if resp.status_code == 200:
+                return resp.json().get('message', '')
+        except Exception:
+            pass
+        return ''
+
     def get_post_reactions_count(self, post_id: str) -> int:
         """Return total reaction count for a published post. Returns 0 on any error."""
         url = f"{self.api_base}/{post_id}/reactions"
