@@ -249,62 +249,43 @@ def generate_confession_slides(
 
     bold_font = _load_font(hp, FONT_SIZE_HEADER)
 
-    # Split into pages — respect paragraph boundaries, distribute evenly
+    # Split into pages — evenly, splitting at sentence endings when possible
     import math
 
     lines_per_page = max(1, text_area // lh)
+    n_slides = min(10, max(1, math.ceil(len(lines) / lines_per_page)))
+    target   = math.ceil(len(lines) / n_slides)
 
-    # Reconstruct paragraphs from wrapped lines (blank line = separator)
-    paragraphs: list[list[str]] = []   # list of non-empty paragraph line-lists
-    current_para: list[str] = []
-    for line in lines:
-        if line == '':
-            if current_para:
-                paragraphs.append(current_para)
-                current_para = []
-        else:
-            current_para.append(line)
-    if current_para:
-        paragraphs.append(current_para)
+    print(f"[imggen] {len(lines)} lines → {n_slides} slide(s), target ~{target} lines each")
 
-    total_lines = sum(len(p) for p in paragraphs)
-    n_slides    = min(10, max(1, math.ceil(total_lines / lines_per_page)))
-    target      = math.ceil(total_lines / n_slides)   # aim for this many lines/slide
+    def _best_split(lines: list[str], target_idx: int) -> int:
+        """Find the best line index to split at, near target_idx.
+        Prefers lines ending a sentence (. ? !) within ±3 lines."""
+        enders = set('.?!…')
+        best = target_idx
+        for offset in range(0, min(4, len(lines))):
+            for idx in (target_idx - offset, target_idx + offset):
+                if 0 < idx <= len(lines):
+                    prev = lines[idx - 1].rstrip() if lines[idx - 1] else ''
+                    if prev and prev[-1] in enders:
+                        return idx
+        return best
 
-    print(f"[imggen] {total_lines} lines → target {n_slides} slide(s), ~{target} lines each")
-
-    # Greedy fill to target; when a paragraph would overflow, start new slide
     pages: list[list[str]] = []
-    current_page: list[str] = []
+    remaining = list(lines)
+    while remaining and len(pages) < 10:
+        if len(pages) == n_slides - 1 or len(remaining) <= lines_per_page:
+            # Last slide gets everything left
+            pages.append(remaining)
+            break
+        split_at = _best_split(remaining, target)
+        split_at = max(1, min(split_at, lines_per_page, len(remaining) - 1))
+        pages.append(remaining[:split_at])
+        remaining = remaining[split_at:]
 
-    for para in paragraphs:
-        if not current_page:
-            current_page = list(para)
-        elif len(current_page) + len(para) <= target:
-            current_page.append('')    # blank line between paragraphs
-            current_page.extend(para)
-        else:
-            pages.append(current_page)
-            current_page = list(para)
-
-    if current_page:
-        pages.append(current_page)
-
-    # Force-split any single page that still exceeds lines_per_page
-    final_pages: list[list[str]] = []
-    for page in pages:
-        content = [l for l in page if l]   # count non-blank lines
-        if len(content) <= lines_per_page:
-            final_pages.append(page)
-        else:
-            for i in range(0, len(page), lines_per_page):
-                chunk = page[i:i+lines_per_page]
-                if any(l for l in chunk):  # skip blank-only chunks
-                    final_pages.append(chunk)
-
-    # Remove any accidentally empty pages
-    pages = [p for p in final_pages if any(l for l in p)][:10]
-    print(f"[imggen] {len(pages)} slide(s) (paragraph-aware, even split)")
+    # Remove blank-only pages
+    pages = [p for p in pages if any(l for l in p)]
+    print(f"[imggen] {len(pages)} slide(s) after split")
 
     slides = []
     for idx, page_lines in enumerate(pages):
