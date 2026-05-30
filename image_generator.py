@@ -249,17 +249,53 @@ def generate_confession_slides(
 
     bold_font = _load_font(hp, FONT_SIZE_HEADER)
 
-    # Split into pages (carousel) — distribute evenly across slides
+    # Split into pages at paragraph boundaries — never mid-sentence
     import math
     lines_per_page = max(1, text_area // lh)
-    n_slides = min(10, math.ceil(len(lines) / lines_per_page))
-    if n_slides > 1:
-        lines_per_slide = math.ceil(len(lines) / n_slides)
-    else:
-        lines_per_slide = lines_per_page
-    pages = [lines[i:i+lines_per_slide] for i in range(0, len(lines), lines_per_slide)]
-    pages = pages[:10]
-    print(f"[imggen] {len(pages)} slide(s), ~{lines_per_slide} lines/slide")
+
+    # Group lines back into paragraphs (empty line = paragraph break)
+    paragraphs: list[list[str]] = []
+    current_para: list[str] = []
+    for line in lines:
+        if line == '':
+            if current_para:
+                paragraphs.append(current_para)
+                current_para = []
+            paragraphs.append([])   # keep blank line as separator
+        else:
+            current_para.append(line)
+    if current_para:
+        paragraphs.append(current_para)
+
+    # Pack paragraphs onto slides — only split between paragraphs
+    pages: list[list[str]] = []
+    current_page: list[str] = []
+
+    for para in paragraphs:
+        if not para:                # blank line between paragraphs
+            if current_page:
+                current_page.append('')
+            continue
+        if len(current_page) + len(para) > lines_per_page and current_page:
+            pages.append(current_page)
+            current_page = list(para)
+        else:
+            current_page.extend(para)
+
+    if current_page:
+        pages.append(current_page)
+
+    # Safety: if a single paragraph exceeds one slide, force-split it
+    final_pages: list[list[str]] = []
+    for page in pages:
+        if len(page) <= lines_per_page:
+            final_pages.append(page)
+        else:
+            for i in range(0, len(page), lines_per_page):
+                final_pages.append(page[i:i+lines_per_page])
+
+    pages = final_pages[:10]
+    print(f"[imggen] {len(pages)} slide(s) (paragraph-aware split)")
 
     slides = []
     for idx, page_lines in enumerate(pages):
