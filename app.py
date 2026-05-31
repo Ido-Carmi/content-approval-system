@@ -1076,7 +1076,7 @@ def instagram_backfill():
 @app.route('/instagram-post-now', methods=['POST'])
 def instagram_post_now():
     """Manually trigger the Instagram daily job for testing (bypasses instagram_enabled check)."""
-    from background_tasks import instagram_daily_job
+    from background_tasks import instagram_engagement_job
     import threading
 
     def _run_forced():
@@ -1086,7 +1086,7 @@ def instagram_post_now():
         cfg['instagram_enabled'] = True
         save_config(cfg)
         try:
-            instagram_daily_job(force_all=True)
+            instagram_engagement_job(force_all=True)
         finally:
             cfg2 = load_config()
             cfg2['instagram_enabled'] = was_enabled

@@ -915,11 +915,6 @@ def instagram_engagement_job(force_all: bool = False):
             pass
 
 
-# Backwards-compatible alias (app.py route + scheduler still reference this name)
-def instagram_daily_job(force_all: bool = False):
-    return instagram_engagement_job(force_all=force_all)
-
-
 def start_scheduler():
     """Set up scheduled jobs and start the scheduler + watchdog threads."""
     global _scheduler_thread

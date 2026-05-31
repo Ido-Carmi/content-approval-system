@@ -2152,27 +2152,6 @@ class Database:
     # Instagram helpers
     # -------------------------------------------------------------------------
 
-    def get_best_post_for_instagram(self, start_iso: str, end_iso: str) -> List[Dict]:
-        """Return all unposted instagram_post_log entries in [start_iso, end_iso).
-        Includes comment_count from hidden_comments.
-        Caller scores each entry (reactions + comment_count*2) and picks the max."""
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT l.id, l.fb_post_id, l.post_number, l.text, l.published_at,
-                   COUNT(hc.id) AS comment_count
-            FROM instagram_post_log l
-            LEFT JOIN hidden_comments hc ON hc.post_id = l.fb_post_id
-            WHERE l.published_at >= ?
-              AND l.published_at <  ?
-              AND l.ig_posted = 0
-            GROUP BY l.id
-            ORDER BY l.published_at ASC
-        ''', (start_iso, end_iso))
-        rows = cursor.fetchall()
-        conn.close()
-        return [dict(r) for r in rows]
-
     def get_pending_instagram_posts(self) -> List[Dict]:
         """Return all instagram_post_log entries not yet posted or skipped.
         Each row includes comment_count from hidden_comments (fallback only —
