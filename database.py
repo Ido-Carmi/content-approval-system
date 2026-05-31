@@ -2194,13 +2194,25 @@ class Database:
         return [dict(r) for r in rows]
 
     def mark_ig_posted(self, log_id: int):
-        """Mark an instagram_post_log entry as posted."""
+        """Mark an instagram_post_log entry as posted, plus any sibling rows that
+        share the same post_number (guards against double-posting the same
+        confession when duplicate rows exist with different fb_post_ids)."""
         conn = self.get_connection()
         cursor = conn.cursor()
+        now_iso = datetime.now().isoformat()
+        cursor.execute('SELECT post_number FROM instagram_post_log WHERE id=?', (log_id,))
+        row = cursor.fetchone()
+        post_number = row['post_number'] if row else None
         cursor.execute(
             'UPDATE instagram_post_log SET ig_posted=1, ig_posted_at=? WHERE id=?',
-            (datetime.now().isoformat(), log_id)
+            (now_iso, log_id)
         )
+        if post_number is not None:
+            cursor.execute(
+                'UPDATE instagram_post_log SET ig_posted=1, ig_posted_at=? '
+                'WHERE post_number=? AND ig_posted=0',
+                (now_iso, post_number)
+            )
         conn.commit()
         conn.close()
 

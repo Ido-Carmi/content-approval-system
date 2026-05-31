@@ -634,7 +634,9 @@ def reschedule_canonical():
                 no_number.append(e)
             elif pn not in seen_pn or e['id'] > seen_pn[pn]['id']:
                 seen_pn[pn] = e
-        entries = sorted(seen_pn.values(), key=lambda e: e.get('scheduled_time') or '') + no_number
+        # Sort by post_number so the schedule always reflects numeric order
+        # (matches the nightly reschedule_all_to_new_windows logic).
+        entries = sorted(seen_pn.values(), key=lambda e: (e.get('post_number') or 999999)) + no_number
         dupes = len(raw_entries) - len(entries)
         if dupes:
             print(f"  ⚠️  Skipped {dupes} duplicate DB entries (same post_number)")
