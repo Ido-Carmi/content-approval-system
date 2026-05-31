@@ -680,18 +680,23 @@ def _watchdog():
 
 
 def _parse_fb_datetime(s):
-    """Parse an ISO timestamp from Facebook (+0000) or the log (+03:00) to tz-aware dt.
+    """Parse an ISO timestamp from Facebook (+0000) or the log (+03:00) to a
+    tz-aware datetime. Naive timestamps are assumed to be Israel time.
     Accepts None/empty and returns None."""
     if not s:
         return None
+    dt = None
     try:
-        return datetime.strptime(s, '%Y-%m-%dT%H:%M:%S%z')   # FB form: +0000
+        dt = datetime.strptime(s, '%Y-%m-%dT%H:%M:%S%z')     # FB form: +0000
     except ValueError:
-        pass
-    try:
-        return datetime.fromisoformat(s)                     # log form: +03:00
-    except ValueError:
-        return None
+        try:
+            dt = datetime.fromisoformat(s)                   # log form: +03:00 or naive
+        except ValueError:
+            return None
+    if dt is not None and dt.tzinfo is None:
+        # Naive — assume Israel local time so comparisons stay tz-aware
+        dt = pytz.timezone('Asia/Jerusalem').localize(dt)
+    return dt
 
 
 def _instagram_window_start(now, israel_tz, lookback_days: int = 1):
@@ -890,7 +895,10 @@ def instagram_engagement_job(force_all: bool = False):
             count = cfg.get('instagram_failure_count', 0) + 1
             cfg['instagram_failure_count'] = count
             save_config(cfg)
-            if count >= 3 and cfg.get('notifications_enabled') and cfg.get('notification_emails'):
+            # Alert once after 3 consecutive failures, then at most once per 24h
+            if (count >= 3 and cfg.get('notifications_enabled')
+                    and cfg.get('notification_emails')
+                    and not _notification_on_cooldown(cfg, 'instagram_alert_last')):
                 send_notification_email(
                     f"🚨 Instagram פוסט נכשל {count} פעמים ברצף",
                     f"<html><body style='direction:rtl;font-family:Arial;padding:20px'>"
@@ -900,6 +908,9 @@ def instagram_engagement_job(force_all: bool = False):
                     f"</body></html>",
                     cfg['notification_emails'],
                 )
+                cfg = load_config()
+                cfg['instagram_alert_last'] = datetime.now().isoformat()
+                save_config(cfg)
         except Exception:
             pass
 
