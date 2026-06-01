@@ -20,6 +20,7 @@ CANVAS  = (1080, 1080)
 PAD     = 80
 TOP_Y   = 150       # y where body text starts
 FOOT_Y  = CANVAS[1] - 90
+VERTICAL_MARGIN = 70   # breathing room reserved above/below the text block
 
 BG_COLOR        = (0x46, 0x65, 0x29)   # #466529
 TEXT_COLOR      = (0xfa, 0xca, 0x19)   # #FACA19
@@ -202,12 +203,14 @@ def _draw_slide(lines: list[str], post_number: int, watermark: str,
     draw.line([(PAD, FOOT_Y - 20), (CANVAS[0] - PAD, FOOT_Y - 20)],
               fill=DIVIDER_COLOR, width=2)
 
-    # ── Body text — centered horizontally, starts near top ───────────────────
+    # ── Body text — centered horizontally, within the margin-reduced area ─────
     lh           = _line_height(body_font, draw)
-    text_area_h  = FOOT_Y - 20 - TOP_Y
+    area_top     = TOP_Y + VERTICAL_MARGIN
+    area_bottom  = FOOT_Y - 20 - VERTICAL_MARGIN
+    text_area_h  = area_bottom - area_top
     total_text_h = len(lines) * lh
-    top_pad      = min(30, max(0, (text_area_h - total_text_h) // 4))
-    y        = TOP_Y + top_pad
+    # Center the block within the margin-reduced area
+    y        = area_top + max(0, (text_area_h - total_text_h) // 2)
     center_x = CANVAS[0] // 2
 
     for line in lines:
@@ -268,7 +271,8 @@ def generate_confession_slides(
     hp = bold_font_path or FONT_BOLD
 
     usable_w  = CANVAS[0] - 2 * PAD
-    text_area = FOOT_Y - 20 - TOP_Y
+    # Reserve vertical breathing room top+bottom so slides aren't packed edge-to-edge.
+    text_area = FOOT_Y - 20 - TOP_Y - 2 * VERTICAL_MARGIN
 
     tmp_img  = Image.new('RGB', CANVAS, BG_COLOR)
     tmp_draw = ImageDraw.Draw(tmp_img)
