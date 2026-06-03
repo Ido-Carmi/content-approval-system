@@ -178,6 +178,7 @@ class Scheduler:
 
         occupied: set = set()
         posts_per_day: dict = {}
+        parse_failures = []
         for iso in taken_slot_isos:
             try:
                 dt = datetime.fromisoformat(str(iso))
@@ -188,8 +189,13 @@ class Scheduler:
                 key = (dt.date(), dt.time().replace(second=0, microsecond=0))
                 occupied.add(key)
                 posts_per_day[dt.date()] = posts_per_day.get(dt.date(), 0) + 1
-            except Exception:
-                pass
+            except Exception as exc:
+                parse_failures.append((iso, str(exc)))
+        if parse_failures:
+            print(f"[slot-pick] ⚠️  {len(parse_failures)} slot(s) failed to parse "
+                  f"(dropped from occupied!): {parse_failures}")
+        print(f"[slot-pick] occupied={sorted(str(k) for k in occupied)}")
+        print(f"[slot-pick] posts_per_day={ {str(d): n for d, n in sorted(posts_per_day.items())} }")
 
         num_windows = len(windows)
         current_date = now.date()

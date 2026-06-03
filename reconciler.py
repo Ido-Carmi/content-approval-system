@@ -104,14 +104,17 @@ def _run_cycle(db):
         _step_delete(db, fb, entry)
 
     # ── Step 2: schedule new posts ───────────────────────────────────────
-    # Build in-memory set of already-taken slots so we don't double-book
-    # within a single cycle.  Seed with BOTH confirmed FB slots and desired
-    # slots of entries already queued for scheduling this cycle, so that if
-    # two entries were approved with the same desired time (approve-route race)
-    # step2 will detect and reassign the second one.
-    fb_live      = set(db.get_taken_fb_slots())
-    desired_live = set(db.get_desired_slots())
-    taken_slots: set = fb_live | desired_live
+    # Build the set of slots occupied by OTHER posts (so a new post never
+    # conflicts with its own desired slot — that bug bumped every new post to a
+    # later window).  Occupied = confirmed FB slots (actual state) + desired
+    # slots of already-linked posts that step3 will push.  The needing-schedule
+    # entries themselves are excluded; concurrent same-slot approvals are caught
+    # by claiming each slot as it's scheduled below.
+    taken_slots: set = set(db.get_taken_fb_slots())
+    for e in db.get_entries_needing_sync():            # already on FB (have fb_post_id)
+        st = e.get('scheduled_time')
+        if st:
+            taken_slots.add(st)
     for entry in db.get_entries_needing_schedule():
         slot = _step_schedule(db, fb, entry, taken_slots)
         if slot:
@@ -167,8 +170,11 @@ def _step_schedule(db, fb, entry, taken_slots: set) -> Optional[str]:
 
     # If the desired slot is already taken (two concurrent approvals picked the same slot),
     # reassign a new slot and write it back to the desired-state column so the entry
-    # is not stuck waiting forever.
-    if slot in taken_slots:
+    # is not stuck waiting forever. Compare on normalized keys so format differences
+    # (isoformat vs strftime) don't hide or invent conflicts.
+    taken_keys = {_slot_key(s) for s in taken_slots}
+    taken_keys.discard(None)
+    if _slot_key(slot) in taken_keys:
         log.warning("[reconciler] step2 slot %s conflict for entry %d — reassigning", slot, eid)
         new_slot = _pick_next_free_slot(taken_slots)
         if not new_slot:
@@ -312,6 +318,16 @@ def _parse_slot(slot: str) -> Optional[datetime]:
         return ISRAEL_TZ.localize(datetime.strptime(slot, '%Y-%m-%d %H:%M:%S'))
     except ValueError:
         return None
+
+
+def _slot_key(slot: Optional[str]):
+    """Normalize a slot string to a (date, hour, minute) key in Israel time so
+    different string formats (isoformat vs strftime) compare equal."""
+    dt = _parse_slot(slot)
+    if dt is None:
+        return None
+    dt = dt.astimezone(ISRAEL_TZ)
+    return (dt.date(), dt.hour, dt.minute)
 
 
 def _times_differ(desired: Optional[str], actual: Optional[str]) -> bool:

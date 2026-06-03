@@ -231,8 +231,12 @@ def approve_entry(entry_id):
             desired  = set(extensions.db.get_desired_slots())
             fb_live  = set(extensions.db.get_taken_fb_slots())
             taken    = list(desired | fb_live)
+            print(f"[approve] slot-pick: {len(desired)} desired + {len(fb_live)} fb_live = {len(taken)} taken")
+            print(f"[approve]   desired slots: {sorted(desired)}")
+            print(f"[approve]   fb_live slots: {sorted(fb_live)}")
             slot_dt  = extensions.scheduler.get_next_available_slot_local(taken)
             slot_iso = slot_dt.isoformat()
+            print(f"[approve]   → chose {slot_iso}")
         except Exception as e:
             print(f"Slot picking error: {e}")
 
