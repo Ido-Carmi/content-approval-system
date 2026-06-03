@@ -249,12 +249,26 @@ class Database:
         cursor.execute(
             'CREATE INDEX IF NOT EXISTS idx_ig_log_published ON instagram_post_log(published_at)'
         )
-        # ig_skipped: 1 = evaluated at the 24h mark but engagement was below threshold
-        try:
-            cursor.execute('ALTER TABLE instagram_post_log ADD COLUMN ig_skipped INTEGER DEFAULT 0')
-            conn.commit()
-        except sqlite3.OperationalError:
-            pass  # Column already exists
+        # ig_skipped: 1 = evaluated at the 24h mark but engagement was below threshold (legacy)
+        # ig_status: watching → scheduled → posted | dropped (new engagement-watch flow)
+        for col_def in [
+            'ALTER TABLE instagram_post_log ADD COLUMN ig_skipped INTEGER DEFAULT 0',
+            "ALTER TABLE instagram_post_log ADD COLUMN ig_status TEXT DEFAULT 'watching'",
+            'ALTER TABLE instagram_post_log ADD COLUMN ig_scheduled_time TEXT',
+            'ALTER TABLE instagram_post_log ADD COLUMN last_engagement INTEGER DEFAULT 0',
+            'ALTER TABLE instagram_post_log ADD COLUMN last_checked TEXT',
+        ]:
+            try:
+                cursor.execute(col_def)
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+
+        # Migrate legacy flags to ig_status (one-time, harmless if already done)
+        cursor.execute("UPDATE instagram_post_log SET ig_status='posted'  WHERE ig_posted=1  AND (ig_status IS NULL OR ig_status='watching')")
+        cursor.execute("UPDATE instagram_post_log SET ig_status='dropped' WHERE ig_skipped=1 AND (ig_status IS NULL OR ig_status='watching')")
+
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_ig_log_status ON instagram_post_log(ig_status)')
 
         conn.commit()
         conn.close()
@@ -2152,59 +2166,153 @@ class Database:
     # Instagram helpers
     # -------------------------------------------------------------------------
 
-    def get_pending_instagram_posts(self) -> List[Dict]:
-        """Return all instagram_post_log entries not yet posted or skipped.
-        Each row includes comment_count from hidden_comments (fallback only —
-        the job fetches authoritative engagement from Facebook)."""
+    # ----- Instagram watch flow -----------------------------------------------
+
+    def get_ig_watching(self) -> List[Dict]:
+        """Posts currently being watched for engagement (ig_status='watching')."""
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute('''
-            SELECT l.id, l.fb_post_id, l.post_number, l.text, l.published_at,
-                   COUNT(hc.id) AS comment_count
-            FROM instagram_post_log l
-            LEFT JOIN hidden_comments hc ON hc.post_id = l.fb_post_id
-            WHERE l.ig_posted = 0
-              AND COALESCE(l.ig_skipped, 0) = 0
-            GROUP BY l.id
-            ORDER BY l.published_at ASC
+            SELECT id, fb_post_id, post_number, text, published_at,
+                   last_engagement, last_checked
+            FROM instagram_post_log
+            WHERE ig_status = 'watching'
+            ORDER BY published_at ASC
         ''')
         rows = cursor.fetchall()
         conn.close()
         return [dict(r) for r in rows]
 
-    def mark_ig_posted(self, log_id: int):
-        """Mark an instagram_post_log entry as posted, plus any sibling rows that
-        share the same post_number (guards against double-posting the same
-        confession when duplicate rows exist with different fb_post_ids)."""
+    def get_ig_scheduled(self) -> List[Dict]:
+        """Posts that crossed the threshold and are queued for Instagram, ordered by slot."""
         conn = self.get_connection()
         cursor = conn.cursor()
-        now_iso = datetime.now().isoformat()
+        cursor.execute('''
+            SELECT id, fb_post_id, post_number, text, published_at,
+                   last_engagement, ig_scheduled_time
+            FROM instagram_post_log
+            WHERE ig_status = 'scheduled'
+            ORDER BY ig_scheduled_time ASC
+        ''')
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+
+    def get_ig_due(self, now_iso: str) -> List[Dict]:
+        """Scheduled IG posts whose slot time has arrived (ig_scheduled_time <= now)."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT id, fb_post_id, post_number, text, ig_scheduled_time
+            FROM instagram_post_log
+            WHERE ig_status = 'scheduled'
+              AND ig_scheduled_time IS NOT NULL
+              AND ig_scheduled_time <= ?
+            ORDER BY ig_scheduled_time ASC
+        ''', (now_iso,))
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+
+    def get_ig_scheduled_slots(self) -> List[str]:
+        """All ig_scheduled_time values of queued IG posts (for slot conflict checks)."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT ig_scheduled_time FROM instagram_post_log
+            WHERE ig_status = 'scheduled' AND ig_scheduled_time IS NOT NULL
+        ''')
+        rows = cursor.fetchall()
+        conn.close()
+        return [r['ig_scheduled_time'] for r in rows]
+
+    def update_ig_engagement(self, log_id: int, engagement: int):
+        """Record the latest engagement reading for a watched post."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            'UPDATE instagram_post_log SET last_engagement=?, last_checked=? WHERE id=?',
+            (engagement, datetime.now().isoformat(), log_id)
+        )
+        conn.commit()
+        conn.close()
+
+    def set_ig_scheduled(self, log_id: int, slot_iso: str):
+        """Move a watched post into the scheduled queue with a publish slot.
+        Also marks sibling rows (same post_number) as dropped to avoid duplicates."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
         cursor.execute('SELECT post_number FROM instagram_post_log WHERE id=?', (log_id,))
         row = cursor.fetchone()
         post_number = row['post_number'] if row else None
         cursor.execute(
-            'UPDATE instagram_post_log SET ig_posted=1, ig_posted_at=? WHERE id=?',
-            (now_iso, log_id)
+            "UPDATE instagram_post_log SET ig_status='scheduled', ig_scheduled_time=? WHERE id=?",
+            (slot_iso, log_id)
         )
         if post_number is not None:
             cursor.execute(
-                'UPDATE instagram_post_log SET ig_posted=1, ig_posted_at=? '
-                'WHERE post_number=? AND ig_posted=0',
-                (now_iso, post_number)
+                "UPDATE instagram_post_log SET ig_status='dropped' "
+                "WHERE post_number=? AND id!=? AND ig_status='watching'",
+                (post_number, log_id)
             )
         conn.commit()
         conn.close()
 
-    def mark_ig_skipped(self, log_id: int):
-        """Mark an entry as evaluated-but-below-threshold so it isn't re-checked."""
+    def set_ig_slot(self, log_id: int, slot_iso: str):
+        """Update an already-scheduled IG post's slot (reorder / reschedule)."""
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute(
-            'UPDATE instagram_post_log SET ig_skipped=1 WHERE id=?',
-            (log_id,)
+            'UPDATE instagram_post_log SET ig_scheduled_time=? WHERE id=?',
+            (slot_iso, log_id)
         )
         conn.commit()
         conn.close()
+
+    def set_ig_text(self, log_id: int, text: str):
+        """Edit the stored text of an IG post (image is regenerated at publish/preview)."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('UPDATE instagram_post_log SET text=? WHERE id=?', (text, log_id))
+        conn.commit()
+        conn.close()
+
+    def set_ig_status(self, log_id: int, status: str):
+        """Set ig_status (watching | scheduled | posted | dropped)."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        if status == 'posted':
+            cursor.execute(
+                "UPDATE instagram_post_log SET ig_status='posted', ig_posted=1, ig_posted_at=? WHERE id=?",
+                (datetime.now().isoformat(), log_id)
+            )
+        else:
+            cursor.execute('UPDATE instagram_post_log SET ig_status=? WHERE id=?', (status, log_id))
+        conn.commit()
+        conn.close()
+
+    def get_ig_entry(self, log_id: int) -> Optional[Dict]:
+        """Fetch a single instagram_post_log row by id."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM instagram_post_log WHERE id=?', (log_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+    def drop_ig_watching_older_than(self, cutoff_iso: str) -> int:
+        """Drop watched posts published before cutoff (never crossed the threshold)."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE instagram_post_log SET ig_status='dropped' "
+            "WHERE ig_status='watching' AND published_at < ?",
+            (cutoff_iso,)
+        )
+        n = cursor.rowcount
+        conn.commit()
+        conn.close()
+        return n
 
     def backfill_instagram_post_log(self, days: int = 7) -> int:
         """Backfill instagram_post_log from post_tracking (survives cleanup_old_entries).

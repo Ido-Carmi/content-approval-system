@@ -94,6 +94,12 @@
                 <a href="{{ url_for('scheduled_page') }}" class="list-group-item list-group-item-action {% if request.endpoint == 'scheduled_page' %}active{% endif %}">
                     <i class="bi bi-calendar-check"></i> פוסטים מתוזמנים
                 </a>
+                <a href="{{ url_for('instagram_watch_page') }}" class="list-group-item list-group-item-action {% if request.endpoint == 'instagram_watch_page' %}active{% endif %}">
+                    <i class="bi bi-eye"></i> מעקב אינסטגרם
+                </a>
+                <a href="{{ url_for('instagram_scheduled_page') }}" class="list-group-item list-group-item-action {% if request.endpoint == 'instagram_scheduled_page' %}active{% endif %}">
+                    <i class="bi bi-instagram"></i> תזמון אינסטגרם
+                </a>
                 <a href="{{ url_for('denied_page') }}" class="list-group-item list-group-item-action {% if request.endpoint == 'denied_page' %}active{% endif %}">
                     <i class="bi bi-trash"></i> וידויים שנדחו
                 </a>

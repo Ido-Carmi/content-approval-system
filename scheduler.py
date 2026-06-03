@@ -170,10 +170,12 @@ class Scheduler:
                 print(f"⚠️  Skipping post with invalid scheduled_time: {post.get('id')}")
         return times
     
-    def get_next_available_slot_local(self, taken_slot_isos) -> datetime:
+    def get_next_available_slot_local(self, taken_slot_isos, windows=None) -> datetime:
         """Pick the next available slot using only local data (no Facebook API call).
-        taken_slot_isos: iterable of ISO strings of already-desired scheduled times."""
-        windows = self.load_posting_windows()
+        taken_slot_isos: iterable of ISO strings of already-desired scheduled times.
+        windows: optional list of datetime.time; defaults to the Facebook posting windows."""
+        if windows is None:
+            windows = self.load_posting_windows()
         now = datetime.now(self.timezone)
 
         occupied: set = set()
@@ -227,6 +229,41 @@ class Scheduler:
                 return self.timezone.localize(datetime.combine(fallback_date, windows[0]))
             fallback_days += 1
         return self.timezone.localize(datetime.combine(current_date + timedelta(days=1), windows[0]))
+
+    # ----- Instagram dynamic scheduling (separate windows/tiers) ---------------
+
+    IG_DEFAULT_TIERS = [
+        {'max_posts': 3,   'windows': ['18:00']},
+        {'max_posts': 7,   'windows': ['12:00', '20:00']},
+        {'max_posts': 999, 'windows': ['10:00', '15:00', '20:00']},
+    ]
+
+    def get_ig_dynamic_tiers(self):
+        config = load_config()
+        tiers = config.get('instagram_dynamic_tiers', self.IG_DEFAULT_TIERS)
+        return sorted(tiers, key=lambda t: t['max_posts'])
+
+    def get_ig_windows_for_count(self, scheduled_count: int) -> list:
+        """Return the IG posting windows (as 'HH:MM' strings) for a given queue size."""
+        tiers = self.get_ig_dynamic_tiers()
+        for tier in tiers:
+            if scheduled_count <= tier['max_posts']:
+                return tier['windows']
+        return tiers[-1]['windows'] if tiers else ['18:00']
+
+    def load_ig_windows(self, scheduled_count: int) -> List[time]:
+        """IG posting windows as datetime.time objects, sized by the current queue."""
+        windows = []
+        for w in self.get_ig_windows_for_count(scheduled_count):
+            hour, minute = map(int, w.split(':'))
+            windows.append(time(hour, minute))
+        return sorted(windows)
+
+    def get_next_available_ig_slot(self, taken_slot_isos) -> datetime:
+        """Next free Instagram slot using IG dynamic-tier windows (queue-size aware)."""
+        scheduled_count = len([t for t in taken_slot_isos if t]) + 1
+        windows = self.load_ig_windows(scheduled_count)
+        return self.get_next_available_slot_local(taken_slot_isos, windows=windows)
 
     def reschedule_all_to_new_windows(self) -> int:
         """

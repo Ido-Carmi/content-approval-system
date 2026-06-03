@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, jsonify, flash, session
+from flask import Flask, render_template, request, redirect, url_for, jsonify, flash, session, Response
 import threading
 import traceback
 import os
@@ -995,10 +995,37 @@ def settings_page():
             'instagram_enabled':             request.form.get('instagram_enabled') == 'on',
             'instagram_ig_account_id':       request.form.get('instagram_ig_account_id', '').strip(),
             'instagram_engagement_threshold': int(request.form.get('instagram_engagement_threshold', 150) or 150),
-            'instagram_delay_hours':         float(request.form.get('instagram_delay_hours', 24) or 24),
+            'instagram_watch_days':          int(request.form.get('instagram_watch_days', 7) or 7),
             'instagram_hashtags':            request.form.get('instagram_hashtags', '').strip(),
             'instagram_watermark':           request.form.get('instagram_watermark', 'וידויים צבאיים').strip(),
         })
+
+        # Instagram dynamic tiers — same format as Facebook: "max_posts | t1,t2"
+        ig_tiers_text = request.form.get('instagram_dynamic_tiers', '')
+        if ig_tiers_text.strip():
+            ig_tiers = []
+            for line in ig_tiers_text.strip().split('\n'):
+                line = line.strip()
+                if not line or '|' not in line:
+                    continue
+                parts = line.split('|')
+                try:
+                    max_posts = int(parts[0].strip())
+                    windows = []
+                    for w in parts[1].strip().split(','):
+                        w = w.strip()
+                        if not w:
+                            continue
+                        h, m = w.split(':')
+                        if 0 <= int(h) <= 23 and 0 <= int(m) <= 59:
+                            windows.append(f"{int(h):02d}:{int(m):02d}")
+                    if windows:
+                        ig_tiers.append({'max_posts': max_posts, 'windows': windows})
+                except ValueError:
+                    continue
+            if ig_tiers:
+                ig_tiers.sort(key=lambda t: t['max_posts'])
+                config['instagram_dynamic_tiers'] = ig_tiers
 
         for key, value in secret_fields.items():
             if value.strip():
@@ -1060,27 +1087,186 @@ def settings_page():
 
     return render_template('settings.html', config=config, current_number=current_number)
 
+def _ig_clean_text(raw: str) -> str:
+    """Strip a leading '#number\\n' prefix from stored post text."""
+    raw = raw or ''
+    if raw.startswith('#'):
+        parts = raw.split('\n', 1)
+        return parts[1].strip() if len(parts) > 1 else raw
+    return raw.strip()
+
+
+@app.route('/instagram-watch')
+def instagram_watch_page():
+    """Posts currently watched for engagement, with progress toward the threshold."""
+    config    = load_config()
+    threshold = int(config.get('instagram_engagement_threshold', 150))
+    watch_days = int(config.get('instagram_watch_days', 7))
+    rows = extensions.db.get_ig_watching()
+    israel_tz = pytz.timezone('Asia/Jerusalem')
+    now = datetime.now(israel_tz)
+    items = []
+    for r in rows:
+        eng = r.get('last_engagement') or 0
+        pct = min(100, int(eng * 100 / threshold)) if threshold else 0
+        # days left in watch window
+        days_left = None
+        try:
+            pub = datetime.fromisoformat(r['published_at'])
+            if pub.tzinfo is None:
+                pub = israel_tz.localize(pub)
+            days_left = round(watch_days - (now - pub.astimezone(israel_tz)).total_seconds() / 86400, 1)
+        except Exception:
+            pass
+        items.append({
+            'id': r['id'], 'post_number': r['post_number'],
+            'text': _ig_clean_text(r['text']),
+            'engagement': eng, 'pct': pct, 'days_left': days_left,
+            'last_checked': r.get('last_checked'),
+        })
+    return render_template('instagram_watch.html', items=items,
+                           threshold=threshold, watch_days=watch_days, config=config)
+
+
+@app.route('/instagram-scheduled')
+def instagram_scheduled_page():
+    """Instagram posts queued for publishing (crossed the threshold)."""
+    config = load_config()
+    rows = extensions.db.get_ig_scheduled()
+    israel_tz = pytz.timezone('Asia/Jerusalem')
+    items = []
+    for r in rows:
+        slot = r.get('ig_scheduled_time')
+        disp = slot
+        weekday = ''
+        try:
+            dt = datetime.fromisoformat(slot)
+            if dt.tzinfo is None:
+                dt = israel_tz.localize(dt)
+            disp = dt.strftime('%H:%M %d/%m/%Y')
+            weekday = get_hebrew_weekday(slot)
+        except Exception:
+            pass
+        items.append({
+            'id': r['id'], 'post_number': r['post_number'],
+            'text': _ig_clean_text(r['text']),
+            'engagement': r.get('last_engagement') or 0,
+            'scheduled_time': slot, 'display_time': disp, 'weekday': weekday,
+        })
+    return render_template('instagram_scheduled.html', items=items, config=config)
+
+
+@app.route('/instagram-image/<int:log_id>.jpg')
+def instagram_image(log_id):
+    """Render a preview JPEG (first slide) of a queued/watched IG post."""
+    entry = extensions.db.get_ig_entry(log_id)
+    if not entry:
+        return 'not found', 404
+    from image_generator import generate_confession_slides, slides_to_bytes
+    config = load_config()
+    slides = generate_confession_slides(
+        text=_ig_clean_text(entry['text']),
+        post_number=entry['post_number'],
+        watermark=config.get('instagram_watermark', 'וידויים צבאיים'),
+    )
+    data = slides_to_bytes(slides)[0]
+    return Response(data, mimetype='image/jpeg')
+
+
+@app.route('/instagram-schedule-now/<int:log_id>', methods=['POST'])
+def instagram_schedule_now(log_id):
+    """Manually move a watched post into the scheduled queue."""
+    taken = extensions.db.get_ig_scheduled_slots()
+    slot  = extensions.scheduler.get_next_available_ig_slot(taken)
+    extensions.db.set_ig_scheduled(log_id, slot.isoformat())
+    return jsonify({'ok': True})
+
+
+@app.route('/instagram-drop/<int:log_id>', methods=['POST'])
+def instagram_drop(log_id):
+    """Drop a post from watch or remove it from the schedule."""
+    extensions.db.set_ig_status(log_id, 'dropped')
+    return jsonify({'ok': True})
+
+
+@app.route('/instagram-edit/<int:log_id>', methods=['POST'])
+def instagram_edit(log_id):
+    """Edit the text of a queued IG post (image regenerates from it)."""
+    body = request.get_json(silent=True) or {}
+    text = request.form.get('text', '') or body.get('text', '')
+    if not text.strip():
+        return jsonify({'ok': False, 'error': 'empty text'}), 400
+    extensions.db.set_ig_text(log_id, text.strip())
+    return jsonify({'ok': True})
+
+
+@app.route('/instagram-reorder', methods=['POST'])
+def instagram_reorder():
+    """Reorder scheduled IG posts: assign the existing slot times to the new order."""
+    body  = request.get_json(silent=True) or {}
+    order = body.get('order', [])
+    if not order:
+        return jsonify({'ok': False, 'error': 'no order'}), 400
+    # Existing slots, sorted chronologically, reassigned to the new id order.
+    slots = sorted(extensions.db.get_ig_scheduled_slots())
+    for log_id, slot in zip(order, slots):
+        extensions.db.set_ig_slot(int(log_id), slot)
+    return jsonify({'ok': True, 'updated': min(len(order), len(slots))})
+
+
+@app.route('/instagram-reschedule-canonical', methods=['POST'])
+def instagram_reschedule_canonical():
+    """Redistribute all scheduled IG posts to canonical IG dynamic-tier slots,
+    in post_number order (mirrors the Facebook canonical reschedule)."""
+    from datetime import timedelta as _td
+    rows = extensions.db.get_ig_scheduled()
+    if not rows:
+        return jsonify({'ok': True, 'updated': 0})
+    rows.sort(key=lambda r: (r.get('post_number') or 999999))
+    n        = len(rows)
+    tz       = extensions.scheduler.timezone
+    now      = datetime.now(tz)
+    windows  = extensions.scheduler.load_ig_windows(n)
+    min_time = now + _td(minutes=30)
+
+    slots, day = [], now.date()
+    while len(slots) < n and (day - now.date()).days <= 365:
+        if not extensions.scheduler.should_skip_date(day):
+            for w in windows:
+                slot = tz.localize(datetime.combine(day, w))
+                if slot > min_time:
+                    slots.append(slot)
+                    if len(slots) >= n:
+                        break
+        day += _td(days=1)
+
+    for entry, slot in zip(rows, slots):
+        extensions.db.set_ig_slot(entry['id'], slot.isoformat())
+    return jsonify({'ok': True, 'updated': len(slots)})
+
+
 @app.route('/instagram-backfill', methods=['POST'])
 def instagram_backfill():
-    """Backfill instagram_post_log and reset ig_posted flags for testing."""
+    """Backfill instagram_post_log (test aid). reset=1 re-arms everything to 'watching'."""
     days  = int(request.form.get('days', 7))
     reset = request.form.get('reset') == '1'
     count = extensions.db.backfill_instagram_post_log(days=days)
     if reset:
         conn   = extensions.db.get_connection()
         cursor = conn.cursor()
-        cursor.execute('UPDATE instagram_post_log SET ig_posted=0, ig_posted_at=NULL, ig_skipped=0')
+        cursor.execute("UPDATE instagram_post_log SET ig_status='watching', ig_scheduled_time=NULL, "
+                       "ig_posted=0, ig_posted_at=NULL, ig_skipped=0")
         reset_count = cursor.rowcount
         conn.commit()
         conn.close()
-        return jsonify({'ok': True, 'message': f'✅ {count} נטענו, {reset_count} אופסו לבדיקה'})
-    return jsonify({'ok': True, 'message': f'✅ {count} פוסטים נטענו ללוג Instagram'})
+        return jsonify({'ok': True, 'message': f'✅ {count} נטענו, {reset_count} אופסו למעקב'})
+    return jsonify({'ok': True, 'message': f'✅ {count} פוסטים נטענו למעקב Instagram'})
 
 
 @app.route('/instagram-post-now', methods=['POST'])
 def instagram_post_now():
-    """Manually trigger the Instagram daily job for testing (bypasses instagram_enabled check)."""
-    from background_tasks import instagram_engagement_job
+    """Manually publish the earliest scheduled IG post now (test, bypasses timing)."""
+    from background_tasks import instagram_publish_job
     import threading
 
     def _run_forced():
@@ -1090,14 +1276,14 @@ def instagram_post_now():
         cfg['instagram_enabled'] = True
         save_config(cfg)
         try:
-            instagram_engagement_job(force_all=True)
+            instagram_publish_job(force_one=True)
         finally:
             cfg2 = load_config()
             cfg2['instagram_enabled'] = was_enabled
             save_config(cfg2)
 
     threading.Thread(target=_run_forced, daemon=True).start()
-    flash('Instagram job started — check logs', 'info')
+    flash('Instagram publish started — check logs', 'info')
     return redirect(url_for('settings_page'))
 
 

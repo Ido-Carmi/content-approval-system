@@ -699,29 +699,6 @@ def _parse_fb_datetime(s):
     return dt
 
 
-def _instagram_window_start(now, israel_tz, lookback_days: int = 1):
-    """Floor datetime for eligible post targets: walk back from today, skipping
-    Shabbat/holiday days, until `lookback_days` postable days have passed.
-
-    On a normal weekday this is "yesterday 00:00" (the previous day).
-    On Sunday it walks past Fri+Sat to Thursday → covers the whole weekend.
-    After a holiday it walks past the holiday similarly. Posts whose target is
-    older than this floor are treated as stale (historical backfill) and skipped.
-    """
-    from datetime import time as _dt_time
-    scheduler = extensions.scheduler
-    day     = now.date()
-    counted = 0
-    guard   = 0
-    while counted < lookback_days and guard < 30:
-        guard += 1
-        day = day - timedelta(days=1)
-        if scheduler and scheduler.should_skip_date(day):
-            continue   # weekend / holiday doesn't count as a postable day
-        counted += 1
-    return israel_tz.localize(datetime.combine(day, _dt_time(0, 0)))
-
-
 def _publish_instagram_entry(entry: dict, config: dict, now) -> dict:
     """Generate slides + caption for one log entry and publish to Instagram.
     Marks the entry ig_posted on success. Returns the publish result dict.
@@ -764,7 +741,7 @@ def _publish_instagram_entry(entry: dict, config: dict, now) -> dict:
     result    = extensions.instagram_handler.publish_post(
         images_bytes=images_bytes, caption=caption, base_public_id=public_id)
 
-    extensions.db.mark_ig_posted(entry['id'])
+    extensions.db.set_ig_status(entry['id'], 'posted')
     print(f"[ig-job]   ✅ #{post_number} published → {result['ig_post_id']}")
 
     cfg = load_config()
@@ -774,145 +751,149 @@ def _publish_instagram_entry(entry: dict, config: dict, now) -> dict:
     return result
 
 
-def instagram_engagement_job(force_all: bool = False):
+def _ig_failure_alert(config: dict, exc: Exception):
+    """Increment failure counter and email at most once / 24h after 3 failures."""
+    try:
+        cfg   = load_config()
+        count = cfg.get('instagram_failure_count', 0) + 1
+        cfg['instagram_failure_count'] = count
+        save_config(cfg)
+        if (count >= 3 and cfg.get('notifications_enabled')
+                and cfg.get('notification_emails')
+                and not _notification_on_cooldown(cfg, 'instagram_alert_last')):
+            send_notification_email(
+                f"🚨 Instagram פוסט נכשל {count} פעמים ברצף",
+                f"<html><body style='direction:rtl;font-family:Arial;padding:20px'>"
+                f"<h3>שגיאה בפרסום ל-Instagram</h3>"
+                f"<p><code>{exc}</code></p>"
+                f"<p>בדוק הגדרות Instagram ו-Cloudinary בהגדרות המערכת.</p>"
+                f"</body></html>",
+                cfg['notification_emails'],
+            )
+            cfg = load_config()
+            cfg['instagram_alert_last'] = datetime.now().isoformat()
+            save_config(cfg)
+    except Exception:
+        pass
+
+
+def instagram_watch_job():
     """
-    Engagement-based Instagram publisher (runs every ~15 min).
-
-    For every Facebook post in the log that hasn't been posted to Instagram:
-      • compute target time = original FB publish time + delay_hours (default 24h)
-      • once now >= target time, read total engagement (reactions + comments)
-        - if engagement > threshold (default 150) → publish to Instagram
-        - otherwise → mark skipped (don't re-check)
-      • before the target time, leave it pending
-
-    force_all=True (manual test): publish the single highest-engagement pending
-    post immediately, ignoring the timing and threshold.
+    Hourly: refresh engagement for every watched Facebook post.
+      • engagement (reactions + comments) crosses the threshold → move it to the
+        Instagram schedule, assigning the next free slot from the IG dynamic tiers.
+      • post older than instagram_watch_days without crossing → drop from watch.
     """
-    print(f"\n{'='*60}")
-    print(f"📸 INSTAGRAM ENGAGEMENT JOB (force_all={force_all})")
-    print(f"{'='*60}")
-
+    print(f"\n{'='*60}\n📸 INSTAGRAM WATCH JOB\n{'='*60}")
     try:
         config = load_config()
-        if not config.get('instagram_enabled', False) and not force_all:
+        if not config.get('instagram_enabled', False):
+            return
+        fb = extensions.facebook_handler
+        if not fb:
+            print("[ig-watch] facebook_handler not ready — skipping")
             return
 
-        if not extensions.instagram_handler:
-            print(f"[ig-job] ❌ instagram_handler not initialised — check settings")
-            return
+        israel_tz  = pytz.timezone('Asia/Jerusalem')
+        now        = datetime.now(israel_tz)
+        threshold  = int(config.get('instagram_engagement_threshold', 150))
+        watch_days = int(config.get('instagram_watch_days', 7))
 
-        fb            = extensions.facebook_handler
-        israel_tz     = pytz.timezone('Asia/Jerusalem')
-        now           = datetime.now(israel_tz)
-        threshold     = int(config.get('instagram_engagement_threshold', 150))
-        delay_hours   = float(config.get('instagram_delay_hours', 24))
-        lookback_days = int(config.get('instagram_lookback_days', 1))
-        print(f"[ig-job] now={now.strftime('%Y-%m-%d %H:%M %Z')}, "
-              f"threshold={threshold}, delay={delay_hours}h, lookback={lookback_days} postable day(s)")
+        watching = extensions.db.get_ig_watching()
+        print(f"[ig-watch] {len(watching)} post(s) watched, threshold={threshold}, window={watch_days}d")
 
-        candidates = extensions.db.get_pending_instagram_posts()
-        print(f"[ig-job] {len(candidates)} pending post(s)")
-        if not candidates:
-            return
+        scheduled = dropped = 0
+        for w in watching:
+            eng   = fb.get_post_engagement(w['fb_post_id'])
+            total = eng.get('total', 0)
+            extensions.db.update_ig_engagement(w['id'], total)
 
-        # ── Test mode: publish the single most-engaging pending post now ──────
-        if force_all:
-            for c in candidates:
-                eng = fb.get_post_engagement(c['fb_post_id']) if fb else {}
-                c['total'] = eng.get('total', 0)
-                print(f"[ig-job]   #{c['post_number']}: engagement={c['total']}")
-            best = max(candidates, key=lambda x: x['total'])
-            print(f"[ig-job] FORCE: publishing #{best['post_number']} "
-                  f"(engagement={best['total']})")
-            _publish_instagram_entry(best, config, now)
-            print(f"{'='*60}\n✅ INSTAGRAM FORCE JOB COMPLETE\n{'='*60}")
-            return
-
-        # ── Don't publish during Shabbat / holidays — defer to next posting day ──
-        scheduler = extensions.scheduler
-        if scheduler and scheduler.should_skip_date(now.date()):
-            print(f"[ig-job] today ({now.date()}) is Shabbat/holiday — deferring all posts")
-            return
-
-        # Eligibility floor: posts whose 24h target is older than this are stale.
-        # Walks back over weekend/holiday so Sunday covers Thu–Sat, etc.
-        window_start = _instagram_window_start(now, israel_tz, lookback_days)
-        print(f"[ig-job] eligibility window start = {window_start.strftime('%Y-%m-%d %H:%M')} "
-              f"(targets older than this are treated as stale)")
-
-        # ── Normal mode: evaluate each post at its 24h mark ──────────────────
-        published = skipped = waiting = 0
-        for c in candidates:
-            eng        = fb.get_post_engagement(c['fb_post_id']) if fb else {}
-            created    = eng.get('created_time') or c.get('published_at')
-            created_dt = _parse_fb_datetime(created)
-            total      = eng.get('total', 0)
-
-            if created_dt is None:
-                print(f"[ig-job]   #{c['post_number']}: unparseable time {created!r} — skipping")
-                extensions.db.mark_ig_skipped(c['id'])
-                skipped += 1
-                continue
-
-            target = created_dt + timedelta(hours=delay_hours)
-            if now < target:
-                print(f"[ig-job]   #{c['post_number']}: not yet — target {target.astimezone(israel_tz).strftime('%Y-%m-%d %H:%M')} "
-                      f"(engagement so far {total})")
-                waiting += 1
-                continue
-
-            # Stale: target predates the lookback window (historical backfill) — skip
-            if target < window_start:
-                print(f"[ig-job]   #{c['post_number']}: target {target.astimezone(israel_tz).strftime('%Y-%m-%d %H:%M')} "
-                      f"predates window — stale, skipping")
-                extensions.db.mark_ig_skipped(c['id'])
-                skipped += 1
-                continue
-
-            # Past the 24h mark and within the window — decide on engagement now
             if total > threshold:
-                print(f"[ig-job]   #{c['post_number']}: engagement {total} > {threshold} → publishing")
-                try:
-                    _publish_instagram_entry(c, config, now)
-                    published += 1
-                except Exception as pub_exc:
-                    print(f"[ig-job]   ❌ #{c['post_number']} publish failed: {pub_exc}")
-                    traceback.print_exc()
-            else:
-                print(f"[ig-job]   #{c['post_number']}: engagement {total} ≤ {threshold} → skip")
-                extensions.db.mark_ig_skipped(c['id'])
-                skipped += 1
+                taken   = extensions.db.get_ig_scheduled_slots()
+                slot    = extensions.scheduler.get_next_available_ig_slot(taken)
+                extensions.db.set_ig_scheduled(w['id'], slot.isoformat())
+                scheduled += 1
+                print(f"[ig-watch] #{w['post_number']} crossed {threshold} ({total}) "
+                      f"→ scheduled {slot.strftime('%Y-%m-%d %H:%M')}")
+                continue
 
-        print(f"\n{'='*60}")
-        print(f"✅ INSTAGRAM JOB DONE — published={published}, skipped={skipped}, waiting={waiting}")
-        print(f"{'='*60}\n")
+            pub_dt = _parse_fb_datetime(w.get('published_at'))
+            if pub_dt is not None:
+                age_days = (now - pub_dt.astimezone(israel_tz)).total_seconds() / 86400
+                if age_days > watch_days:
+                    extensions.db.set_ig_status(w['id'], 'dropped')
+                    dropped += 1
+                    print(f"[ig-watch] #{w['post_number']} aged out ({age_days:.1f}d, "
+                          f"engagement {total}) → dropped")
+                    continue
+            print(f"[ig-watch] #{w['post_number']}: engagement {total} (still watching)")
+
+        print(f"[ig-watch] done — scheduled={scheduled}, dropped={dropped}, "
+              f"still watching={len(watching) - scheduled - dropped}")
 
     except Exception as e:
-        print(f"\n❌ INSTAGRAM JOB FAILED: {e}")
+        print(f"❌ INSTAGRAM WATCH JOB FAILED: {e}")
         traceback.print_exc()
-        try:
-            cfg   = load_config()
-            count = cfg.get('instagram_failure_count', 0) + 1
-            cfg['instagram_failure_count'] = count
-            save_config(cfg)
-            # Alert once after 3 consecutive failures, then at most once per 24h
-            if (count >= 3 and cfg.get('notifications_enabled')
-                    and cfg.get('notification_emails')
-                    and not _notification_on_cooldown(cfg, 'instagram_alert_last')):
-                send_notification_email(
-                    f"🚨 Instagram פוסט נכשל {count} פעמים ברצף",
-                    f"<html><body style='direction:rtl;font-family:Arial;padding:20px'>"
-                    f"<h3>שגיאה בפרסום ל-Instagram</h3>"
-                    f"<p><code>{e}</code></p>"
-                    f"<p>בדוק הגדרות Instagram ו-Cloudinary בהגדרות המערכת.</p>"
-                    f"</body></html>",
-                    cfg['notification_emails'],
-                )
-                cfg = load_config()
-                cfg['instagram_alert_last'] = datetime.now().isoformat()
-                save_config(cfg)
-        except Exception:
-            pass
+
+
+def instagram_publish_job(force_one: bool = False):
+    """
+    Hourly: publish scheduled IG posts whose slot time has arrived (skipping
+    Shabbat/holidays). force_one=True (manual test) publishes the earliest
+    scheduled post immediately, ignoring slot time and Shabbat.
+    """
+    print(f"\n{'='*60}\n📸 INSTAGRAM PUBLISH JOB (force_one={force_one})\n{'='*60}")
+    try:
+        config = load_config()
+        if not config.get('instagram_enabled', False) and not force_one:
+            return
+        if not extensions.instagram_handler:
+            print("[ig-publish] instagram_handler not initialised — check settings")
+            return
+
+        scheduler = extensions.scheduler
+        israel_tz = pytz.timezone('Asia/Jerusalem')
+        now       = datetime.now(israel_tz)
+
+        scheduled = extensions.db.get_ig_scheduled()
+        print(f"[ig-publish] {len(scheduled)} scheduled post(s)")
+        if not scheduled:
+            return
+
+        if force_one:
+            entry = scheduled[0]
+            print(f"[ig-publish] FORCE publishing #{entry['post_number']}")
+            _publish_instagram_entry(entry, config, now)
+            print(f"{'='*60}\n✅ FORCE PUBLISH DONE\n{'='*60}")
+            return
+
+        if scheduler and scheduler.should_skip_date(now.date()):
+            print(f"[ig-publish] today ({now.date()}) is Shabbat/holiday — deferring")
+            return
+
+        published = 0
+        for entry in scheduled:
+            slot_dt = _parse_fb_datetime(entry.get('ig_scheduled_time'))
+            if slot_dt is None:
+                continue
+            if now < slot_dt.astimezone(israel_tz):
+                print(f"[ig-publish] #{entry['post_number']}: not due until "
+                      f"{slot_dt.astimezone(israel_tz).strftime('%Y-%m-%d %H:%M')}")
+                continue
+            try:
+                _publish_instagram_entry(entry, config, now)
+                published += 1
+            except Exception as pub_exc:
+                print(f"[ig-publish] ❌ #{entry['post_number']} failed: {pub_exc}")
+                traceback.print_exc()
+                _ig_failure_alert(config, pub_exc)
+
+        print(f"[ig-publish] done — published={published}")
+
+    except Exception as e:
+        print(f"❌ INSTAGRAM PUBLISH JOB FAILED: {e}")
+        traceback.print_exc()
+        _ig_failure_alert(load_config(), e)
 
 
 def start_scheduler():
@@ -947,10 +928,10 @@ def start_scheduler():
     schedule.every(6).hours.do(check_and_send_notifications)
     schedule.every(1).minutes.do(auto_comment_job)
 
-    # Instagram engagement job — hourly. Publishes each post ~24h after its FB
-    # publish time, skipping Shabbat/holidays (deferred to the next posting day).
-    schedule.every().hour.do(instagram_engagement_job)
-    print(f"   - Instagram engagement job every hour")
+    # Instagram — hourly watch (engagement tracking → schedule) + publish (due slots).
+    schedule.every().hour.do(instagram_watch_job)
+    schedule.every().hour.do(instagram_publish_job)
+    print(f"   - Instagram watch + publish jobs every hour")
 
     # ── Reconciler thread ────────────────────────────────────────────────────
     from reconciler import reconciler_loop
