@@ -2198,22 +2198,6 @@ class Database:
         conn.close()
         return [dict(r) for r in rows]
 
-    def get_ig_due(self, now_iso: str) -> List[Dict]:
-        """Scheduled IG posts whose slot time has arrived (ig_scheduled_time <= now)."""
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT id, fb_post_id, post_number, text, ig_scheduled_time
-            FROM instagram_post_log
-            WHERE ig_status = 'scheduled'
-              AND ig_scheduled_time IS NOT NULL
-              AND ig_scheduled_time <= ?
-            ORDER BY ig_scheduled_time ASC
-        ''', (now_iso,))
-        rows = cursor.fetchall()
-        conn.close()
-        return [dict(r) for r in rows]
-
     def get_ig_scheduled_slots(self) -> List[str]:
         """All ig_scheduled_time values of queued IG posts (for slot conflict checks)."""
         conn = self.get_connection()
@@ -2300,19 +2284,6 @@ class Database:
         conn.close()
         return dict(row) if row else None
 
-    def drop_ig_watching_older_than(self, cutoff_iso: str) -> int:
-        """Drop watched posts published before cutoff (never crossed the threshold)."""
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE instagram_post_log SET ig_status='dropped' "
-            "WHERE ig_status='watching' AND published_at < ?",
-            (cutoff_iso,)
-        )
-        n = cursor.rowcount
-        conn.commit()
-        conn.close()
-        return n
 
     def backfill_instagram_post_log(self, days: int = 7) -> int:
         """Backfill instagram_post_log from post_tracking (survives cleanup_old_entries).
