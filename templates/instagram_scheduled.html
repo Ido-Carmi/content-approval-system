@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+
+{% block title %}תזמון אינסטגרם{% endblock %}
+{% block page_title %}<div class="text-center">📸 תזמון אינסטגרם</div>{% endblock %}
+
+{% block content %}
+<style>
+#ig-sched-list { max-width: 900px; margin: 0 auto; }
+.igs-card { margin-bottom: 0.7rem; }
+.igs-card .card-body { padding: 0.7rem 0.9rem; }
+.igs-preview { width: 120px; height: 120px; object-fit: cover; border-radius: 8px;
+               flex-shrink: 0; background:#466529; }
+.igs-text { font-size: 0.9rem; color:#333; line-height:1.5; max-height: 6em; overflow:hidden; }
+.igs-text[contenteditable=true] { background:#fff; border:1px solid #0d6efd; border-radius:6px;
+               padding:6px; max-height:none; overflow:auto; outline:none; }
+.drag-handle { cursor: grab; color:#999; font-size:1.2rem; }
+.sortable-ghost { opacity:0.4; background:#cfe2ff !important; }
+</style>
+
+<div class="d-flex justify-content-center mb-3">
+    <div class="alert alert-primary mb-0 py-2 px-3 d-flex justify-content-between align-items-center gap-3"
+         style="max-width:900px; width:100%;">
+        <span><i class="bi bi-instagram"></i> <strong>{{ items|length }}</strong> פוסטים מתוזמנים לאינסטגרם</span>
+        {% if items %}
+        <button class="btn btn-secondary btn-sm" onclick="igRescheduleCanonical()">
+            <i class="bi bi-magic"></i> תזמון אוטומטי
+        </button>
+        {% endif %}
+    </div>
+</div>
+
+{% if not items %}
+<div class="alert alert-secondary text-center py-5" style="max-width:900px;margin:0 auto;">
+    <h5>אין פוסטים מתוזמנים לאינסטגרם</h5>
+    <p class="mb-0 text-muted">פוסטים שעוברים את סף המעורבות יתווספו לכאן אוטומטית</p>
+</div>
+{% else %}
+<div id="ig-sched-list">
+    {% for it in items %}
+    <div class="igs-card card" id="igs-{{ it.id }}" data-id="{{ it.id }}">
+        <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center py-1">
+            <span class="d-flex align-items-center gap-2">
+                <i class="bi bi-grip-vertical drag-handle text-white"></i>
+                <i class="bi bi-calendar-event"></i> {{ it.display_time }} {{ it.weekday }}
+            </span>
+            <span class="badge bg-light text-dark">#{{ it.post_number }}</span>
+        </div>
+        <div class="card-body">
+            <div class="d-flex gap-3">
+                <img class="igs-preview" src="/instagram-image/{{ it.id }}.jpg" alt="preview" loading="lazy">
+                <div class="flex-grow-1 d-flex flex-column">
+                    <div class="igs-text" id="text-{{ it.id }}" dir="rtl">{{ it.text }}</div>
+                    <div class="ig-meta text-muted mt-1" style="font-size:0.8rem;">
+                        <i class="bi bi-heart-fill"></i> {{ it.engagement }} מעורבות
+                    </div>
+                    <div class="d-flex gap-2 mt-2">
+                        <button class="btn btn-sm btn-info" id="edit-{{ it.id }}"
+                                onclick="igEdit({{ it.id }})"><i class="bi bi-pencil"></i> ערוך</button>
+                        <button class="btn btn-sm btn-success d-none" id="save-{{ it.id }}"
+                                onclick="igSave({{ it.id }})"><i class="bi bi-check-lg"></i> שמור</button>
+                        <button class="btn btn-sm btn-warning"
+                                onclick="igRemove({{ it.id }})"><i class="bi bi-x-lg"></i> הסר</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+<script>
+const list = document.getElementById('ig-sched-list');
+if (list && window.Sortable) {
+    Sortable.create(list, {
+        handle: '.drag-handle', animation: 150, ghostClass: 'sortable-ghost',
+        onEnd: function() {
+            const order = Array.from(list.querySelectorAll('.igs-card')).map(c => parseInt(c.dataset.id));
+            fetch('/instagram-reorder', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({order: order})
+            }).then(r => r.json()).then(() => location.reload()).catch(() => location.reload());
+        }
+    });
+}
+
+function igEdit(id) {
+    const t = document.getElementById('text-' + id);
+    t.setAttribute('contenteditable', 'true'); t.focus();
+    document.getElementById('edit-' + id).classList.add('d-none');
+    document.getElementById('save-' + id).classList.remove('d-none');
+}
+function igSave(id) {
+    const t = document.getElementById('text-' + id);
+    const text = t.innerText.trim();
+    fetch('/instagram-edit/' + id, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({text: text})
+    }).then(r => r.json()).then(d => {
+        if (d.ok) location.reload(); else alert('שגיאה: ' + (d.error || ''));
+    }).catch(() => alert('שגיאה'));
+}
+function igRemove(id) {
+    if (!confirm('להסיר את הפוסט מהתזמון?')) return;
+    fetch('/instagram-drop/' + id, {method: 'POST'})
+        .then(r => r.json()).then(d => { if (d.ok) document.getElementById('igs-' + id).remove(); })
+        .catch(() => alert('שגיאה'));
+}
+function igRescheduleCanonical() {
+    fetch('/instagram-reschedule-canonical', {method: 'POST'})
+        .then(r => r.json()).then(d => {
+            if (d.ok) { alert('עודכנו ' + d.updated + ' פוסטים'); location.reload(); }
+            else alert('שגיאה');
+        }).catch(() => alert('שגיאה'));
+}
+</script>
+{% endblock %}

@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+
+{% block title %}מעקב אינסטגרם{% endblock %}
+{% block page_title %}<div class="text-center">👀 מעקב אינסטגרם</div>{% endblock %}
+
+{% block content %}
+<style>
+#ig-watch-list { max-width: 900px; margin: 0 auto; }
+.ig-card { margin-bottom: 0.6rem; }
+.ig-card .card-body { padding: 0.7rem 0.9rem; }
+.ig-text { font-size: 0.92rem; color: #444; max-height: 4.5em; overflow: hidden;
+           line-height: 1.5; margin-bottom: 0.5rem; }
+.ig-progress { height: 22px; }
+.ig-meta { font-size: 0.8rem; color: #777; }
+</style>
+
+<div class="d-flex justify-content-center mb-3">
+    <div class="alert alert-info mb-0 py-2 px-3" style="max-width: 900px; width: 100%;">
+        <i class="bi bi-eye"></i>
+        עוקב אחרי <strong>{{ items|length }}</strong> פוסטים מהשבוע האחרון.
+        פוסט שעובר <strong>{{ threshold }}</strong> מעורבות (לייקים + תגובות) יעבור לתזמון אינסטגרם.
+        פוסט שלא עובר תוך <strong>{{ watch_days }}</strong> ימים — יוסר מהמעקב.
+    </div>
+</div>
+
+{% if not items %}
+<div class="alert alert-secondary text-center py-5" style="max-width:900px;margin:0 auto;">
+    <h5>אין פוסטים במעקב כרגע</h5>
+    <p class="mb-0 text-muted">פוסטים חדשים שמתפרסמים בפייסבוק ייכנסו למעקב אוטומטית</p>
+</div>
+{% else %}
+<div id="ig-watch-list">
+    {% for it in items %}
+    <div class="ig-card card" id="watch-{{ it.id }}">
+        <div class="card-body">
+            <div class="d-flex justify-content-between align-items-center mb-1">
+                <span class="badge bg-dark">#{{ it.post_number }}</span>
+                <span class="ig-meta">
+                    {% if it.days_left is not none %}
+                        {% if it.days_left > 0 %}נותרו {{ it.days_left }} ימים במעקב{% else %}חלון המעקב הסתיים{% endif %}
+                    {% endif %}
+                </span>
+            </div>
+            <div class="ig-text" dir="rtl">{{ it.text }}</div>
+            <div class="progress ig-progress mb-1">
+                <div class="progress-bar {% if it.engagement >= threshold %}bg-success{% else %}bg-warning text-dark{% endif %}"
+                     role="progressbar" style="width: {{ it.pct }}%;">
+                    {{ it.engagement }} / {{ threshold }}
+                </div>
+            </div>
+            <div class="d-flex justify-content-between align-items-center">
+                <span class="ig-meta">
+                    {% if it.last_checked %}עודכן: {{ it.last_checked[:16].replace('T',' ') }}{% else %}טרם נבדק{% endif %}
+                </span>
+                <div class="d-flex gap-2">
+                    <button class="btn btn-sm btn-outline-success"
+                            onclick="igScheduleNow({{ it.id }})">
+                        <i class="bi bi-calendar-plus"></i> תזמן עכשיו
+                    </button>
+                    <button class="btn btn-sm btn-outline-danger"
+                            onclick="igDrop({{ it.id }})">
+                        <i class="bi bi-x-lg"></i> הסר
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<script>
+function igScheduleNow(id) {
+    fetch('/instagram-schedule-now/' + id, {method: 'POST'})
+        .then(r => r.json())
+        .then(d => { if (d.ok) document.getElementById('watch-' + id).remove(); })
+        .catch(() => alert('שגיאה'));
+}
+function igDrop(id) {
+    if (!confirm('להסיר את הפוסט מהמעקב?')) return;
+    fetch('/instagram-drop/' + id, {method: 'POST'})
+        .then(r => r.json())
+        .then(d => { if (d.ok) document.getElementById('watch-' + id).remove(); })
+        .catch(() => alert('שגיאה'));
+}
+</script>
+{% endblock %}
