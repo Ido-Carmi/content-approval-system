@@ -2169,10 +2169,12 @@ class Database:
     # ----- Instagram watch flow -----------------------------------------------
 
     def seed_ig_watch(self, cutoff_iso: str) -> int:
-        """Add posts published since cutoff into the watch list (ig_status='watching').
-        Sourced from post_tracking (kept 30 days). INSERT OR IGNORE keeps posts that
-        already exist (posted/dropped/watching) untouched — only genuinely-new past
-        posts are added. Returns number of rows inserted."""
+        """Make the watch list reflect all posts published since cutoff.
+        1. Insert past-week posts from post_tracking that aren't in the log yet.
+        2. Re-arm recently-dropped rows back to 'watching' (stale 'dropped' states
+           from the old job / migration shouldn't hide this-week's posts).
+        Posts already 'scheduled' or 'posted' are left alone.
+        Returns rows inserted."""
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute('''
@@ -2193,6 +2195,11 @@ class Database:
               AND pt.published_at >= ?
         ''', (cutoff_iso,))
         n = cursor.rowcount
+        # Re-arm recently-dropped posts so the full week shows on the watch page.
+        cursor.execute('''
+            UPDATE instagram_post_log SET ig_status='watching'
+            WHERE ig_status='dropped' AND published_at >= ?
+        ''', (cutoff_iso,))
         conn.commit()
         conn.close()
         return n
