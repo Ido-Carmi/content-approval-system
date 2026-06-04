@@ -1102,9 +1102,15 @@ def instagram_watch_page():
     config    = load_config()
     threshold = int(config.get('instagram_engagement_threshold', 150))
     watch_days = int(config.get('instagram_watch_days', 7))
-    rows = extensions.db.get_ig_watching()
     israel_tz = pytz.timezone('Asia/Jerusalem')
     now = datetime.now(israel_tz)
+    # Seed the watch list with any past-week posts not yet tracked, so the page
+    # reflects the full week immediately (engagement refreshes hourly via the job).
+    try:
+        extensions.db.seed_ig_watch((now - timedelta(days=watch_days)).isoformat())
+    except Exception as e:
+        print(f"[ig-watch] seed error: {e}")
+    rows = extensions.db.get_ig_watching()
     items = []
     for r in rows:
         eng = r.get('last_engagement') or 0

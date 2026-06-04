@@ -799,6 +799,12 @@ def instagram_watch_job():
         threshold  = int(config.get('instagram_engagement_threshold', 150))
         watch_days = int(config.get('instagram_watch_days', 7))
 
+        # Seed the watch list with any past-week posts not yet tracked
+        cutoff = (now - timedelta(days=watch_days)).isoformat()
+        seeded = extensions.db.seed_ig_watch(cutoff)
+        if seeded:
+            print(f"[ig-watch] seeded {seeded} past-week post(s) into watch list")
+
         watching = extensions.db.get_ig_watching()
         print(f"[ig-watch] {len(watching)} post(s) watched, threshold={threshold}, window={watch_days}d")
 

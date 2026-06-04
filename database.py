@@ -2168,6 +2168,35 @@ class Database:
 
     # ----- Instagram watch flow -----------------------------------------------
 
+    def seed_ig_watch(self, cutoff_iso: str) -> int:
+        """Add posts published since cutoff into the watch list (ig_status='watching').
+        Sourced from post_tracking (kept 30 days). INSERT OR IGNORE keeps posts that
+        already exist (posted/dropped/watching) untouched — only genuinely-new past
+        posts are added. Returns number of rows inserted."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT OR IGNORE INTO instagram_post_log
+                (fb_post_id, post_number, text, published_at, ig_status)
+            SELECT
+                pt.post_id,
+                pt.post_number,
+                COALESCE(
+                    (SELECT e.text FROM entries e WHERE e.facebook_post_id = pt.post_id LIMIT 1),
+                    pt.post_text
+                ),
+                pt.published_at,
+                'watching'
+            FROM post_tracking pt
+            WHERE pt.post_number IS NOT NULL
+              AND pt.post_text IS NOT NULL AND pt.post_text != ''
+              AND pt.published_at >= ?
+        ''', (cutoff_iso,))
+        n = cursor.rowcount
+        conn.commit()
+        conn.close()
+        return n
+
     def get_ig_watching(self) -> List[Dict]:
         """Posts currently being watched for engagement (ig_status='watching')."""
         conn = self.get_connection()
