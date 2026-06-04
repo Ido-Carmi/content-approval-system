@@ -10,7 +10,9 @@
 .ig-card .card-body { padding: 0.7rem 0.9rem; }
 .ig-text { font-size: 0.92rem; color: #444; max-height: 4.5em; overflow: hidden;
            line-height: 1.5; margin-bottom: 0.5rem; }
-.ig-progress { height: 22px; }
+.ig-progress { height: 22px; position: relative; }
+.ig-bar-label { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+                font-size: 0.8rem; font-weight: 600; color: #212529; text-shadow: 0 0 2px rgba(255,255,255,.75); }
 .ig-meta { font-size: 0.8rem; color: #777; }
 </style>
 
@@ -43,10 +45,9 @@
             </div>
             <div class="ig-text" dir="rtl">{{ it.text }}</div>
             <div class="progress ig-progress mb-1">
-                <div class="progress-bar {% if it.engagement >= threshold %}bg-success{% else %}bg-warning text-dark{% endif %}"
-                     role="progressbar" style="width: {{ it.pct }}%;">
-                    {{ it.engagement }} / {{ threshold }}
-                </div>
+                <div class="progress-bar {% if it.engagement >= threshold %}bg-success{% else %}bg-warning{% endif %}"
+                     role="progressbar" style="width: {{ it.pct }}%;"></div>
+                <span class="ig-bar-label" dir="ltr">{{ it.engagement }} / {{ threshold }}</span>
             </div>
             <div class="d-flex justify-content-between align-items-center">
                 <span class="ig-meta">

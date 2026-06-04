@@ -2247,12 +2247,14 @@ class Database:
         return [r['ig_scheduled_time'] for r in rows]
 
     def update_ig_engagement(self, log_id: int, engagement: int):
-        """Record the latest engagement reading for a watched post."""
+        """Record the latest engagement reading for a watched post (Israel time)."""
+        import pytz
+        checked = datetime.now(pytz.timezone('Asia/Jerusalem')).isoformat()
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute(
             'UPDATE instagram_post_log SET last_engagement=?, last_checked=? WHERE id=?',
-            (engagement, datetime.now().isoformat(), log_id)
+            (engagement, checked, log_id)
         )
         conn.commit()
         conn.close()
