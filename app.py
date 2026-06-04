@@ -1106,16 +1106,18 @@ def instagram_watch_page():
     now = datetime.now(israel_tz)
     # Seed the watch list with any past-week posts not yet tracked, so the page
     # reflects the full week immediately (engagement refreshes hourly via the job).
+    cutoff_iso = (now - timedelta(days=watch_days)).isoformat()
     try:
-        extensions.db.seed_ig_watch((now - timedelta(days=watch_days)).isoformat())
+        extensions.db.seed_ig_watch(cutoff_iso)
     except Exception as e:
         print(f"[ig-watch] seed error: {e}")
-    rows = extensions.db.get_ig_watching()
+    rows = extensions.db.get_ig_watch_page(cutoff_iso)
     items = []
     for r in rows:
         eng = r.get('last_engagement') or 0
-        pct = min(100, int(eng * 100 / threshold)) if threshold else 0
-        # days left in watch window
+        status = r.get('ig_status') or 'watching'
+        qualified = status in ('scheduled', 'posted')
+        pct = 100 if qualified else (min(100, int(eng * 100 / threshold)) if threshold else 0)
         days_left = None
         try:
             pub = datetime.fromisoformat(r['published_at'])
@@ -1124,11 +1126,23 @@ def instagram_watch_page():
             days_left = round(watch_days - (now - pub.astimezone(israel_tz)).total_seconds() / 86400, 1)
         except Exception:
             pass
+        # Scheduled-time display (for qualified/scheduled posts)
+        sched_disp = ''
+        slot = r.get('ig_scheduled_time')
+        if slot:
+            try:
+                sdt = datetime.fromisoformat(slot)
+                if sdt.tzinfo is None:
+                    sdt = israel_tz.localize(sdt)
+                sched_disp = sdt.astimezone(israel_tz).strftime('%H:%M %d/%m')
+            except Exception:
+                pass
         items.append({
             'id': r['id'], 'post_number': r['post_number'],
             'text': _ig_clean_text(r['text']),
             'engagement': eng, 'pct': pct, 'days_left': days_left,
             'last_checked': r.get('last_checked'),
+            'status': status, 'qualified': qualified, 'sched_disp': sched_disp,
         })
     return render_template('instagram_watch.html', items=items,
                            threshold=threshold, watch_days=watch_days, config=config)

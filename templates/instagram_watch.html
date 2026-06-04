@@ -14,6 +14,17 @@
 .ig-bar-label { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
                 font-size: 0.8rem; font-weight: 600; color: #212529; text-shadow: 0 0 2px rgba(255,255,255,.75); }
 .ig-meta { font-size: 0.8rem; color: #777; }
+
+/* Qualified (reached the bar, scheduled to Instagram) */
+.ig-qualified { border: 2px solid #198754; box-shadow: 0 0 10px rgba(25,135,84,.25); }
+.ig-qualified .card-body { background: linear-gradient(0deg, rgba(25,135,84,.06), rgba(25,135,84,.06)); }
+.ig-bar-stripes {
+    background-image: linear-gradient(45deg, rgba(255,255,255,.20) 25%, transparent 25%,
+        transparent 50%, rgba(255,255,255,.20) 50%, rgba(255,255,255,.20) 75%, transparent 75%, transparent);
+    background-size: 1rem 1rem;
+    animation: ig-stripes 1s linear infinite;
+}
+@keyframes ig-stripes { from { background-position: 1rem 0; } to { background-position: 0 0; } }
 </style>
 
 <div class="d-flex justify-content-center mb-3">
@@ -33,33 +44,42 @@
 {% else %}
 <div id="ig-watch-list">
     {% for it in items %}
-    <div class="ig-card card" id="watch-{{ it.id }}">
+    <div class="ig-card card {% if it.qualified %}ig-qualified{% endif %}" id="watch-{{ it.id }}">
         <div class="card-body">
             <div class="d-flex justify-content-between align-items-center mb-1">
                 <span class="badge bg-dark">#{{ it.post_number }}</span>
                 <span class="ig-meta">
-                    {% if it.days_left is not none %}
+                    {% if it.qualified %}
+                        {% if it.status == 'posted' %}<span class="text-success fw-bold"><i class="bi bi-instagram"></i> פורסם באינסטגרם</span>
+                        {% else %}<span class="text-success fw-bold"><i class="bi bi-check-circle-fill"></i> עבר! מתוזמן{% if it.sched_disp %} ל-{{ it.sched_disp }}{% endif %}</span>{% endif %}
+                    {% elif it.days_left is not none %}
                         {% if it.days_left > 0 %}נותרו {{ it.days_left }} ימים במעקב{% else %}חלון המעקב הסתיים{% endif %}
                     {% endif %}
                 </span>
             </div>
             <div class="ig-text" dir="rtl">{{ it.text }}</div>
             <div class="progress ig-progress mb-1">
-                <div class="progress-bar {% if it.engagement >= threshold %}bg-success{% else %}bg-warning{% endif %}"
+                <div class="progress-bar {% if it.qualified %}bg-success ig-bar-stripes{% elif it.engagement >= threshold %}bg-success{% else %}bg-warning{% endif %}"
                      role="progressbar" style="width: {{ it.pct }}%;"></div>
-                <span class="ig-bar-label" dir="ltr">{{ it.engagement }} / {{ threshold }}</span>
+                <span class="ig-bar-label" dir="ltr">
+                    {% if it.qualified %}✓ {{ it.engagement }} / {{ threshold }}{% else %}{{ it.engagement }} / {{ threshold }}{% endif %}
+                </span>
             </div>
             <div class="d-flex justify-content-between align-items-center">
                 <span class="ig-meta">
                     {% if it.last_checked %}עודכן: {{ it.last_checked[:16].replace('T',' ') }}{% else %}טרם נבדק{% endif %}
                 </span>
                 <div class="d-flex gap-2">
-                    <button class="btn btn-sm btn-outline-success"
-                            onclick="igScheduleNow({{ it.id }})">
+                    {% if it.qualified %}
+                    <a class="btn btn-sm btn-outline-primary" href="{{ url_for('instagram_scheduled_page') }}">
+                        <i class="bi bi-instagram"></i> לתזמון
+                    </a>
+                    {% else %}
+                    <button class="btn btn-sm btn-outline-success" onclick="igScheduleNow({{ it.id }})">
                         <i class="bi bi-calendar-plus"></i> תזמן עכשיו
                     </button>
-                    <button class="btn btn-sm btn-outline-danger"
-                            onclick="igDrop({{ it.id }})">
+                    {% endif %}
+                    <button class="btn btn-sm btn-outline-danger" onclick="igDrop({{ it.id }})">
                         <i class="bi bi-x-lg"></i> הסר
                     </button>
                 </div>

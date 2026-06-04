@@ -805,18 +805,34 @@ def instagram_watch_job():
         if seeded:
             print(f"[ig-watch] seeded {seeded} past-week post(s) into watch list")
 
-        watching = extensions.db.get_ig_watching()
-        print(f"[ig-watch] {len(watching)} post(s) watched, threshold={threshold}, window={watch_days}d")
+        watching = extensions.db.get_ig_watching_all()
+        print(f"[ig-watch] {len(watching)} row(s) watched, threshold={threshold}, window={watch_days}d")
 
-        scheduled = dropped = 0
+        # 1) Refresh engagement for every row (reactions + comments from Facebook)
         for w in watching:
-            eng   = fb.get_post_engagement(w['fb_post_id'])
-            total = eng.get('total', 0)
-            extensions.db.update_ig_engagement(w['id'], total)
+            eng = fb.get_post_engagement(w['fb_post_id'])
+            w['total'] = eng.get('total', 0)
+            extensions.db.update_ig_engagement(w['id'], w['total'])
 
+        # 2) Collapse duplicate rows that share a post_number (stale fb_post_ids
+        #    from reschedules show 0 engagement). Keep the highest-engagement row.
+        by_number = {}
+        for w in watching:
+            pn = w['post_number']
+            if pn not in by_number or w['total'] > by_number[pn]['total']:
+                by_number[pn] = w
+        for w in watching:
+            keep = by_number[w['post_number']]
+            if w['id'] != keep['id']:
+                extensions.db.set_ig_status(w['id'], 'dropped')   # drop the stale duplicate
+
+        # 3) Decide per unique post: schedule (crossed) / drop (aged out) / keep watching
+        scheduled = dropped = kept = 0
+        for w in by_number.values():
+            total = w['total']
             if total > threshold:
-                taken   = extensions.db.get_ig_scheduled_slots()
-                slot    = extensions.scheduler.get_next_available_ig_slot(taken)
+                taken = extensions.db.get_ig_scheduled_slots()
+                slot  = extensions.scheduler.get_next_available_ig_slot(taken)
                 extensions.db.set_ig_scheduled(w['id'], slot.isoformat())
                 scheduled += 1
                 print(f"[ig-watch] #{w['post_number']} crossed {threshold} ({total}) "
@@ -832,10 +848,10 @@ def instagram_watch_job():
                     print(f"[ig-watch] #{w['post_number']} aged out ({age_days:.1f}d, "
                           f"engagement {total}) → dropped")
                     continue
+            kept += 1
             print(f"[ig-watch] #{w['post_number']}: engagement {total} (still watching)")
 
-        print(f"[ig-watch] done — scheduled={scheduled}, dropped={dropped}, "
-              f"still watching={len(watching) - scheduled - dropped}")
+        print(f"[ig-watch] done — scheduled={scheduled}, dropped={dropped}, watching={kept}")
 
     except Exception as e:
         print(f"❌ INSTAGRAM WATCH JOB FAILED: {e}")

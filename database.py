@@ -2195,17 +2195,25 @@ class Database:
               AND pt.published_at >= ?
         ''', (cutoff_iso,))
         n = cursor.rowcount
-        # Re-arm recently-dropped posts so the full week shows on the watch page.
+        # Re-arm recently-dropped posts so the full week shows — but only when no
+        # active sibling (watching/scheduled/posted) already covers that post_number,
+        # so we don't resurrect stale duplicate rows the watch job collapsed.
         cursor.execute('''
             UPDATE instagram_post_log SET ig_status='watching'
             WHERE ig_status='dropped' AND published_at >= ?
+              AND post_number NOT IN (
+                  SELECT post_number FROM instagram_post_log
+                  WHERE ig_status IN ('watching','scheduled','posted')
+                    AND post_number IS NOT NULL
+              )
         ''', (cutoff_iso,))
         conn.commit()
         conn.close()
         return n
 
-    def get_ig_watching(self) -> List[Dict]:
-        """Posts currently being watched for engagement (ig_status='watching')."""
+    def get_ig_watching_all(self) -> List[Dict]:
+        """Every watching row (including duplicate post_numbers) — for the watch job
+        to refresh engagement and collapse stale duplicates."""
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute('''
@@ -2213,6 +2221,59 @@ class Database:
                    last_engagement, last_checked
             FROM instagram_post_log
             WHERE ig_status = 'watching'
+            ORDER BY published_at ASC
+        ''')
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+
+    def get_ig_watch_page(self, cutoff_iso: str) -> List[Dict]:
+        """Rows to show on the watch page: still-watching posts plus those that
+        already qualified (scheduled / posted), as long as they were published
+        within the watch window. Deduplicated by post_number, preferring
+        posted > scheduled > watching, then highest engagement."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT id, fb_post_id, post_number, text, published_at,
+                   last_engagement, last_checked, ig_status, ig_scheduled_time
+            FROM instagram_post_log l
+            WHERE ig_status IN ('watching','scheduled','posted')
+              AND published_at >= ?
+              AND id = (
+                  SELECT id FROM instagram_post_log l2
+                  WHERE l2.post_number IS l.post_number
+                    AND l2.ig_status IN ('watching','scheduled','posted')
+                    AND l2.published_at >= ?
+                  ORDER BY CASE l2.ig_status
+                               WHEN 'posted' THEN 3 WHEN 'scheduled' THEN 2 ELSE 1 END DESC,
+                           COALESCE(l2.last_engagement, 0) DESC, l2.id DESC
+                  LIMIT 1
+              )
+            ORDER BY published_at DESC
+        ''', (cutoff_iso, cutoff_iso))
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+
+    def get_ig_watching(self) -> List[Dict]:
+        """Posts currently being watched for engagement (ig_status='watching').
+        Deduplicated by post_number — keeps the highest-engagement row (stale
+        duplicate rows from reschedules report 0 and are hidden)."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT id, fb_post_id, post_number, text, published_at,
+                   last_engagement, last_checked
+            FROM instagram_post_log l
+            WHERE ig_status = 'watching'
+              AND id = (
+                  SELECT id FROM instagram_post_log l2
+                  WHERE l2.ig_status = 'watching'
+                    AND l2.post_number IS l.post_number
+                  ORDER BY COALESCE(l2.last_engagement, 0) DESC, l2.id DESC
+                  LIMIT 1
+              )
             ORDER BY published_at ASC
         ''')
         rows = cursor.fetchall()
