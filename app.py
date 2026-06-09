@@ -234,7 +234,9 @@ def approve_entry(entry_id):
             print(f"[approve] slot-pick: {len(desired)} desired + {len(fb_live)} fb_live = {len(taken)} taken")
             print(f"[approve]   desired slots: {sorted(desired)}")
             print(f"[approve]   fb_live slots: {sorted(fb_live)}")
-            slot_dt  = extensions.scheduler.get_next_available_slot_local(taken)
+            # append=True: add new posts to the END of the queue, never back-fill
+            # earlier/today's empty slots (which would land them at the front).
+            slot_dt  = extensions.scheduler.get_next_available_slot_local(taken, append=True)
             slot_iso = slot_dt.isoformat()
             print(f"[approve]   → chose {slot_iso}")
         except Exception as e:
@@ -675,7 +677,7 @@ def reschedule_canonical():
             for entry, slot in zip(entries, slots):
                 cursor.execute(
                     'UPDATE entries SET scheduled_time=? WHERE id=?',
-                    (slot.strftime('%Y-%m-%d %H:%M:%S'), entry['id'])
+                    (slot.isoformat(), entry['id'])   # ISO+tz — one canonical format
                 )
             conn.commit()
         finally:
@@ -745,7 +747,7 @@ def reschedule_today():
             for entry, new_time_dt in zip(entries, target_times):
                 cursor.execute(
                     'UPDATE entries SET scheduled_time=? WHERE id=?',
-                    (new_time_dt.strftime('%Y-%m-%d %H:%M:%S'), entry['id'])
+                    (new_time_dt.isoformat(), entry['id'])   # ISO+tz — one canonical format
                 )
             conn.commit()
         finally:

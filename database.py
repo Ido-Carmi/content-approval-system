@@ -1887,37 +1887,61 @@ class Database:
         return [dict(row) for row in rows]
 
     def mark_published_if_past(self, cutoff_iso: str) -> int:
-        """Mark scheduled+linked posts whose scheduled_time < cutoff as published.
-        Also logs newly published posts to instagram_post_log.
-        Returns count of rows updated."""
+        """Mark scheduled+linked posts as published once their ACTUAL Facebook
+        publish time has passed. Comparison is done on PARSED datetimes (not raw
+        strings) because timestamps are stored in mixed formats — strftime
+        ('2026-06-09 12:00:00', no tz) and isoformat ('2026-06-09T12:00:00+03:00').
+        A naive string compare wrongly treats a same-day space-format slot as
+        "before" the 'T'-format cutoff (space < 'T'), which would publish future
+        posts and make them vanish from the schedule. Returns count updated."""
+        import pytz
+        israel_tz = pytz.timezone('Asia/Jerusalem')
+
+        def _parse(s):
+            if not s:
+                return None
+            try:
+                dt = datetime.fromisoformat(s)
+            except (ValueError, TypeError):
+                try:
+                    dt = datetime.strptime(s, '%Y-%m-%d %H:%M:%S')
+                except (ValueError, TypeError):
+                    return None
+            if dt.tzinfo is None:
+                dt = israel_tz.localize(dt)
+            return dt
+
+        cutoff_dt = _parse(cutoff_iso)
+        if cutoff_dt is None:
+            return 0
+
         conn = self.get_connection()
         cursor = conn.cursor()
-        now_iso = datetime.now().isoformat()
+        now_iso = datetime.now(israel_tz).isoformat()
 
-        # Capture rows BEFORE the update so we can log them
+        # Pull all live (scheduled + on-FB) posts and decide in Python.
         cursor.execute('''
-            SELECT facebook_post_id, post_number, text, scheduled_time
+            SELECT id, facebook_post_id, post_number, text, scheduled_time, fb_scheduled_time
             FROM entries
             WHERE status = 'scheduled'
               AND facebook_post_id IS NOT NULL
-              AND scheduled_time IS NOT NULL
-              AND scheduled_time < ?
-        ''', (cutoff_iso,))
-        to_publish = cursor.fetchall()
+              AND (fb_published_at IS NULL OR fb_published_at = '')
+        ''')
+        rows = cursor.fetchall()
 
-        cursor.execute('''
-            UPDATE entries
-            SET status = 'published',
-                fb_published_at = ?
-            WHERE status = 'scheduled'
-              AND facebook_post_id IS NOT NULL
-              AND scheduled_time IS NOT NULL
-              AND scheduled_time < ?
-        ''', (now_iso, cutoff_iso))
-        count = cursor.rowcount
+        to_publish = []
+        for row in rows:
+            # The post publishes on Facebook at its ACTUAL fb time; fall back to
+            # the desired time only if fb time isn't recorded yet.
+            eff = _parse(row['fb_scheduled_time']) or _parse(row['scheduled_time'])
+            if eff is not None and eff < cutoff_dt:
+                to_publish.append(row)
 
-        # Log to instagram_post_log (INSERT OR IGNORE so restarts don't double-log)
         for row in to_publish:
+            cursor.execute(
+                'UPDATE entries SET status = ?, fb_published_at = ? WHERE id = ?',
+                ('published', now_iso, row['id'])
+            )
             cursor.execute('''
                 INSERT OR IGNORE INTO instagram_post_log
                     (fb_post_id, post_number, text, published_at)
@@ -1927,7 +1951,7 @@ class Database:
 
         conn.commit()
         conn.close()
-        return count
+        return len(to_publish)
 
     def confirm_scheduled(self, entry_id: int, fb_id: str, slot_iso: str,
                           post_number: int, text_hash: str):

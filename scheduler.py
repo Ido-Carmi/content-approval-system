@@ -170,16 +170,19 @@ class Scheduler:
                 print(f"⚠️  Skipping post with invalid scheduled_time: {post.get('id')}")
         return times
     
-    def get_next_available_slot_local(self, taken_slot_isos, windows=None) -> datetime:
+    def get_next_available_slot_local(self, taken_slot_isos, windows=None, append=False) -> datetime:
         """Pick the next available slot using only local data (no Facebook API call).
         taken_slot_isos: iterable of ISO strings of already-desired scheduled times.
-        windows: optional list of datetime.time; defaults to the Facebook posting windows."""
+        windows: optional list of datetime.time; defaults to the Facebook posting windows.
+        append=True: place AFTER the latest scheduled post (don't back-fill earlier
+        gaps such as today's already-published slots) — i.e. add to the end of the queue."""
         if windows is None:
             windows = self.load_posting_windows()
         now = datetime.now(self.timezone)
 
         occupied: set = set()
         posts_per_day: dict = {}
+        occupied_dts: list = []
         parse_failures = []
         for iso in taken_slot_isos:
             try:
@@ -190,6 +193,7 @@ class Scheduler:
                     dt = dt.astimezone(self.timezone)
                 key = (dt.date(), dt.time().replace(second=0, microsecond=0))
                 occupied.add(key)
+                occupied_dts.append(dt)
                 posts_per_day[dt.date()] = posts_per_day.get(dt.date(), 0) + 1
             except Exception as exc:
                 parse_failures.append((iso, str(exc)))
@@ -200,14 +204,22 @@ class Scheduler:
         print(f"[slot-pick] posts_per_day={ {str(d): n for d, n in sorted(posts_per_day.items())} }")
 
         num_windows = len(windows)
-        current_date = now.date()
+
+        # Append mode: never place before the last scheduled post — add to the queue end.
+        floor = max(occupied_dts) if (append and occupied_dts) else now
+        if floor < now:
+            floor = now
+        if append and occupied_dts:
+            print(f"[slot-pick] append mode — placing after {floor.isoformat()}")
+
+        current_date = floor.date()
 
         if not self.should_skip_date(current_date):
             if posts_per_day.get(current_date, 0) < num_windows:
                 for w in windows:
                     slot = self.timezone.localize(datetime.combine(current_date, w))
                     slot_key = (slot.date(), slot.time().replace(second=0, microsecond=0))
-                    if slot > now and slot_key not in occupied:
+                    if slot > floor and slot_key not in occupied:
                         return slot
 
         for days in range(1, 365):
@@ -219,7 +231,7 @@ class Scheduler:
             for w in windows:
                 slot = self.timezone.localize(datetime.combine(check_date, w))
                 slot_key = (slot.date(), slot.time().replace(second=0, microsecond=0))
-                if slot_key not in occupied:
+                if slot > floor and slot_key not in occupied:
                     return slot
 
         fallback_days = 1
@@ -260,10 +272,11 @@ class Scheduler:
         return sorted(windows)
 
     def get_next_available_ig_slot(self, taken_slot_isos) -> datetime:
-        """Next free Instagram slot using IG dynamic-tier windows (queue-size aware)."""
+        """Next free Instagram slot using IG dynamic-tier windows (queue-size aware).
+        Appends to the end of the IG queue (doesn't back-fill today's used slots)."""
         scheduled_count = len([t for t in taken_slot_isos if t]) + 1
         windows = self.load_ig_windows(scheduled_count)
-        return self.get_next_available_slot_local(taken_slot_isos, windows=windows)
+        return self.get_next_available_slot_local(taken_slot_isos, windows=windows, append=True)
 
     def reschedule_all_to_new_windows(self) -> int:
         """
@@ -357,7 +370,7 @@ class Scheduler:
                     continue
                 cursor.execute(
                     'UPDATE entries SET scheduled_time=? WHERE id=?',
-                    (new_time.strftime('%Y-%m-%d %H:%M:%S'), entry['id'])
+                    (new_time.isoformat(), entry['id'])   # ISO+tz — one canonical format
                 )
                 rescheduled += 1
                 print(f"   📅 #{entry.get('post_number')} {old_time.strftime('%d/%m %H:%M')} → {new_time.strftime('%d/%m %H:%M')}")
