@@ -894,6 +894,7 @@ def instagram_publish_job(force_one: bool = False):
             return
 
         published = 0
+        MAX_ATTEMPTS = 3   # hard cap so a genuinely-broken post can't loop forever
         for entry in scheduled:
             slot_dt = _parse_fb_datetime(entry.get('ig_scheduled_time'))
             if slot_dt is None:
@@ -902,13 +903,40 @@ def instagram_publish_job(force_one: bool = False):
                 print(f"[ig-publish] #{entry['post_number']}: not due until "
                       f"{slot_dt.astimezone(israel_tz).strftime('%Y-%m-%d %H:%M')}")
                 continue
+
+            # Idempotency: if Instagram ALREADY has this post (a prior attempt created
+            # it despite returning an error), don't publish again — just mark it posted.
+            if extensions.instagram_handler.was_recently_posted(entry['post_number']):
+                print(f"[ig-publish] #{entry['post_number']} already on Instagram — "
+                      f"marking posted (no duplicate)")
+                extensions.db.set_ig_status(entry['id'], 'posted')
+                continue
+
+            attempt = extensions.db.inc_ig_attempts(entry['id'])
             try:
-                _publish_instagram_entry(entry, config, now)
+                _publish_instagram_entry(entry, config, now)   # marks 'posted' on success
                 published += 1
             except Exception as pub_exc:
-                print(f"[ig-publish] ❌ #{entry['post_number']} failed: {pub_exc}")
-                traceback.print_exc()
+                err = str(pub_exc)
+                print(f"[ig-publish] ❌ #{entry['post_number']} attempt {attempt} failed: {err[:200]}")
                 _ig_failure_alert(config, pub_exc)
+
+                # Rate limited (code 4 / 2207051): stop the whole run and back off.
+                # Don't mark anything — next run's was_recently_posted() check will
+                # detect it if the post was actually created, preventing duplicates.
+                if ('request limit reached' in err or '"code": 4' in err
+                        or '"code":4' in err or '2207051' in err):
+                    print(f"[ig-publish] ⚠️ rate-limited — stopping run; next run verifies "
+                          f"before any retry")
+                    break
+
+                # Genuinely failing and not creating a post — give up after MAX_ATTEMPTS
+                # so it can't loop. Marked 'failed' (admin can re-queue from the page).
+                if attempt >= MAX_ATTEMPTS:
+                    print(f"[ig-publish] #{entry['post_number']} failed {attempt}x — marking 'failed'")
+                    extensions.db.set_ig_status(entry['id'], 'failed')
+                else:
+                    traceback.print_exc()
 
         print(f"[ig-publish] done — published={published}")
 

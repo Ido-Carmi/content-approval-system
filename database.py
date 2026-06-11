@@ -257,6 +257,7 @@ class Database:
             'ALTER TABLE instagram_post_log ADD COLUMN ig_scheduled_time TEXT',
             'ALTER TABLE instagram_post_log ADD COLUMN last_engagement INTEGER DEFAULT 0',
             'ALTER TABLE instagram_post_log ADD COLUMN last_checked TEXT',
+            'ALTER TABLE instagram_post_log ADD COLUMN ig_attempts INTEGER DEFAULT 0',
         ]:
             try:
                 cursor.execute(col_def)
@@ -2310,7 +2311,7 @@ class Database:
         cursor = conn.cursor()
         cursor.execute('''
             SELECT id, fb_post_id, post_number, text, published_at,
-                   last_engagement, ig_scheduled_time
+                   last_engagement, ig_scheduled_time, ig_attempts
             FROM instagram_post_log
             WHERE ig_status = 'scheduled'
             ORDER BY ig_scheduled_time ASC
@@ -2318,6 +2319,18 @@ class Database:
         rows = cursor.fetchall()
         conn.close()
         return [dict(r) for r in rows]
+
+    def inc_ig_attempts(self, log_id: int) -> int:
+        """Increment and return the publish-attempt count for an IG post."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('UPDATE instagram_post_log SET ig_attempts = COALESCE(ig_attempts,0) + 1 WHERE id=?',
+                       (log_id,))
+        cursor.execute('SELECT ig_attempts FROM instagram_post_log WHERE id=?', (log_id,))
+        row = cursor.fetchone()
+        conn.commit()
+        conn.close()
+        return row['ig_attempts'] if row else 0
 
     def get_ig_scheduled_slots(self) -> List[str]:
         """All ig_scheduled_time values of queued IG posts (for slot conflict checks)."""
