@@ -52,7 +52,16 @@ class Database:
         
         # Initialize post number if not exists
         cursor.execute('INSERT OR IGNORE INTO post_numbers (id, current_number) VALUES (1, 1)')
-        
+
+        # Separate counter for Instagram-direct posts (אינסטוש#N)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS instagram_numbers (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                current_number INTEGER DEFAULT 1
+            )
+        ''')
+        cursor.execute('INSERT OR IGNORE INTO instagram_numbers (id, current_number) VALUES (1, 1)')
+
         # Processed timestamps to avoid duplicates
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS processed_timestamps (
@@ -258,6 +267,7 @@ class Database:
             'ALTER TABLE instagram_post_log ADD COLUMN last_engagement INTEGER DEFAULT 0',
             'ALTER TABLE instagram_post_log ADD COLUMN last_checked TEXT',
             'ALTER TABLE instagram_post_log ADD COLUMN ig_attempts INTEGER DEFAULT 0',
+            'ALTER TABLE instagram_post_log ADD COLUMN ig_label TEXT',
         ]:
             try:
                 cursor.execute(col_def)
@@ -933,7 +943,16 @@ class Database:
         ''')
         published_deleted = cursor.rowcount
         total_deleted += published_deleted
-        
+
+        # Instagram-direct entries: the actual post lives in instagram_post_log,
+        # so the original entries row can be removed once it's a day old.
+        cursor.execute('''
+            DELETE FROM entries
+            WHERE status = 'instagram'
+            AND COALESCE(approved_at, created_at) < datetime('now', '-1 day')
+        ''')
+        total_deleted += cursor.rowcount
+
         conn.commit()
         conn.close()
         
@@ -2265,6 +2284,7 @@ class Database:
             FROM instagram_post_log l
             WHERE ig_status IN ('watching','scheduled','posted')
               AND published_at >= ?
+              AND ig_label IS NULL          -- exclude Instagram-direct (אינסטוש) posts
               AND id = (
                   SELECT id FROM instagram_post_log l2
                   WHERE l2.post_number IS l.post_number
@@ -2311,7 +2331,7 @@ class Database:
         cursor = conn.cursor()
         cursor.execute('''
             SELECT id, fb_post_id, post_number, text, published_at,
-                   last_engagement, ig_scheduled_time, ig_attempts
+                   last_engagement, ig_scheduled_time, ig_attempts, ig_label
             FROM instagram_post_log
             WHERE ig_status = 'scheduled'
             ORDER BY ig_scheduled_time ASC
@@ -2319,6 +2339,70 @@ class Database:
         rows = cursor.fetchall()
         conn.close()
         return [dict(r) for r in rows]
+
+    def get_next_instagram_number(self) -> int:
+        """Next sequential אינסטוש number (separate from the Facebook post counter)."""
+        with Database._post_number_lock:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute('SELECT current_number FROM instagram_numbers WHERE id = 1')
+            n = cursor.fetchone()['current_number']
+            cursor.execute('UPDATE instagram_numbers SET current_number = ? WHERE id = 1', (n + 1,))
+            conn.commit()
+            conn.close()
+            return n
+
+    def get_current_instagram_number(self) -> int:
+        """The next אינסטוש number that will be assigned (without consuming it)."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT current_number FROM instagram_numbers WHERE id = 1')
+        n = cursor.fetchone()['current_number']
+        conn.close()
+        return n
+
+    def set_instagram_number(self, number: int):
+        """Set the next אינסטוש number directly."""
+        with Database._post_number_lock:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute('UPDATE instagram_numbers SET current_number = ? WHERE id = 1', (number,))
+            conn.commit()
+            conn.close()
+
+    def add_ig_direct_post(self, text: str, label: str, ig_number: int, slot_iso: str) -> int:
+        """Queue an Instagram-only post (bypasses Facebook). Creates an
+        instagram_post_log row already in the 'scheduled' state with a synthetic
+        fb_post_id (no FB post exists). Returns the new log row id."""
+        import pytz
+        now_iso = datetime.now(pytz.timezone('Asia/Jerusalem')).isoformat()
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO instagram_post_log
+                (fb_post_id, post_number, text, published_at, ig_status,
+                 ig_scheduled_time, ig_label)
+            VALUES (?, ?, ?, ?, 'scheduled', ?, ?)
+        ''', (f"igdirect_{ig_number}", ig_number, text, now_iso, slot_iso, label))
+        new_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return new_id
+
+    def mark_entry_instagram(self, entry_id: int, edited_text: str) -> bool:
+        """Move a pending entry to 'instagram' status (approved, Instagram-only — not
+        scheduled on Facebook). Returns False on double-submit (already handled)."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            UPDATE entries
+            SET status='instagram', text=?, approved_by='admin', approved_at=?
+            WHERE id=? AND status='pending'
+        ''', (edited_text, datetime.now().isoformat(), entry_id))
+        affected = cursor.rowcount
+        conn.commit()
+        conn.close()
+        return affected > 0
 
     def inc_ig_attempts(self, log_id: int) -> int:
         """Increment and return the publish-attempt count for an IG post."""

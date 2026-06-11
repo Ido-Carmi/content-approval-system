@@ -705,6 +705,9 @@ def _publish_instagram_entry(entry: dict, config: dict, now) -> dict:
     Raises on failure (caller handles)."""
     fb          = extensions.facebook_handler
     post_number = entry['post_number']
+    # Header/caption label: Instagram-direct posts carry 'אינסטוש#N'; normal ones use '#N'.
+    label       = entry.get('ig_label') or f"#{post_number}"
+    is_direct   = bool(entry.get('ig_label'))
 
     # Resolve text: strip "#number\n" prefix, prefer full text from Facebook
     raw_text = entry.get('text') or ''
@@ -714,7 +717,8 @@ def _publish_instagram_entry(entry: dict, config: dict, now) -> dict:
     else:
         clean_text = raw_text.strip()
 
-    if fb:
+    # Instagram-direct posts never went to Facebook — don't try to fetch FB text.
+    if fb and not is_direct:
         fb_text = fb.get_post_full_text(entry['fb_post_id'])
         if fb_text:
             if fb_text.startswith('#'):
@@ -722,18 +726,32 @@ def _publish_instagram_entry(entry: dict, config: dict, now) -> dict:
                 fb_text = p[1].strip() if len(p) > 1 else fb_text
             if len(fb_text) > len(clean_text):
                 clean_text = fb_text
-    print(f"[ig-job]   text for #{post_number}: {len(clean_text)} chars")
+    print(f"[ig-job]   text for {label}: {len(clean_text)} chars")
 
-    from image_generator import generate_confession_slides, slides_to_bytes
+    from image_generator import (generate_confession_slides, slides_to_bytes,
+                                  pick_weighted_palette, PALETTES)
     watermark = config.get('instagram_watermark', 'וידויים צבאיים')
+
+    # Pick an IDF branch palette, weighted so the more-used ones come up less often.
+    cfg      = load_config()
+    usage    = dict(cfg.get('instagram_palette_usage', {}) or {})
+    pal_name = pick_weighted_palette(usage)
+    usage[pal_name] = int(usage.get(pal_name, 0)) + 1
+    cfg['instagram_palette_usage'] = usage
+    save_config(cfg)
+    config['instagram_palette_usage'] = usage   # so later posts in this run see it
+    print(f"[ig-job]   {label}: palette '{pal_name}' (usage now {usage})")
+
     slides       = generate_confession_slides(text=clean_text,
                                               post_number=post_number,
-                                              watermark=watermark)
+                                              watermark=watermark,
+                                              palette=PALETTES[pal_name],
+                                              header=label)
     images_bytes = slides_to_bytes(slides)
-    print(f"[ig-job]   #{post_number}: {len(slides)} slide(s)")
+    print(f"[ig-job]   {label}: {len(slides)} slide(s)")
 
     hashtags = config.get('instagram_hashtags', '').strip()
-    caption  = f"#{post_number}"
+    caption  = label
     if hashtags:
         caption += f"\n.\n.\n{hashtags}"
 
@@ -904,11 +922,11 @@ def instagram_publish_job(force_one: bool = False):
                       f"{slot_dt.astimezone(israel_tz).strftime('%Y-%m-%d %H:%M')}")
                 continue
 
+            label = entry.get('ig_label') or f"#{entry['post_number']}"
             # Idempotency: if Instagram ALREADY has this post (a prior attempt created
             # it despite returning an error), don't publish again — just mark it posted.
-            if extensions.instagram_handler.was_recently_posted(entry['post_number']):
-                print(f"[ig-publish] #{entry['post_number']} already on Instagram — "
-                      f"marking posted (no duplicate)")
+            if extensions.instagram_handler.was_recently_posted(label):
+                print(f"[ig-publish] {label} already on Instagram — marking posted (no duplicate)")
                 extensions.db.set_ig_status(entry['id'], 'posted')
                 continue
 

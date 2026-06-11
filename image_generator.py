@@ -22,12 +22,59 @@ TOP_Y   = 150       # y where body text starts
 FOOT_Y  = CANVAS[1] - 90
 VERTICAL_MARGIN = 70   # breathing room reserved above/below the text block
 
+# Default palette (Ground / army green) — overridable per post via `palette`.
 BG_COLOR        = (0x46, 0x65, 0x29)   # #466529
 TEXT_COLOR      = (0xfa, 0xca, 0x19)   # #FACA19
 ACCENT_COLOR    = (0xfa, 0xca, 0x19)   # #FACA19
 DIVIDER_COLOR   = (0x57, 0x7a, 0x33)   # slightly lighter green
 WATERMARK_COLOR = (0x99, 0xb3, 0x72)   # muted olive
 ARROW_COLOR     = (0xcc, 0xdf, 0xa0)   # light olive
+
+
+def _hex(h):
+    h = h.lstrip('#')
+    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+
+# IDF branch palettes (name → colors). The publish path picks one weighted by past
+# usage so the feed rotates evenly; light-bg palettes use dark text.
+PALETTES = {
+    'ground':  {  # army green / IDF yellow (current)
+        'bg': _hex('#466529'), 'text': _hex('#FACA19'), 'accent': _hex('#FACA19'),
+        'divider': _hex('#577a33'), 'watermark': _hex('#99b372'), 'arrow': _hex('#ccdfa0'),
+    },
+    'navy':    {  # navy "whites" — light bg, navy text, gold accent
+        'bg': _hex('#f1f4f9'), 'text': _hex('#15243f'), 'accent': _hex('#15243f'),
+        'divider': _hex('#d2dae6'), 'watermark': _hex('#5a6f93'), 'arrow': _hex('#5a6f93'),
+    },
+    'air':     {  # air force powder blue shirt — light bg, charcoal text
+        'bg': _hex('#a9c3d6'), 'text': _hex('#1f2f3b'), 'accent': _hex('#1f2f3b'),
+        'divider': _hex('#8badc1'), 'watermark': _hex('#48606f'), 'arrow': _hex('#48606f'),
+    },
+    'service': {  # tan "Madei Bet" service dress — tan bg, dark olive text
+        'bg': _hex('#cabf9e'), 'text': _hex('#34301d'), 'accent': _hex('#34301d'),
+        'divider': _hex('#b1a472'), 'watermark': _hex('#6b6440'), 'arrow': _hex('#6b6440'),
+    },
+}
+PALETTE_ORDER = ['ground', 'navy', 'air', 'service']
+
+
+def pick_weighted_palette(usage: dict) -> str:
+    """Choose a palette name at random, weighted so the more a palette has been
+    used (relative to the others) the LESS likely it is to be picked again — the
+    feed self-balances toward even usage. `usage` maps palette name → count."""
+    import random
+    counts = [int(usage.get(name, 0)) for name in PALETTE_ORDER]
+    hi = max(counts)
+    # weight = how far below the busiest palette this one is, +1 (so all > 0)
+    weights = [(hi - c) + 1 for c in counts]
+    return random.choices(PALETTE_ORDER, weights=weights, k=1)[0]
+
+
+def preview_palette(post_number: int) -> dict:
+    """Stable palette for previews (deterministic by post number, no randomness)."""
+    name = PALETTE_ORDER[int(post_number) % len(PALETTE_ORDER)]
+    return PALETTES[name]
 
 FONT_SIZE_BODY   = 70
 FONT_SIZE_HEADER = 62
@@ -185,23 +232,29 @@ def _wrap_rtl(text: str, font, max_width: int, draw) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def _draw_slide(lines: list[str], post_number: int, watermark: str,
-                show_arrow: bool, body_font, bold_font):
+                show_arrow: bool, body_font, bold_font, pal, header=None):
     from PIL import Image, ImageDraw
 
-    img  = Image.new('RGB', CANVAS, BG_COLOR)
+    img  = Image.new('RGB', CANVAS, pal['bg'])
     draw = ImageDraw.Draw(img)
 
     right_x  = CANVAS[0] - PAD
 
-    # ── Header: post number (right-aligned, plain ASCII — no reversal needed) ─
-    draw.text((right_x, 45), f"#{post_number}",
-              font=bold_font, fill=ACCENT_COLOR, anchor='ra')
+    # ── Header: post number / label (right-aligned). Hebrew labels (e.g.
+    #    "אינסטוש#5") need RTL shaping; plain "#123" is ASCII and needs none. ─
+    header = header if header is not None else f"#{post_number}"
+    has_hebrew = any('֐' <= ch <= '׿' for ch in header)
+    if has_hebrew and HAS_RAQM:
+        draw.text((right_x, 45), header, font=bold_font, fill=pal['accent'],
+                  anchor='ra', direction='rtl', language='he')
+    else:
+        draw.text((right_x, 45), header, font=bold_font, fill=pal['accent'], anchor='ra')
 
     # ── Dividers ──────────────────────────────────────────────────────────────
     draw.line([(PAD, TOP_Y - 12), (CANVAS[0] - PAD, TOP_Y - 12)],
-              fill=DIVIDER_COLOR, width=2)
+              fill=pal['divider'], width=2)
     draw.line([(PAD, FOOT_Y - 20), (CANVAS[0] - PAD, FOOT_Y - 20)],
-              fill=DIVIDER_COLOR, width=2)
+              fill=pal['divider'], width=2)
 
     # ── Body text — centered horizontally, within the margin-reduced area ─────
     lh           = _line_height(body_font, draw)
@@ -217,18 +270,18 @@ def _draw_slide(lines: list[str], post_number: int, watermark: str,
         if line:
             if HAS_RAQM:
                 draw.text((center_x, y), line,
-                          font=body_font, fill=TEXT_COLOR, anchor='ma',
+                          font=body_font, fill=pal['text'], anchor='ma',
                           direction='rtl', language='he')
             else:
                 draw.text((center_x, y), line,
-                          font=body_font, fill=TEXT_COLOR, anchor='ma')
+                          font=body_font, fill=pal['text'], anchor='ma')
         y += lh
 
     # ── Watermark (centered) ──────────────────────────────────────────────────
     wm_font = _load_font(FONT_BODY, FONT_SIZE_WM)
     draw.text((CANVAS[0] // 2, FOOT_Y + 10),
               watermark,
-              font=wm_font, fill=WATERMARK_COLOR, anchor='mm')
+              font=wm_font, fill=pal['watermark'], anchor='mm')
 
     # ── Swipe arrow — proper → arrow below the footer divider ────────────────
     if show_arrow:
@@ -239,10 +292,10 @@ def _draw_slide(lines: list[str], post_number: int, watermark: str,
         hh  = 12                     # arrowhead half-height
         # Shaft
         draw.line([(ax - sw - hw, ay), (ax - hw, ay)],
-                  fill=ARROW_COLOR, width=5)
+                  fill=pal['arrow'], width=5)
         # Arrowhead (filled triangle)
         draw.polygon([(ax - hw, ay - hh), (ax, ay), (ax - hw, ay + hh)],
-                     fill=ARROW_COLOR)
+                     fill=pal['arrow'])
 
     return img
 
@@ -257,12 +310,21 @@ def generate_confession_slides(
     watermark: str = "וידויים צבאיים",
     body_font_path: Optional[str] = None,
     bold_font_path:  Optional[str] = None,
+    palette=None,
+    header=None,
 ) -> list:
-    """Generate 1080×1080 PIL Image slides. Returns list of PIL Images."""
+    """Generate 1080×1080 PIL Image slides. Returns list of PIL Images.
+    palette: a colors dict (see PALETTES) or a palette name; defaults to 'ground'.
+    header: the top-right label; defaults to '#<post_number>'."""
     from PIL import Image, ImageDraw
 
+    if isinstance(palette, str):
+        palette = PALETTES.get(palette)
+    pal = palette or PALETTES['ground']
+
     print(f"\n[imggen] === generate_confession_slides ===")
-    print(f"[imggen] post #{post_number}  |  font: {os.path.basename(FONT_BODY)}")
+    print(f"[imggen] post #{post_number}  |  font: {os.path.basename(FONT_BODY)}  "
+          f"|  palette bg={pal['bg']}")
 
     text = _clean_text(text)
     print(f"[imggen] text ({len(text)} chars): {text[:100]}")
@@ -274,7 +336,7 @@ def generate_confession_slides(
     # Reserve vertical breathing room top+bottom so slides aren't packed edge-to-edge.
     text_area = FOOT_Y - 20 - TOP_Y - 2 * VERTICAL_MARGIN
 
-    tmp_img  = Image.new('RGB', CANVAS, BG_COLOR)
+    tmp_img  = Image.new('RGB', CANVAS, pal['bg'])
     tmp_draw = ImageDraw.Draw(tmp_img)
 
     # Find the right font size
@@ -369,7 +431,8 @@ def generate_confession_slides(
         is_last = (idx == len(pages) - 1)
         slide   = _draw_slide(page_lines, post_number, watermark,
                                show_arrow=not is_last,
-                               body_font=body_font, bold_font=bold_font)
+                               body_font=body_font, bold_font=bold_font, pal=pal,
+                               header=header)
         slides.append(slide)
 
     return slides

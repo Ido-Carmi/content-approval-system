@@ -248,14 +248,15 @@ class InstagramHandler:
     # Utility
     # ------------------------------------------------------------------
 
-    def was_recently_posted(self, post_number, limit: int = 25) -> bool:
-        """Return True if a recent Instagram post already has this confession number
-        (its caption's first line is '#<post_number>'). Used to avoid duplicates:
-        Instagram sometimes creates a post even when the publish call returns an
-        error, so we verify before (re)publishing. On any error returns False."""
+    def was_recently_posted(self, label, limit: int = 25) -> bool:
+        """Return True if a recent Instagram post already has this caption label
+        (its caption's first line equals `label`, e.g. '#15482' or 'אינסטוש#5').
+        Used to avoid duplicates: Instagram sometimes creates a post even when the
+        publish call returns an error, so we verify before (re)publishing. On any
+        error returns False."""
         try:
             body = self._get(f"{self.ig_id}/media", {'fields': 'caption', 'limit': limit})
-            target = f"#{post_number}"
+            target = str(label).strip()
             for m in body.get('data', []):
                 cap = (m.get('caption') or '').strip()
                 if cap.split('\n', 1)[0].strip() == target:

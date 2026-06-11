@@ -220,6 +220,27 @@ def approve_entry(entry_id):
     json_body = request.get_json(silent=True) or {}
     edited_text = request.form.get('text', '') or json_body.get('text', '')
     comment_bitmask = int(request.form.get('comment_bitmask', 0) or json_body.get('comment_bitmask', 0) or 0)
+    ig_direct = (request.form.get('instagram_direct', '') or json_body.get('instagram_direct', '')) in ('1', 'true', 'on', True)
+
+    # ── Instagram-direct: skip Facebook entirely, queue straight to Instagram ──
+    if ig_direct:
+        if not extensions.scheduler:
+            flash('⚠️ המתזמן לא מאותחל — לא ניתן לתזמן לאינסטגרם', 'error')
+            return redirect(url_for('review_page'))
+        moved = extensions.db.mark_entry_instagram(entry_id, edited_text)
+        if not moved:
+            if request.headers.get('HX-Request'):
+                return '', 200
+            return redirect(url_for('review_page'))
+        ig_number = extensions.db.get_next_instagram_number()
+        label     = f"אינסטוש#{ig_number}"
+        taken     = extensions.db.get_ig_scheduled_slots()
+        slot      = extensions.scheduler.get_next_available_ig_slot(taken)
+        extensions.db.add_ig_direct_post(edited_text, label, ig_number, slot.isoformat())
+        print(f"[approve] entry {entry_id} → Instagram-direct {label} at {slot.isoformat()}")
+        if request.headers.get('HX-Request'):
+            return '', 200
+        return redirect(url_for('review_page'))
 
     # Pick a slot using local data only (no Facebook query — fast + race-safe).
     # Combine desired (scheduled_time) and actual FB (fb_scheduled_time) slots so
@@ -1087,7 +1108,9 @@ def settings_page():
         else:
             config[key + '_set'] = False
 
-    return render_template('settings.html', config=config, current_number=current_number)
+    instagram_number = extensions.db.get_current_instagram_number()
+    return render_template('settings.html', config=config, current_number=current_number,
+                           instagram_number=instagram_number)
 
 def _ig_clean_text(raw: str) -> str:
     """Strip a leading '#number\\n' prefix from stored post text."""
@@ -1171,6 +1194,7 @@ def instagram_scheduled_page():
             pass
         items.append({
             'id': r['id'], 'post_number': r['post_number'],
+            'label': r.get('ig_label') or f"#{r['post_number']}",
             'text': _ig_clean_text(r['text']),
             'engagement': r.get('last_engagement') or 0,
             'scheduled_time': slot, 'display_time': disp, 'weekday': weekday,
@@ -1184,12 +1208,14 @@ def instagram_image(log_id):
     entry = extensions.db.get_ig_entry(log_id)
     if not entry:
         return 'not found', 404
-    from image_generator import generate_confession_slides, slides_to_bytes
+    from image_generator import generate_confession_slides, slides_to_bytes, preview_palette
     config = load_config()
     slides = generate_confession_slides(
         text=_ig_clean_text(entry['text']),
         post_number=entry['post_number'],
         watermark=config.get('instagram_watermark', 'וידויים צבאיים'),
+        palette=preview_palette(entry['post_number']),  # stable preview, no usage change
+        header=entry.get('ig_label') or f"#{entry['post_number']}",
     )
     data = slides_to_bytes(slides)[0]
     return Response(data, mimetype='image/jpeg')
@@ -1328,6 +1354,23 @@ def set_post_number():
     except ValueError:
         flash('⚠️ מספר לא תקין', 'error')
     return redirect(url_for('settings_page'))
+
+@app.route('/set_instagram_number', methods=['POST'])
+def set_instagram_number():
+    new_number = request.form.get('new_instagram_number', '').strip()
+    if not new_number:
+        flash('⚠️ לא הוזן מספר', 'error')
+        return redirect(url_for('settings_page'))
+    try:
+        num = int(new_number)
+        if num < 1:
+            raise ValueError
+        extensions.db.set_instagram_number(num)
+        flash(f'✅ מספר אינסטוש הבא עודכן ל-אינסטוש#{num}', 'success')
+    except ValueError:
+        flash('⚠️ מספר לא תקין', 'error')
+    return redirect(url_for('settings_page'))
+
 
 @app.route('/clear_pending', methods=['POST'])
 def clear_pending():

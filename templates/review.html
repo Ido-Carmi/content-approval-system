@@ -88,8 +88,9 @@
                           oninput="autoResize(this)"
                           style="overflow-y: hidden; resize: none;">{{ entry.text }}</textarea>
                 
-                <!-- Hidden input tracks comment bitmask (slot1=1, slot2=2, slot3=4) -->
+                <!-- Hidden inputs: comment bitmask (slot1=1,2,4) + instagram-direct flag -->
                 <input type="hidden" id="slot-{{ entry.id }}" value="0">
+                <input type="hidden" id="igdirect-{{ entry.id }}" value="0">
 
                 <div class="d-flex gap-2 mb-2">
                     {% for s, color, bit in [(1,'primary',1),(2,'warning',2),(3,'success',4)] %}
@@ -102,13 +103,19 @@
                         <i class="bi bi-chat-square"></i> {{ s }}
                     </button>
                     {% endfor %}
+                    <button type="button"
+                            class="btn btn-sm btn-outline-secondary review-ig-btn flex-fill"
+                            data-entry-id="{{ entry.id }}"
+                            title="פרסם ישירות לאינסטגרם (אינסטוש, ללא פייסבוק)">
+                        <i class="bi bi-instagram"></i>
+                    </button>
                 </div>
 
                 <div class="d-flex gap-2">
                     <button type="button"
                             class="btn btn-success flex-fill"
                             hx-post="{{ url_for('approve_entry', entry_id=entry.id) }}"
-                            hx-vals='js:{text: document.getElementById("text-{{ entry.id }}").value, comment_bitmask: document.getElementById("slot-{{ entry.id }}").value}'
+                            hx-vals='js:{text: document.getElementById("text-{{ entry.id }}").value, comment_bitmask: document.getElementById("slot-{{ entry.id }}").value, instagram_direct: document.getElementById("igdirect-{{ entry.id }}").value}'
                             hx-target="#entry-{{ entry.id }}"
                             hx-swap="outerHTML swap:200ms settle:600ms"
                             hx-disabled-elt="closest .entry-card">
@@ -165,6 +172,18 @@ document.addEventListener('DOMContentLoaded', function() {
             b.classList.add(active ? REVIEW_SLOT_COLORS[s] : 'btn-outline-secondary');
             b.querySelector('i').className = 'bi bi-chat-square' + (active ? '-fill' : '');
         });
+    });
+
+    // Instagram-direct toggle — when on, approve sends straight to Instagram (אינסטוש)
+    document.addEventListener('click', function(e) {
+        var btn = e.target.closest('.review-ig-btn');
+        if (!btn) return;
+        var entryId = btn.dataset.entryId;
+        var input   = document.getElementById('igdirect-' + entryId);
+        var on      = input.value !== '1';
+        input.value = on ? '1' : '0';
+        btn.classList.toggle('btn-danger', on);
+        btn.classList.toggle('btn-outline-secondary', !on);
     });
 });
 </script>
