@@ -29,7 +29,7 @@ def get_auto_comment_texts(config=None) -> set:
     if config is None:
         config = load_config()
     texts = set()
-    for i in range(1, 4):
+    for i in range(1, 5):
         for t in config.get(f'auto_comment_group_{i}', []):
             if t and t.strip():
                 texts.add(t.strip())

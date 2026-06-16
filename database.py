@@ -380,8 +380,8 @@ class Database:
     
     def set_should_comment(self, entry_id: int, bitmask: int):
         """Set comment bitmask for a post.
-        Bits: slot1=1, slot2=2, slot3=4. 0=none. Resets comment_posted for newly enabled slots."""
-        bitmask = max(0, min(7, int(bitmask)))
+        Bits: slot1=1, slot2=2, slot3=4, slot4=8. 0=none. Resets comment_posted for newly enabled slots."""
+        bitmask = max(0, min(15, int(bitmask)))
         conn = self.get_connection()
         cursor = conn.cursor()
         # Preserve comment_posted only for slots that remain enabled

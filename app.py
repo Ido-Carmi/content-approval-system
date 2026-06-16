@@ -313,14 +313,14 @@ def remove_auto_comment(entry_id):
 def auto_comment_page():
     config = load_config()
     groups = []
-    for i in range(1, 4):
+    for i in range(1, 5):
         group = config.get(f'auto_comment_group_{i}')
         if group is None:
             # Migrate from old single-text format on first load
             old = config.get(f'auto_comment_text_{i}', '').strip()
             group = [old] if old else []
         groups.append(group)
-    indices = [config.get(f'auto_comment_group_{i}_index', 0) for i in range(1, 4)]
+    indices = [config.get(f'auto_comment_group_{i}_index', 0) for i in range(1, 5)]
 
     conn = extensions.db.get_connection()
     cursor = conn.cursor()
@@ -338,7 +338,7 @@ def auto_comment_page():
 @app.route('/auto-comment/save', methods=['POST'])
 def auto_comment_save():
     config = load_config()
-    for i in range(1, 4):
+    for i in range(1, 5):
         raw = request.form.getlist(f'group_{i}[]')
         texts = [t.strip() for t in raw if t.strip()]
         config[f'auto_comment_group_{i}'] = texts

@@ -4,8 +4,8 @@
 {% block page_title %}<div class="text-center">💬 תגובה אוטומטית</div>{% endblock %}
 
 {% block content %}
-{% set slot_colors = ['primary', 'warning', 'success'] %}
-{% set slot_labels = ['כחול', 'כתום', 'ירוק'] %}
+{% set slot_colors = ['primary', 'warning', 'success', 'dark'] %}
+{% set slot_labels = ['כחול', 'כתום', 'ירוק', 'שחור'] %}
 
 <div class="row justify-content-center">
     <div class="col-lg-7">
@@ -20,12 +20,13 @@
                     <span class="badge bg-primary">1</span>
                     <span class="badge bg-warning text-dark">2</span>
                     <span class="badge bg-success">3</span>
+                    <span class="badge bg-dark">4</span>
                     כדי לבחור איזו קבוצת תגובה תפורסם כ-2 דקות אחרי הפרסום.
                     כשיש מספר תגובות בקבוצה, המערכת מסבבת ביניהן לסירוגין.
                 </p>
 
                 <form method="POST" action="{{ url_for('auto_comment_save') }}">
-                    {% for i in range(3) %}
+                    {% for i in range(4) %}
                     {% set n = i + 1 %}
                     {% set group = groups[i] %}
                     {% set cur_idx = indices[i] %}
@@ -117,8 +118,8 @@
                             <td class="text-truncate" style="max-width:220px;">{{ e.text }}</td>
                             <td>{{ e.scheduled_time }}</td>
                             <td>
-                                {% for s, color in [(1,'primary'),(2,'warning'),(3,'success')] %}
-                                {% set bit = [1,2,4][s-1] %}
+                                {% for s, color in [(1,'primary'),(2,'warning'),(3,'success'),(4,'dark')] %}
+                                {% set bit = [1,2,4,8][s-1] %}
                                 {% set slot_active = (bitmask // bit) % 2 %}
                                 {% if slot_active %}
                                 <span class="badge bg-{{ color }} {% if color == 'warning' %}text-dark{% endif %}">

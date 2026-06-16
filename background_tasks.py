@@ -571,8 +571,8 @@ def auto_comment_job():
             pending_mask = should_mask & ~posted_mask
             if not fb_id or not pending_mask:
                 continue
-            for slot in [1, 2, 3]:
-                slot_bit = 1 << (slot - 1)   # 1, 2, 4
+            for slot in [1, 2, 3, 4]:
+                slot_bit = 1 << (slot - 1)   # 1, 2, 4, 8
                 if not (pending_mask & slot_bit):
                     continue
 

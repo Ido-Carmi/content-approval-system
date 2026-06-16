@@ -93,7 +93,7 @@
                 <input type="hidden" id="igdirect-{{ entry.id }}" value="0">
 
                 <div class="d-flex gap-2 mb-2">
-                    {% for s, color, bit in [(1,'primary',1),(2,'warning',2),(3,'success',4)] %}
+                    {% for s, color, bit in [(1,'primary',1),(2,'warning',2),(3,'success',4),(4,'dark',8)] %}
                     <button type="button"
                             class="btn btn-sm btn-outline-secondary review-slot-btn flex-fill"
                             data-entry-id="{{ entry.id }}"
@@ -137,7 +137,7 @@
 </div>
 
 <script>
-var REVIEW_SLOT_COLORS = {1: 'btn-primary', 2: 'btn-warning', 3: 'btn-success'};
+var REVIEW_SLOT_COLORS = {1: 'btn-primary', 2: 'btn-warning', 3: 'btn-success', 4: 'btn-dark'};
 
 function autoResize(el) {
     // Save scroll position before forcing a reflow so mobile doesn't jump to top
@@ -168,7 +168,7 @@ document.addEventListener('DOMContentLoaded', function() {
             var s      = parseInt(b.dataset.slot);
             var bBit   = parseInt(b.dataset.bit);
             var active = (newBitmask & bBit) > 0;
-            b.classList.remove('btn-primary', 'btn-warning', 'btn-success', 'btn-outline-secondary');
+            b.classList.remove('btn-primary', 'btn-warning', 'btn-success', 'btn-dark', 'btn-outline-secondary');
             b.classList.add(active ? REVIEW_SLOT_COLORS[s] : 'btn-outline-secondary');
             b.querySelector('i').className = 'bi bi-chat-square' + (active ? '-fill' : '');
         });
