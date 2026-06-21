@@ -109,6 +109,8 @@ class Database:
         for col_def in [
             'ALTER TABLE entries ADD COLUMN should_comment INTEGER DEFAULT 0',
             'ALTER TABLE entries ADD COLUMN comment_posted INTEGER DEFAULT 0',
+            # 1 once we've evaluated/posted the reference-link comment (or there was none)
+            'ALTER TABLE entries ADD COLUMN ref_comment_posted INTEGER DEFAULT 0',
         ]:
             try:
                 cursor.execute(col_def)
@@ -436,6 +438,65 @@ class Database:
                        (slot_bit, entry_id))
         conn.commit()
         conn.close()
+
+    def get_posts_needing_ref_comment(self) -> List[Dict]:
+        """Live posts (published ≥2 min ago) that haven't yet had their reference-link
+        comment evaluated. Time filtered in Python to avoid SQLite tz issues."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT id, facebook_post_id, post_number, text, scheduled_time
+            FROM entries
+            WHERE COALESCE(ref_comment_posted, 0) = 0
+              AND facebook_post_id IS NOT NULL
+              AND scheduled_time IS NOT NULL
+        ''')
+        rows = cursor.fetchall()
+        conn.close()
+
+        threshold = datetime.now(pytz.utc) - timedelta(minutes=2)
+        israel_tz = pytz.timezone('Asia/Jerusalem')
+        result = []
+        for row in rows:
+            d = dict(row)
+            try:
+                dt = datetime.fromisoformat(d['scheduled_time'])
+                if dt.tzinfo is None:
+                    dt = israel_tz.localize(dt)
+                if dt.astimezone(pytz.utc) <= threshold:
+                    result.append(d)
+            except Exception:
+                pass
+        return result
+
+    def mark_ref_comment_posted(self, entry_id: int):
+        """Mark the reference-link comment as handled (posted or nothing to do)."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('UPDATE entries SET ref_comment_posted = 1 WHERE id = ?', (entry_id,))
+        conn.commit()
+        conn.close()
+
+    def get_fb_post_id_by_number(self, post_number: int) -> Optional[str]:
+        """Find the Facebook post id of a previously-published confession by its number.
+        Checks post_tracking (kept ~30 days) first, then the entries table."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            'SELECT post_id FROM post_tracking WHERE post_number = ? ORDER BY published_at DESC LIMIT 1',
+            (post_number,))
+        row = cursor.fetchone()
+        if row and row['post_id']:
+            conn.close()
+            return row['post_id']
+        cursor.execute(
+            "SELECT facebook_post_id FROM entries WHERE post_number = ? "
+            "AND facebook_post_id IS NOT NULL AND status = 'published' "
+            "ORDER BY id DESC LIMIT 1",
+            (post_number,))
+        row = cursor.fetchone()
+        conn.close()
+        return row['facebook_post_id'] if row else None
 
     def remove_auto_comment(self, entry_id: int):
         """Clear comment slot selection for a post."""

@@ -37,6 +37,14 @@ SAFETY_NET_INTERVAL = 30       # seconds between safety-net polls
 MAX_FB_RETRIES = 3
 FB_RETRY_BACKOFF = [2, 5, 15]  # seconds
 
+# Step 4 (verify): periodically confirm scheduled entries still exist on Facebook
+# and recreate any that vanished (e.g. after heavy delete+recreate reorder churn,
+# FB can drop a post while the DB still thinks it's synced).
+VERIFY_INTERVAL = 180          # seconds between FB verification passes
+ORPHAN_STRIKES_TO_HEAL = 2     # consecutive misses before recreating (debounces FB lag)
+_last_verify = 0.0
+_orphan_strikes: dict = {}     # fb_id -> consecutive times seen missing from FB
+
 
 # ---------------------------------------------------------------------------
 # Public helpers (imported by routes)
@@ -124,7 +132,69 @@ def _run_cycle(db):
     for entry in db.get_entries_needing_sync():
         _step_sync(db, fb, entry)
 
+    # ── Step 4: verify scheduled posts still exist on Facebook ───────────
+    _step_verify(db, fb)
+
     log.debug("[reconciler] cycle end")
+
+
+def _step_verify(db, fb):
+    """Throttled safety net: fetch Facebook's actual scheduled posts and recreate
+    any DB entry whose linked FB post has vanished. Heals 'synced in DB but gone
+    on Facebook' orphans that step3 can't see (no drift). Debounced over two passes
+    so Facebook's brief post-create listing lag isn't mistaken for an orphan."""
+    global _last_verify
+    now = time.time()
+    if now - _last_verify < VERIFY_INTERVAL:
+        return
+    _last_verify = now
+
+    try:
+        fb_posts = fb.get_scheduled_posts()
+    except Exception as exc:
+        _maybe_alert_token(exc)
+        log.warning("[reconciler] step4 verify: couldn't read FB scheduled posts: %s", exc)
+        return
+
+    fb_ids = {p.get('id') for p in fb_posts if p.get('id')}
+    entries = db.get_entries_needing_sync()   # status='scheduled' AND has facebook_post_id
+    if not entries:
+        return
+
+    # Safety guard: if a large share look "missing", it's almost certainly an id
+    # format mismatch or an FB API hiccup — NOT real orphans. Bail out rather than
+    # mass-recreate the whole queue.
+    missing = [e for e in entries
+               if e['facebook_post_id'] not in fb_ids
+               and e['facebook_post_id'] not in _reconciling_fb_ids]
+    if len(missing) > max(3, len(entries) // 2):
+        log.warning("[reconciler] step4 verify: %d/%d entries look missing from FB — "
+                    "treating as an API/format anomaly, skipping (no heal)",
+                    len(missing), len(entries))
+        _orphan_strikes.clear()
+        return
+
+    live_ids = {e['facebook_post_id'] for e in entries}
+    for e in entries:
+        fb_id = e['facebook_post_id']
+        if fb_id in _reconciling_fb_ids or fb_id in fb_ids:
+            _orphan_strikes.pop(fb_id, None)
+            continue
+        strikes = _orphan_strikes.get(fb_id, 0) + 1
+        _orphan_strikes[fb_id] = strikes
+        if strikes >= ORPHAN_STRIKES_TO_HEAL:
+            log.warning("[reconciler] step4 entry %d fb=%s missing from Facebook (%dx) — "
+                        "clearing link so step2 recreates it", e['id'], fb_id, strikes)
+            db.confirm_fb_deleted(e['id'])     # null the link, keep slot+number
+            _orphan_strikes.pop(fb_id, None)
+            signal_reconciler()                # recreate promptly
+        else:
+            log.info("[reconciler] step4 entry %d fb=%s not seen on FB (strike %d/%d)",
+                     e['id'], fb_id, strikes, ORPHAN_STRIKES_TO_HEAL)
+
+    # Drop strike records for posts no longer scheduled.
+    for k in [k for k in _orphan_strikes if k not in live_ids]:
+        _orphan_strikes.pop(k, None)
 
 
 # ---------------------------------------------------------------------------

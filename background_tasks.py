@@ -614,8 +614,64 @@ def auto_comment_job():
         if config_dirty:
             save_config(config)
 
+        # ── Reference-link comments ───────────────────────────────────────────
+        # If a post replies to an older confession (e.g. "לכותב וידוי 15499"),
+        # comment a link to that original — once it's live and we have its FB post.
+        _post_reference_link_comments(config)
+
     except Exception as e:
         print(f"❌ Auto-comment job error: {e}")
+
+
+def _fb_post_url(page_id: str, fb_post_id: str) -> str:
+    """Build a public Facebook post URL from a 'pageid_postid' id."""
+    if fb_post_id and '_' in fb_post_id:
+        pid = fb_post_id.split('_', 1)[1]
+        return f"https://www.facebook.com/{page_id}/posts/{pid}"
+    return f"https://www.facebook.com/{fb_post_id}"
+
+
+def _post_reference_link_comments(config: dict):
+    """For each live post that references older confession number(s), post a comment
+    linking to the original(s) we published. Marks each post handled exactly once."""
+    from utils import extract_referenced_numbers
+    if not extensions.facebook_handler:
+        return
+    page_id = config.get('facebook_page_id', '')
+    posts = extensions.db.get_posts_needing_ref_comment()
+    if not posts:
+        return
+    print(f"🔗 Reference-link check: {len(posts)} post(s)")
+    for post in posts:
+        try:
+            refs = extract_referenced_numbers(
+                post.get('text', ''),
+                exclude_number=post.get('post_number'),
+                current_number=post.get('post_number'),
+                window=100,
+            )
+            found = []
+            for num in refs:
+                orig = extensions.db.get_fb_post_id_by_number(num)
+                if orig:
+                    found.append((num, _fb_post_url(page_id, orig)))
+            if found:
+                if len(found) == 1:
+                    num, url = found[0]
+                    comment = f"הוידוי שאליו מתייחס הפוסט (#{num}):\n{url}"
+                else:
+                    lines = "\n".join(f"#{n}: {u}" for n, u in found)
+                    comment = f"הוידויים שאליהם מתייחס הפוסט:\n{lines}"
+                extensions.facebook_handler.post_comment(post['facebook_post_id'], comment)
+                print(f"   🔗 #{post['post_number']} → linked {[n for n,_ in found]}")
+            # Mark handled whether or not a link was posted (don't re-check forever).
+            extensions.db.mark_ref_comment_posted(post['id'])
+        except Exception as e:
+            err = str(e)
+            print(f"   ✗ ref-link for #{post.get('post_number')} failed: {err[:120]}")
+            # Post gone / permission error → give up; otherwise leave for a retry.
+            if 'does not exist' in err or '"code":100' in err or '"error_subcode":33' in err:
+                extensions.db.mark_ref_comment_posted(post['id'])
 
 
 def cleanup_old_comments_job():
