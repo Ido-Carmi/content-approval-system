@@ -10,6 +10,7 @@ Publishing flow for a single image:
                       _publish_container(creation_id) → ig_post_id
 """
 import logging
+import time
 from typing import Optional
 
 import cloudinary
@@ -178,15 +179,63 @@ class InstagramHandler:
         print(f"[instagram] ✅ carousel container created: {creation_id}")
         return creation_id
 
-    def _publish_container(self, creation_id: str) -> str:
-        """Publish a media container. Returns the live IG post ID."""
+    # Error subcode Meta returns while a media container is still processing
+    # ("המדיה לא מוכנה לפרסום, יש להמתין רגע" / "Media ID is not available").
+    _MEDIA_NOT_READY_SUBCODE = 2207027
+
+    def _wait_for_container_ready(self, creation_id: str,
+                                   max_wait_seconds: int = 60,
+                                   poll_interval: int = 3) -> None:
+        """Poll a media container's status_code until FINISHED. Raises on ERROR
+        or timeout. Best-effort: swallows lookup errors and just proceeds,
+        since _publish_container has its own retry for the not-ready case."""
+        waited = 0
+        while waited <= max_wait_seconds:
+            try:
+                body = self._get(creation_id, {'fields': 'status_code'})
+            except Exception as e:
+                print(f"[instagram]   status check failed for {creation_id}, proceeding anyway: {e}")
+                return
+            status = body.get('status_code')
+            print(f"[instagram]   container {creation_id} status_code={status} (waited {waited}s)")
+            if status == 'FINISHED':
+                return
+            if status == 'ERROR':
+                raise Exception(f"IG media container {creation_id} failed processing (status_code=ERROR)")
+            time.sleep(poll_interval)
+            waited += poll_interval
+        print(f"[instagram]   ⚠️ container {creation_id} still not FINISHED after {max_wait_seconds}s, trying publish anyway")
+
+    def _publish_container(self, creation_id: str,
+                            max_retries: int = 4,
+                            retry_delay: int = 5) -> str:
+        """Publish a media container. Returns the live IG post ID.
+        Retries with backoff if Instagram reports the media isn't ready yet
+        (error_subcode 2207027) — this is transient and normally resolves
+        within a few seconds."""
         print(f"\n[instagram] _publish_container(creation_id={creation_id})")
-        body = self._post(f"{self.ig_id}/media_publish", {
-            'creation_id': creation_id,
-        })
-        ig_post_id = body['id']
-        print(f"[instagram] ✅ published! ig_post_id = {ig_post_id}")
-        return ig_post_id
+
+        self._wait_for_container_ready(creation_id)
+
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                body = self._post(f"{self.ig_id}/media_publish", {
+                    'creation_id': creation_id,
+                })
+                ig_post_id = body['id']
+                print(f"[instagram] ✅ published! ig_post_id = {ig_post_id}")
+                return ig_post_id
+            except Exception as e:
+                not_ready = str(self._MEDIA_NOT_READY_SUBCODE) in str(e)
+                if not_ready and attempt <= max_retries:
+                    wait = retry_delay * attempt
+                    print(f"[instagram]   media not ready (attempt {attempt}/{max_retries}), "
+                          f"retrying in {wait}s...")
+                    time.sleep(wait)
+                    continue
+                raise
 
     # ------------------------------------------------------------------
     # High-level publish
