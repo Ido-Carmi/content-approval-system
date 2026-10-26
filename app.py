@@ -220,6 +220,7 @@ def approve_entry(entry_id):
     json_body = request.get_json(silent=True) or {}
     edited_text = request.form.get('text', '') or json_body.get('text', '')
     comment_bitmask = int(request.form.get('comment_bitmask', 0) or json_body.get('comment_bitmask', 0) or 0)
+    custom_comment_text = (request.form.get('custom_comment_text', '') or json_body.get('custom_comment_text', '')).strip()
     ig_direct = (request.form.get('instagram_direct', '') or json_body.get('instagram_direct', '')) in ('1', 'true', 'on', True)
 
     # ── Instagram-direct: skip Facebook entirely, queue straight to Instagram ──
@@ -272,6 +273,8 @@ def approve_entry(entry_id):
 
     if comment_bitmask > 0:
         extensions.db.set_should_comment(entry_id, comment_bitmask)
+    if comment_bitmask & 16 and custom_comment_text:
+        extensions.db.set_custom_comment_text(entry_id, custom_comment_text)
 
     print(f"[approve] entry {entry_id} marked scheduled at {slot_iso} — reconciler will push to FB")
     signal_reconciler()

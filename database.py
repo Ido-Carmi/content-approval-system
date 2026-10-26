@@ -111,6 +111,8 @@ class Database:
             'ALTER TABLE entries ADD COLUMN comment_posted INTEGER DEFAULT 0',
             # 1 once we've evaluated/posted the reference-link comment (or there was none)
             'ALTER TABLE entries ADD COLUMN ref_comment_posted INTEGER DEFAULT 0',
+            # One-off comment text for slot 5 (custom per-post comment, not from a rotating group)
+            'ALTER TABLE entries ADD COLUMN custom_comment_text TEXT',
         ]:
             try:
                 cursor.execute(col_def)
@@ -382,8 +384,9 @@ class Database:
     
     def set_should_comment(self, entry_id: int, bitmask: int):
         """Set comment bitmask for a post.
-        Bits: slot1=1, slot2=2, slot3=4, slot4=8. 0=none. Resets comment_posted for newly enabled slots."""
-        bitmask = max(0, min(15, int(bitmask)))
+        Bits: slot1=1, slot2=2, slot3=4, slot4=8, slot5(custom)=16. 0=none.
+        Resets comment_posted for newly enabled slots."""
+        bitmask = max(0, min(31, int(bitmask)))
         conn = self.get_connection()
         cursor = conn.cursor()
         # Preserve comment_posted only for slots that remain enabled
@@ -402,7 +405,7 @@ class Database:
         # offsets (+03:00) on some versions, causing a 3-hour delay. Filter in Python.
         cursor.execute('''
             SELECT id, facebook_post_id, post_number, text, should_comment, comment_posted,
-                   scheduled_time
+                   scheduled_time, custom_comment_text
             FROM entries
             WHERE should_comment > 0
               AND (should_comment & ~comment_posted) > 0
@@ -502,7 +505,18 @@ class Database:
         """Clear comment slot selection for a post."""
         conn = self.get_connection()
         cursor = conn.cursor()
-        cursor.execute('UPDATE entries SET should_comment = 0, comment_posted = 0 WHERE id = ?', (entry_id,))
+        cursor.execute(
+            'UPDATE entries SET should_comment = 0, comment_posted = 0, custom_comment_text = NULL '
+            'WHERE id = ?', (entry_id,))
+        conn.commit()
+        conn.close()
+
+    def set_custom_comment_text(self, entry_id: int, text: str):
+        """Store the one-off comment text used for slot 5 (custom per-post comment)."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('UPDATE entries SET custom_comment_text = ? WHERE id = ?',
+                       (text, entry_id))
         conn.commit()
         conn.close()
 

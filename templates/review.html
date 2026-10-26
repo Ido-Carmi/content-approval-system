@@ -104,6 +104,12 @@
                     </button>
                     {% endfor %}
                     <button type="button"
+                            class="btn btn-sm btn-outline-secondary review-custom-btn flex-fill"
+                            data-entry-id="{{ entry.id }}"
+                            title="תגובה מותאמת אישית לפוסט הזה">
+                        <i class="bi bi-pencil-square"></i>
+                    </button>
+                    <button type="button"
                             class="btn btn-sm btn-outline-secondary review-ig-btn flex-fill"
                             data-entry-id="{{ entry.id }}"
                             title="פרסם ישירות לאינסטגרם (אינסטוש, ללא פייסבוק)">
@@ -111,11 +117,17 @@
                     </button>
                 </div>
 
+                <textarea id="custom-{{ entry.id }}"
+                          class="form-control form-control-sm mb-2 custom-comment-input"
+                          rows="2"
+                          placeholder="תגובה מותאמת אישית לפוסט הזה..."
+                          style="display:none;"></textarea>
+
                 <div class="d-flex gap-2">
                     <button type="button"
                             class="btn btn-success flex-fill"
                             hx-post="{{ url_for('approve_entry', entry_id=entry.id) }}"
-                            hx-vals='js:{text: document.getElementById("text-{{ entry.id }}").value, comment_bitmask: document.getElementById("slot-{{ entry.id }}").value, instagram_direct: document.getElementById("igdirect-{{ entry.id }}").value}'
+                            hx-vals='js:{text: document.getElementById("text-{{ entry.id }}").value, comment_bitmask: ((parseInt(document.getElementById("slot-{{ entry.id }}").value) || 0) | (document.getElementById("custom-{{ entry.id }}").value.trim() ? 16 : 0)), custom_comment_text: document.getElementById("custom-{{ entry.id }}").value.trim(), instagram_direct: document.getElementById("igdirect-{{ entry.id }}").value}'
                             hx-target="#entry-{{ entry.id }}"
                             hx-swap="outerHTML swap:200ms settle:600ms"
                             hx-disabled-elt="closest .entry-card">
@@ -172,6 +184,19 @@ document.addEventListener('DOMContentLoaded', function() {
             b.classList.add(active ? REVIEW_SLOT_COLORS[s] : 'btn-outline-secondary');
             b.querySelector('i').className = 'bi bi-chat-square' + (active ? '-fill' : '');
         });
+    });
+
+    // Custom-comment toggle — reveals a textarea to write a one-off comment for this post
+    document.addEventListener('click', function(e) {
+        var btn = e.target.closest('.review-custom-btn');
+        if (!btn) return;
+        var entryId = btn.dataset.entryId;
+        var ta      = document.getElementById('custom-' + entryId);
+        var show    = ta.style.display === 'none';
+        ta.style.display = show ? 'block' : 'none';
+        btn.classList.toggle('btn-info', show);
+        btn.classList.toggle('btn-outline-secondary', !show);
+        if (show) ta.focus();
     });
 
     // Instagram-direct toggle — when on, approve sends straight to Instagram (אינסטוש)

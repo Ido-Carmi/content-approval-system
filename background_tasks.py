@@ -571,30 +571,38 @@ def auto_comment_job():
             pending_mask = should_mask & ~posted_mask
             if not fb_id or not pending_mask:
                 continue
-            for slot in [1, 2, 3, 4]:
-                slot_bit = 1 << (slot - 1)   # 1, 2, 4, 8
+            for slot in [1, 2, 3, 4, 5]:
+                slot_bit = 1 << (slot - 1)   # 1, 2, 4, 8, 16
                 if not (pending_mask & slot_bit):
                     continue
 
-                # Build the active text list for this slot (new group format, with old fallback)
-                group = [t.strip() for t in config.get(f'auto_comment_group_{slot}', []) if t.strip()]
-                if not group:
-                    old = config.get(f'auto_comment_text_{slot}', '').strip()
-                    if old:
-                        group = [old]
+                if slot == 5:
+                    # Slot 5 = one-off custom comment written on the approval page,
+                    # not a rotating group.
+                    custom_text = (entry.get('custom_comment_text') or '').strip()
+                    if not custom_text:
+                        continue
+                    group = [custom_text]
+                else:
+                    # Build the active text list for this slot (new group format, with old fallback)
+                    group = [t.strip() for t in config.get(f'auto_comment_group_{slot}', []) if t.strip()]
+                    if not group:
+                        old = config.get(f'auto_comment_text_{slot}', '').strip()
+                        if old:
+                            group = [old]
 
                 if not group:
                     continue
 
-                idx = config.get(f'auto_comment_group_{slot}_index', 0) % len(group)
+                idx = config.get(f'auto_comment_group_{slot}_index', 0) % len(group) if slot != 5 else 0
                 comment_text = group[idx]
 
                 try:
                     extensions.facebook_handler.post_comment(fb_id, comment_text)
                     extensions.db.mark_comment_posted(entry['id'], slot_bit)
 
-                    # Advance rotation index only when there are multiple texts
-                    if len(group) > 1:
+                    # Advance rotation index only when there are multiple texts (not slot 5)
+                    if slot != 5 and len(group) > 1:
                         config[f'auto_comment_group_{slot}_index'] = (idx + 1) % len(group)
                         config_dirty = True
 
