@@ -23,6 +23,9 @@ config.json
 *.toml*
 *.example
 
+# Instagram story audio tracks — admin-provided, licensed music files, server-only
+story_audio/
+
 # IDE
 .vscode/
 .idea/
