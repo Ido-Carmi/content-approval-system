@@ -520,6 +520,27 @@ class Database:
         conn.commit()
         conn.close()
 
+    def set_custom_comment(self, entry_id: int, text: str) -> int:
+        """Set or clear the slot-5 custom comment on an already-scheduled entry
+        (used by the scheduled-posts page to add/edit/remove it after approval).
+        Non-empty text enables bit 16 in should_comment; empty text clears it.
+        Returns the resulting bitmask."""
+        text = (text or '').strip()
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT should_comment FROM entries WHERE id = ?', (entry_id,))
+        row = cursor.fetchone()
+        bitmask = int(row['should_comment'] or 0) if row else 0
+        bitmask = (bitmask | 16) if text else (bitmask & ~16)
+        bitmask = max(0, min(31, bitmask))
+        cursor.execute(
+            'UPDATE entries SET should_comment = ?, custom_comment_text = ?, '
+            'comment_posted = (comment_posted & ?) WHERE id = ?',
+            (bitmask, text or None, bitmask, entry_id))
+        conn.commit()
+        conn.close()
+        return bitmask
+
     def schedule_to_facebook(self, entry_id: int, facebook_post_id: str, scheduled_time: str):
         """
         Mark entry as scheduled with Facebook post ID.
@@ -669,7 +690,7 @@ class Database:
         
         cursor.execute('''
             SELECT id, text, post_number, facebook_post_id, scheduled_time,
-                   should_comment, comment_posted
+                   should_comment, comment_posted, custom_comment_text
             FROM entries
             WHERE status = 'scheduled'
             ORDER BY scheduled_time ASC

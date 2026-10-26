@@ -312,6 +312,14 @@ def remove_auto_comment(entry_id):
     extensions.db.remove_auto_comment(entry_id)
     return jsonify({'ok': True})
 
+@app.route('/set-custom-comment/<int:entry_id>', methods=['POST'])
+def set_custom_comment(entry_id):
+    """Add/edit/remove the one-off slot-5 comment from the scheduled-posts page."""
+    data = request.get_json(silent=True) or {}
+    text = (data.get('text', '') or '').strip()
+    bitmask = extensions.db.set_custom_comment(entry_id, text)
+    return jsonify({'ok': True, 'bitmask': bitmask, 'text': text})
+
 @app.route('/auto-comment')
 def auto_comment_page():
     config = load_config()
@@ -560,6 +568,7 @@ def scheduled_content():
                     'scheduled_time': fb_post['scheduled_time'],
                     'should_comment': 0,
                     'comment_posted': 0,
+                    'custom_comment_text': None,
                 }
 
             weekday = get_hebrew_weekday(fb_post['scheduled_time'])

@@ -86,6 +86,7 @@
                         </button>
 
                         <!-- Auto-comment slot buttons (1=blue 2=orange 3=green, bitmask) -->
+                        {% set custom_text = (item.entry.custom_comment_text or '') if item.entry else '' %}
                         {% if item.entry %}
                         {% set bitmask = item.entry.should_comment | int %}
                         {% for s, color in [(1,'primary'),(2,'warning'),(3,'success'),(4,'dark')] %}
@@ -101,6 +102,14 @@
                             <i class="bi bi-chat-square{% if active %}-fill{% endif %}"></i> {{ s }}
                         </button>
                         {% endfor %}
+
+                        <!-- Custom comment (slot 5) — free-text, set/edited/removed here -->
+                        <button type="button"
+                                class="btn btn-sm comment-custom-btn {% if custom_text %}btn-info{% else %}btn-outline-secondary{% endif %}"
+                                data-entry-id="{{ item.entry.id }}"
+                                title="תגובה מותאמת אישית{% if custom_text %} — פעילה{% endif %}">
+                            <i class="bi bi-pencil-square"></i>
+                        </button>
                         {% endif %}
 
                         <!-- Return to Pending Button -->
@@ -111,6 +120,23 @@
                         </button>
                     </div>
                 </div>
+
+                {% if item.entry %}
+                <div id="custom-wrap-{{ item.entry.id }}" class="custom-comment-wrap mt-2" style="display:{% if custom_text %}block{% else %}none{% endif %};">
+                    <textarea id="custom-text-{{ item.entry.id }}"
+                              class="form-control form-control-sm mb-2"
+                              rows="2"
+                              placeholder="תגובה מותאמת אישית לפוסט הזה...">{{ custom_text }}</textarea>
+                    <div class="d-flex gap-2">
+                        <button type="button" class="btn btn-sm btn-success flex-fill custom-save-btn" data-entry-id="{{ item.entry.id }}">
+                            <i class="bi bi-check-lg"></i> שמור
+                        </button>
+                        <button type="button" class="btn btn-sm btn-danger flex-fill custom-remove-btn" data-entry-id="{{ item.entry.id }}">
+                            <i class="bi bi-trash"></i> הסר
+                        </button>
+                    </div>
+                </div>
+                {% endif %}
             </div>
         </div>
     </div>
@@ -148,6 +174,46 @@ document.querySelectorAll('.comment-slot-btn').forEach(function(btn) {
                 b.title = 'תגובה ' + s + (active ? ' — פעילה' : '');
             });
         }).catch(function(e) { console.error('toggle-comment failed', e); });
+    });
+});
+
+// Custom comment (slot 5) — toggle the edit box, save, or remove
+document.querySelectorAll('.comment-custom-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+        var wrap = document.getElementById('custom-wrap-' + this.dataset.entryId);
+        wrap.style.display = (wrap.style.display === 'none') ? 'block' : 'none';
+    });
+});
+
+function saveCustomComment(entryId, text) {
+    return fetch('/set-custom-comment/' + entryId, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({text: text})
+    }).then(function(r) {
+        if (!r.ok) throw new Error('server error');
+        var btn = document.querySelector('.comment-custom-btn[data-entry-id="' + entryId + '"]');
+        var active = !!text;
+        btn.classList.remove('btn-info', 'btn-outline-secondary');
+        btn.classList.add(active ? 'btn-info' : 'btn-outline-secondary');
+        btn.title = 'תגובה מותאמת אישית' + (active ? ' — פעילה' : '');
+        if (!active) document.getElementById('custom-wrap-' + entryId).style.display = 'none';
+    }).catch(function(e) { console.error('set-custom-comment failed', e); });
+}
+
+document.querySelectorAll('.custom-save-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+        var entryId = this.dataset.entryId;
+        var text = document.getElementById('custom-text-' + entryId).value.trim();
+        saveCustomComment(entryId, text);
+    });
+});
+
+document.querySelectorAll('.custom-remove-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+        var entryId = this.dataset.entryId;
+        document.getElementById('custom-text-' + entryId).value = '';
+        saveCustomComment(entryId, '');
     });
 });
 </script>
