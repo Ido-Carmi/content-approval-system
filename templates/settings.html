@@ -289,22 +289,6 @@
                         </div>
 
                         <hr>
-                        <h6 class="text-muted mb-3">Instagram Story</h6>
-
-                        <div class="form-check mb-2">
-                            <input type="checkbox" name="instagram_story_enabled" class="form-check-input"
-                                   id="igStoryEnabled" {{' checked' if config.instagram_story_enabled is not false }}>
-                            <label class="form-check-label" for="igStoryEnabled">פרסם גם Story לכל פוסט שעולה לאינסטגרם (תמונה + מוזיקה, בלי סטיקרים/טקסט)</label>
-                        </div>
-                        <small class="text-muted d-block mb-3">
-                            {% if story_audio_tracks %}
-                                🎵 {{ story_audio_tracks|length }} קטעי מוזיקה טעונים (מתחלפים ברוטציה): {{ story_audio_tracks|join(', ') }}
-                            {% else %}
-                                ⚠️ אין קבצי מוזיקה בתיקיית <code>story_audio/</code> בשרת — ה-Story לא יפורסם עד שיועלה קובץ אחד לפחות (mp3/m4a/wav/aac, שיש לך זכויות שימוש בו).
-                            {% endif %}
-                        </small>
-
-                        <hr>
                         <h6 class="text-muted mb-3">Cloudinary — אחסון תמונות</h6>
                         <small class="text-muted d-block mb-3">נדרש לפרסום תמונות. חשבון חינמי ב-<a href="https://cloudinary.com" target="_blank">cloudinary.com</a></small>
 

@@ -8,17 +8,8 @@ Publishing flow for a single image:
   3. For carousel:    _create_image_container(url, None) per slide → [child_id, ...]
                       _create_carousel_container([child_ids], caption) → creation_id
                       _publish_container(creation_id) → ig_post_id
-
-Story flow (image + music, no stickers/text — see publish_story):
-  1. _build_story_video(image_bytes, audio_path) → local mp4 path
-  2. upload_video_to_cloudinary(path) → video_url
-  3. _create_story_container(video_url) → creation_id
-     _publish_container(creation_id) → ig_story_id
 """
 import logging
-import os
-import subprocess
-import tempfile
 import time
 from typing import Optional
 
@@ -107,28 +98,6 @@ class InstagramHandler:
             except Exception as e:
                 print(f"[instagram]   ⚠️  delete failed for {pid}: {e}")
 
-    def upload_video_to_cloudinary(self, video_path: str, public_id: str) -> str:
-        """Upload a local mp4 to Cloudinary as a video resource. Returns secure_url."""
-        print(f"[instagram] uploading story video to Cloudinary: public_id={public_id}")
-        result = cloudinary.uploader.upload(
-            video_path,
-            public_id=public_id,
-            overwrite=True,
-            resource_type='video',
-        )
-        url = result['secure_url']
-        print(f"[instagram]   ✅ story video uploaded → {url} "
-              f"(duration={result.get('duration')}, bytes={result.get('bytes')})")
-        return url
-
-    def delete_video_from_cloudinary(self, public_id: str):
-        """Delete an uploaded story video from Cloudinary after successful IG publish."""
-        try:
-            result = cloudinary.uploader.destroy(public_id, resource_type='video')
-            print(f"[instagram]   deleted video {public_id} → result={result}")
-        except Exception as e:
-            print(f"[instagram]   ⚠️  video delete failed for {public_id}: {e}")
-
     # ------------------------------------------------------------------
     # Instagram Graph API
     # ------------------------------------------------------------------
@@ -195,57 +164,6 @@ class InstagramHandler:
         print(f"[instagram] ✅ container created: {creation_id}")
         return creation_id
 
-    STORY_DURATION_SECONDS = 15
-
-    def _build_story_video(self, image_bytes: bytes, audio_path: str,
-                            duration: int = STORY_DURATION_SECONDS) -> str:
-        """Render a 1080x1920 story video: a blurred, cropped copy of the image
-        fills the background, the original square image sits centered on top,
-        and the given audio track is muxed in — no stickers, no text, no overlays.
-        Returns the local mp4 path (caller deletes it after upload)."""
-        tmp_dir    = tempfile.mkdtemp(prefix='ig_story_')
-        image_path = os.path.join(tmp_dir, 'cover.jpg')
-        out_path   = os.path.join(tmp_dir, 'story.mp4')
-        with open(image_path, 'wb') as f:
-            f.write(image_bytes)
-
-        filter_complex = (
-            "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,"
-            "crop=1080:1920,boxblur=20:5[bg];"
-            "[0:v]scale=1080:1080[fg];"
-            "[bg][fg]overlay=(W-w)/2:(H-h)/2[v]"
-        )
-        cmd = [
-            'ffmpeg', '-y',
-            '-loop', '1', '-i', image_path,
-            '-i', audio_path,
-            '-filter_complex', filter_complex,
-            '-map', '[v]', '-map', '1:a',
-            '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-r', '30',
-            '-c:a', 'aac', '-b:a', '128k', '-ar', '48000',
-            '-shortest', '-t', str(duration),
-            out_path,
-        ]
-        print(f"[instagram]   building story video (duration={duration}s)")
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-        if result.returncode != 0 or not os.path.exists(out_path):
-            raise Exception(f"ffmpeg failed building story video: {result.stderr[-2000:]}")
-        print(f"[instagram]   ✅ story video rendered: {out_path} "
-              f"({os.path.getsize(out_path) // 1024} KB)")
-        return out_path
-
-    def _create_story_container(self, video_url: str) -> str:
-        """Create a Story media container from a video. Returns creation_id."""
-        print(f"\n[instagram] _create_story_container")
-        print(f"[instagram]   video_url = {video_url}")
-        body = self._post(f"{self.ig_id}/media", {
-            'media_type': 'STORIES',
-            'video_url':  video_url,
-        })
-        creation_id = body['id']
-        print(f"[instagram] ✅ story container created: {creation_id}")
-        return creation_id
-
     def _create_carousel_container(self, child_ids: list[str], caption: str) -> str:
         """Create the carousel container that wraps child image containers."""
         print(f"\n[instagram] _create_carousel_container({len(child_ids)} children)")
@@ -290,15 +208,14 @@ class InstagramHandler:
 
     def _publish_container(self, creation_id: str,
                             max_retries: int = 4,
-                            retry_delay: int = 5,
-                            max_wait_seconds: int = 60) -> str:
+                            retry_delay: int = 5) -> str:
         """Publish a media container. Returns the live IG post ID.
         Retries with backoff if Instagram reports the media isn't ready yet
         (error_subcode 2207027) — this is transient and normally resolves
-        within a few seconds for images, longer for video (stories)."""
+        within a few seconds."""
         print(f"\n[instagram] _publish_container(creation_id={creation_id})")
 
-        self._wait_for_container_ready(creation_id, max_wait_seconds=max_wait_seconds)
+        self._wait_for_container_ready(creation_id)
 
         attempt = 0
         while True:
@@ -373,41 +290,6 @@ class InstagramHandler:
 
         result = {'ig_post_id': ig_post_id, 'slides': n}
         print(f"\n[instagram] ✅ publish_post complete: {result}")
-        print(f"[instagram] ==========================================")
-        return result
-
-    def publish_story(self, image_bytes: bytes, audio_path: str, base_public_id: str) -> dict:
-        """
-        Publish a Story made from one cover image + a music track, nothing else
-        (no stickers, no text, no links — just image and sound):
-          1. Render a vertical mp4 locally with ffmpeg.
-          2. Upload it to Cloudinary (video).
-          3. Create a STORIES media container and publish it.
-          4. Clean up the local file and the Cloudinary asset.
-        Returns {'ig_story_id': str}.
-        """
-        print(f"\n[instagram] ========== publish_story ==========")
-        print(f"[instagram] base_public_id = {base_public_id}")
-        print(f"[instagram] audio_path     = {audio_path}")
-
-        video_path = self._build_story_video(image_bytes, audio_path)
-        try:
-            video_url = self.upload_video_to_cloudinary(video_path, base_public_id)
-        finally:
-            try:
-                os.remove(video_path)
-                os.rmdir(os.path.dirname(video_path))
-            except Exception:
-                pass
-
-        creation_id = self._create_story_container(video_url)
-        # Video containers take longer to process than images.
-        ig_story_id = self._publish_container(creation_id, max_wait_seconds=180)
-
-        self.delete_video_from_cloudinary(base_public_id)
-
-        result = {'ig_story_id': ig_story_id}
-        print(f"\n[instagram] ✅ publish_story complete: {result}")
         print(f"[instagram] ==========================================")
         return result
 

@@ -4,7 +4,6 @@ import traceback
 import os
 import logging
 from logging.handlers import RotatingFileHandler
-from pathlib import Path
 from datetime import datetime, timedelta, timezone
 import pytz
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -1034,7 +1033,6 @@ def settings_page():
             'instagram_watch_days':          int(request.form.get('instagram_watch_days', 7) or 7),
             'instagram_hashtags':            request.form.get('instagram_hashtags', '').strip(),
             'instagram_watermark':           request.form.get('instagram_watermark', 'וידויים צבאיים').strip(),
-            'instagram_story_enabled':       request.form.get('instagram_story_enabled') == 'on',
         })
 
         # Instagram dynamic tiers — same format as Facebook: "max_posts | t1,t2"
@@ -1123,16 +1121,8 @@ def settings_page():
             config[key + '_set'] = False
 
     instagram_number = extensions.db.get_current_instagram_number()
-    try:
-        story_audio_dir = Path(__file__).parent / 'story_audio'
-        story_audio_tracks = sorted(
-            f for f in os.listdir(story_audio_dir)
-            if f.lower().endswith(('.mp3', '.m4a', '.wav', '.aac'))
-        ) if story_audio_dir.exists() else []
-    except Exception:
-        story_audio_tracks = []
     return render_template('settings.html', config=config, current_number=current_number,
-                           instagram_number=instagram_number, story_audio_tracks=story_audio_tracks)
+                           instagram_number=instagram_number)
 
 def _ig_clean_text(raw: str) -> str:
     """Strip a leading '#number\\n' prefix from stored post text."""

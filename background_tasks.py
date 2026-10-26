@@ -3,16 +3,12 @@ All background / scheduled jobs.
 Import and call start_scheduler() from app.py once at startup.
 """
 import json
-import os
 import schedule
 import threading
 import time
 import traceback
 import pytz
 from datetime import datetime, timedelta
-from pathlib import Path
-
-STORY_AUDIO_DIR = Path(__file__).parent / 'story_audio'
 
 from config import load_config, save_config
 import extensions
@@ -834,44 +830,7 @@ def _publish_instagram_entry(entry: dict, config: dict, now) -> dict:
     cfg.pop('instagram_failure_count', None)
     cfg['instagram_last_post'] = now.strftime('%d/%m/%Y %H:%M')
     save_config(cfg)
-
-    # Best-effort: also share the cover slide as a Story with a rotating music
-    # track. Never lets a story failure fail the feed post, which already succeeded.
-    if config.get('instagram_story_enabled', True):
-        try:
-            _publish_instagram_story(images_bytes[0], post_number, now)
-        except Exception as e:
-            print(f"[ig-job]   ⚠️ story post failed for #{post_number} (feed post still succeeded): {e}")
-
     return result
-
-
-def _publish_instagram_story(cover_bytes: bytes, post_number: int, now):
-    """Post the given cover image to Instagram Stories with a rotating audio
-    track dropped into story_audio/ (music only — no stickers, no text).
-    No-ops if no tracks are present yet."""
-    tracks = sorted(
-        f for f in os.listdir(STORY_AUDIO_DIR)
-        if f.lower().endswith(('.mp3', '.m4a', '.wav', '.aac'))
-    ) if STORY_AUDIO_DIR.exists() else []
-
-    if not tracks:
-        print("[ig-story]   no audio tracks in story_audio/ — skipping story")
-        return
-
-    cfg   = load_config()
-    idx   = cfg.get('instagram_story_audio_index', 0) % len(tracks)
-    track = tracks[idx]
-    cfg['instagram_story_audio_index'] = (idx + 1) % len(tracks)
-    save_config(cfg)
-
-    public_id = f"confessions/story_{post_number}_{int(now.timestamp())}"
-    result = extensions.instagram_handler.publish_story(
-        image_bytes=cover_bytes,
-        audio_path=str(STORY_AUDIO_DIR / track),
-        base_public_id=public_id,
-    )
-    print(f"[ig-story]   ✓ story posted for #{post_number} → {result['ig_story_id']} (track: {track})")
 
 
 def _ig_failure_alert(config: dict, exc: Exception):
