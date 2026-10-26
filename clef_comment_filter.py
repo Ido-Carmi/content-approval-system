@@ -12,12 +12,15 @@ Confirmed from Cloudflare's own docs (developers.cloudflare.com/workers-ai/model
   - Pricing:   ~$0.038 / million input tokens
   - Context:   24,576 tokens shared between state + questions
 
-NOT independently verified against Cloudflare's raw docs (only a paraphrased
-summary was available when this was written) — the exact field names inside
-each answer object for a 'noul' (yes/no) question. _extract_probability()
-below tries several plausible shapes and logs the raw answer whenever none of
-them match, so a real mismatch surfaces in the logs instead of silently
-always-voting "no". Check the logs after enabling this for the first time.
+Response shape (confirmed via a live call, 2026-10-26):
+  {"result": {"model": "clef-flash",
+              "answers": {<id>: {"type": "noul", "noul": 0.894}, ...},
+              "usage": {"input_tokens": N, "output_tokens": 0}},
+   "success": true, "errors": [], "messages": []}
+The probability lives under a key matching the question's own `type` value
+(e.g. a "noul" question's answer has its score under the "noul" key) —
+_extract_probability() checks that first, with a few generic names as
+fallback, and logs loudly if a future response shape doesn't match either.
 
 Same public interface as ai_comment_filter.CommentFilter.filter_comments_batch()
 so it's a drop-in swap behind the `comments_filter_engine` config key — see
@@ -76,7 +79,13 @@ class ClefCommentFilter:
         if isinstance(answer, (int, float)):
             return float(answer)
         if isinstance(answer, dict):
-            for key in ('probability', 'p', 'yes', 'value', 'score', 'confidence'):
+            # Confirmed live shape: {"type": "noul", "noul": 0.894} — the
+            # probability lives under a key matching the question's own
+            # 'type' value. Check that first, then fall back to generic names.
+            type_key = answer.get('type')
+            if type_key and isinstance(answer.get(type_key), (int, float)):
+                return float(answer[type_key])
+            for key in ('noul', 'probability', 'p', 'yes', 'value', 'score', 'confidence'):
                 val = answer.get(key)
                 if isinstance(val, (int, float)):
                     return float(val)
