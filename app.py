@@ -1004,6 +1004,7 @@ def settings_page():
             'cloudinary_cloud_name':  request.form.get('cloudinary_cloud_name', ''),
             'cloudinary_api_key':     request.form.get('cloudinary_api_key', ''),
             'cloudinary_api_secret':  request.form.get('cloudinary_api_secret', ''),
+            'cloudflare_api_token':   request.form.get('cloudflare_api_token', ''),
         }
 
         config.update({
@@ -1020,6 +1021,9 @@ def settings_page():
             'pending_threshold':              int(request.form.get('pending_threshold', 20)),
             'app_url':                        request.form.get('app_url', ''),
             'comments_filter_enabled':        request.form.get('comments_filter_enabled') == 'on',
+            'comments_filter_engine':         request.form.get('comments_filter_engine', 'openai'),
+            'cloudflare_account_id':          request.form.get('cloudflare_account_id', '').strip(),
+            'comments_decision_threshold':    float(request.form.get('comments_decision_threshold', 0.7) or 0.7),
             'batch_size':                     int(request.form.get('batch_size', 50)),
             'comment_flagged_notification_threshold': int(request.form.get('comment_flagged_notification_threshold', 0)),
             'comment_notification_threshold': int(request.form.get('comment_notification_threshold', 0)),
@@ -1112,7 +1116,8 @@ def settings_page():
     current_number = extensions.db.get_current_post_number()
 
     secret_keys = ['facebook_access_token', 'facebook_app_secret', 'resend_api_key', 'openai_api_key',
-                   'cloudinary_cloud_name', 'cloudinary_api_key', 'cloudinary_api_secret']
+                   'cloudinary_cloud_name', 'cloudinary_api_key', 'cloudinary_api_secret',
+                   'cloudflare_api_token']
     for key in secret_keys:
         if config.get(key):
             config[key + '_set'] = True

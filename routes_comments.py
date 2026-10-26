@@ -12,7 +12,7 @@ from datetime import datetime
 
 from flask import request, jsonify, redirect, url_for, render_template, flash
 
-from config import load_config, save_config, get_auto_comment_texts
+from config import load_config, save_config, get_auto_comment_texts, comments_filter_ready
 import extensions
 from background_tasks import check_comment_notification, send_notification_email
 
@@ -198,7 +198,7 @@ def process_webhook_batch():
     if not batch:
         return
 
-    if not config.get('comments_filter_enabled') or not config.get('openai_api_key'):
+    if not config.get('comments_filter_enabled') or not comments_filter_ready(config):
         for cd in batch:
             cd['should_hide'] = False
             cd['filter_reason'] = 'clean'
@@ -213,8 +213,8 @@ def process_webhook_batch():
     _enrich_webhook_comments(batch)
 
     try:
-        from ai_comment_filter import CommentFilter
-        ai_filter = CommentFilter(config['openai_api_key'], extensions.db)
+        from ai_comment_filter import build_comment_filter
+        ai_filter = build_comment_filter(config, db=extensions.db)
         results = ai_filter.filter_comments_batch(batch, batch_size=30)
         result_map = {r['comment_id']: r for r in results}
 

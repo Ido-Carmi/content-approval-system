@@ -8,6 +8,24 @@ import os
 from typing import List, Dict
 import json
 
+
+def build_comment_filter(config: dict, db=None):
+    """Return a comment filter instance for whichever engine is configured
+    (config['comments_filter_engine'], default 'openai'). Both CommentFilter
+    and ClefCommentFilter expose the same filter_comments_batch() contract,
+    so callers don't need to know which one they got."""
+    engine = config.get('comments_filter_engine', 'openai')
+    if engine == 'clef':
+        from clef_comment_filter import ClefCommentFilter
+        return ClefCommentFilter(
+            account_id=config.get('cloudflare_account_id', ''),
+            api_token=config.get('cloudflare_api_token', ''),
+            db=db,
+            threshold=float(config.get('comments_decision_threshold', 0.7) or 0.7),
+        )
+    return CommentFilter(config.get('openai_api_key', ''), db=db)
+
+
 class CommentFilter:
     def __init__(self, api_key: str, db=None):
         """Initialize AI Comment Filter with OpenAI API key"""

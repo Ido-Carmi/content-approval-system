@@ -164,20 +164,52 @@
                             <input type="checkbox" name="comments_filter_enabled" class="form-check-input" id="commentsEnabled" {{' checked' if config.comments_filter_enabled}}>
                             <label class="form-check-label" for="commentsEnabled">אפשר סינון אוטומטי של תגובות</label>
                         </div>
+
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">מנוע סינון</label>
+                            <select name="comments_filter_engine" class="form-select">
+                                <option value="openai" {{'selected' if (config.comments_filter_engine or 'openai') == 'openai'}}>OpenAI (GPT-4o-mini)</option>
+                                <option value="clef" {{'selected' if config.comments_filter_engine == 'clef'}}>Cloudflare Clef-flash (מודל החלטה)</option>
+                            </select>
+                            <small class="text-muted">Clef-flash מחזיר הסתברות לכל קטגוריה במקום טקסט חופשי — מודל "החלטה" ולא מודל שפה. בדוק עם כמה תגובות אמיתיות לפני מעבר מלא.</small>
+                        </div>
+
                         <div class="mb-3">
                             <label class="form-label">OpenAI API Key</label>
-                            <input type="password" name="openai_api_key" class="form-control" 
+                            <input type="password" name="openai_api_key" class="form-control"
                                    placeholder="{% if config.openai_api_key_set %}מפתח מוגדר ✓ (השאר ריק לשמור){% else %}sk-...{% endif %}">
                             {% if config.openai_api_key_set %}
                             <small class="text-success"><i class="bi bi-check-circle"></i> מוגדר</small>
                             {% endif %}
                         </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Cloudflare Account ID</label>
+                            <input type="text" name="cloudflare_account_id" class="form-control" dir="ltr"
+                                   value="{{ config.cloudflare_account_id or '' }}" placeholder="32-character account id">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Cloudflare API Token</label>
+                            <input type="password" name="cloudflare_api_token" class="form-control"
+                                   placeholder="{% if config.cloudflare_api_token_set %}מוגדר ✓ (השאר ריק לשמור){% else %}Workers AI token{% endif %}">
+                            {% if config.cloudflare_api_token_set %}
+                            <small class="text-success"><i class="bi bi-check-circle"></i> מוגדר</small>
+                            {% endif %}
+                            <small class="text-muted d-block">טוקן עם הרשאת Workers AI. נדרש רק אם בחרת במנוע Clef-flash למעלה.</small>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">סף הסתרה (Clef-flash)</label>
+                            <input type="number" name="comments_decision_threshold" class="form-control"
+                                   value="{{ config.comments_decision_threshold or 0.7 }}" min="0" max="1" step="0.05">
+                            <small class="text-muted">הסתברות (0–1) שמעליה תגובה תוסתר אוטומטית. רלוונטי רק למנוע Clef-flash.</small>
+                        </div>
+
                         <div class="mb-3">
                             <label class="form-label">גודל בלוק סינון</label>
-                            <input type="number" name="batch_size" class="form-control" 
+                            <input type="number" name="batch_size" class="form-control"
                                    value="{{config.batch_size or 50}}"
                                    min="10" max="100">
-                            <small class="text-muted">מספר תגובות לעיבוד בכל קריאת API (30 מומלץ)</small>
+                            <small class="text-muted">מספר תגובות לעיבוד בכל קריאת API (30 מומלץ) — רלוונטי למנוע OpenAI בלבד</small>
                         </div>
                         <hr>
                         <div class="mb-3">

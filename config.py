@@ -24,6 +24,18 @@ def save_config(config: dict):
             json.dump(config, f, indent=2, ensure_ascii=False)
 
 
+def comments_filter_ready(config=None) -> bool:
+    """Whether the configured comment-filter engine has the credentials it needs.
+    'clef' (Cloudflare Workers AI decision model) needs an account id + API token;
+    the default 'openai' engine needs an OpenAI API key."""
+    if config is None:
+        config = load_config()
+    engine = config.get('comments_filter_engine', 'openai')
+    if engine == 'clef':
+        return bool(config.get('cloudflare_account_id') and config.get('cloudflare_api_token'))
+    return bool(config.get('openai_api_key'))
+
+
 def get_auto_comment_texts(config=None) -> set:
     """Return a set of all configured auto-comment texts (used to skip them in comment filtering)."""
     if config is None:

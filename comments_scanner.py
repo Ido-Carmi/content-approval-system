@@ -355,16 +355,13 @@ class CommentsScanner:
 def create_hourly_job(db, config, lookback_hours: int = 48):
     """Create and return a comment scanning job."""
     from facebook_comments_handler import FacebookCommentsHandler
-    from ai_comment_filter import CommentFilter
+    from ai_comment_filter import build_comment_filter
 
     facebook = FacebookCommentsHandler(
         access_token=config.get('facebook_access_token'),
         page_id=config.get('facebook_page_id')
     )
-    ai_filter = CommentFilter(
-        api_key=config.get('openai_api_key'),
-        db=db
-    )
+    ai_filter = build_comment_filter(config, db=db)
     retention_days = config.get('comment_retention_days', 7)
     scanner = CommentsScanner(
         db=db,

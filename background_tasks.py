@@ -10,7 +10,7 @@ import traceback
 import pytz
 from datetime import datetime, timedelta
 
-from config import load_config, save_config
+from config import load_config, save_config, comments_filter_ready
 import extensions
 
 # Reference to the scheduler thread — kept here so the watchdog can restart it
@@ -121,7 +121,7 @@ def midnight_sync_job():
         # 6. Nightly comment scan (48h lookback — catches anything webhooks missed)
         try:
             config = load_config()
-            if config.get('comments_filter_enabled') and config.get('facebook_access_token') and config.get('openai_api_key'):
+            if config.get('comments_filter_enabled') and config.get('facebook_access_token') and comments_filter_ready(config):
                 print("🔍 Nightly comment scan (48h safety net)...")
                 from comments_scanner import create_hourly_job
                 job = create_hourly_job(extensions.db, config)
@@ -525,7 +525,7 @@ def comments_scan_job():
             print("ℹ️  Comments filter disabled in settings")
             return
 
-        if not config.get('openai_api_key') or not config.get('facebook_access_token'):
+        if not comments_filter_ready(config) or not config.get('facebook_access_token'):
             print("⚠️  Missing API keys for comments filter")
             return
 
