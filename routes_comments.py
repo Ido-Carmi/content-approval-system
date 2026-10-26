@@ -225,10 +225,12 @@ def process_webhook_batch():
                 cd['should_hide'] = result['should_hide']
                 cd['filter_reason'] = result['reason']
                 cd['ai_explanation'] = result['explanation']
+                cd['ai_confidence'] = result.get('confidence')
             else:
                 cd['should_hide'] = False
                 cd['filter_reason'] = 'clean'
                 cd['ai_explanation'] = ''
+                cd['ai_confidence'] = None
 
             extensions.db.add_comment(cd)
 

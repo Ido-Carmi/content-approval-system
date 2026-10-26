@@ -321,6 +321,11 @@
                 {% else %}
                     <span class="badge bg-success">✓ תקין</span>
                 {% endif %}
+                {% if comment.ai_confidence is not none %}
+                    <span class="badge bg-secondary" title="רמת ביטחון של ה-AI בהחלטה">
+                        🎯 {{ (comment.ai_confidence * 100) | round | int }}%
+                    </span>
+                {% endif %}
                 — {{ comment.ai_explanation }}
             </div>
             {% endif %}

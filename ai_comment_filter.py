@@ -137,10 +137,11 @@ For each comment, determine:
 - Should it be hidden? (yes/no)
 - What rule does it violate? (political/hate/spam/none)
 - Brief explanation (1 sentence)
+- Your confidence in this decision, 0.0 to 1.0 (1.0 = certain, 0.5 = genuinely unsure/borderline)
 
 Respond ONLY with valid JSON array, no markdown formatting:
 [
-  {"id": "comment_id", "hide": true/false, "reason": "political"/"hate"/"spam"/null, "explanation": "brief reason"},
+  {"id": "comment_id", "hide": true/false, "reason": "political"/"hate"/"spam"/null, "explanation": "brief reason", "confidence": 0.0-1.0},
   ...
 ]"""
         
@@ -296,11 +297,18 @@ Return JSON array with moderation results."""
                         print(f"   [AI] WARNING: Skipping non-dict item: {item}")
                         continue
                         
+                    confidence = item.get('confidence')
+                    try:
+                        confidence = float(confidence) if confidence is not None else None
+                    except (TypeError, ValueError):
+                        confidence = None
+
                     results.append({
                         'comment_id': item.get('id', ''),
                         'should_hide': item.get('hide', False),
                         'reason': item.get('reason'),
                         'explanation': item.get('explanation', ''),
+                        'confidence': confidence,
                         'needs_retry': False
                     })
                 

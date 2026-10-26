@@ -348,7 +348,7 @@ class CommentsScanner:
             comment_data['should_hide'] = result['should_hide']
             comment_data['filter_reason'] = result['reason']
             comment_data['ai_explanation'] = result['explanation']
-            comment_data['ai_confidence'] = result.get('confidence', 0.0)
+            comment_data['ai_confidence'] = result.get('confidence')
             self.db.add_comment(comment_data)
 
 

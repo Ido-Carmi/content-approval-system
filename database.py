@@ -105,6 +105,13 @@ class Database:
         except sqlite3.OperationalError:
             pass  # Column already exists
 
+        # AI's confidence (0.0-1.0) in its hide/show decision for this comment
+        try:
+            cursor.execute('ALTER TABLE hidden_comments ADD COLUMN ai_confidence REAL')
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
         # Auto-comment columns (for time-based comment posting after publish)
         for col_def in [
             'ALTER TABLE entries ADD COLUMN should_comment INTEGER DEFAULT 0',
@@ -1098,8 +1105,9 @@ class Database:
             cursor.execute('''
                 INSERT INTO hidden_comments
                 (comment_id, post_id, post_number, post_text, comment_text,
-                 author_name, author_id, created_at, filter_reason, ai_explanation, status, mentions_page)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 author_name, author_id, created_at, filter_reason, ai_explanation, status, mentions_page,
+                 ai_confidence)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 comment_data['comment_id'],
                 comment_data['post_id'],
@@ -1113,6 +1121,7 @@ class Database:
                 comment_data.get('ai_explanation', ''),
                 initial_status,
                 comment_data.get('mentions_page', 0),
+                comment_data.get('ai_confidence'),
             ))
             
             # Update last_comment_at for sliding window (same transaction)

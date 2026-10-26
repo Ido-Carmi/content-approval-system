@@ -108,12 +108,16 @@ class ClefCommentFilter:
 
                 worst_cat, worst_score = max(scores.items(), key=lambda kv: kv[1])
                 should_hide = worst_score >= self.threshold
+                # Confidence in whichever decision was made: how sure it's a
+                # violation when hiding, how sure it's clean when not.
+                confidence = worst_score if should_hide else (1.0 - worst_score)
 
                 results.append({
                     'comment_id': comment_id,
                     'should_hide': should_hide,
                     'reason': worst_cat if should_hide else None,
                     'explanation': f"clef-flash scores: {scores}",
+                    'confidence': confidence,
                 })
             except Exception as e:
                 print(f"   [clef] ❌ error scoring comment {comment_id}: {e}")
