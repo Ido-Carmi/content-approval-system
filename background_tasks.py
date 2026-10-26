@@ -556,14 +556,12 @@ def auto_comment_job():
         if not extensions.facebook_handler:
             return
 
-        pending = extensions.db.get_pending_auto_comments()
-        if not pending:
-            return
-
         config = load_config()
         config_dirty = False
 
-        print(f"\n💬 Auto-comment job: {len(pending)} post(s) to comment on")
+        pending = extensions.db.get_pending_auto_comments()
+        if pending:
+            print(f"\n💬 Auto-comment job: {len(pending)} post(s) to comment on")
         for entry in pending:
             fb_id        = entry.get('facebook_post_id')
             should_mask  = int(entry.get('should_comment', 0))
