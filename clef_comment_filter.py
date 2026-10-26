@@ -34,6 +34,16 @@ from typing import Dict, List, Optional
 
 import requests
 
+# Shared context prepended to every question — Clef scores each question with
+# no memory of the others, so each one needs this independently.
+PAGE_CONTEXT = (
+    "Context: this is a comment on an anonymous Hebrew-language IDF (Israel "
+    "Defense Forces) confessions Facebook page, where soldiers and veterans "
+    "share personal experiences. Normal military/service venting, dark humor, "
+    "and raw emotional language are expected here and are NOT, on their own, "
+    "violations.\n\n"
+)
+
 # Keep these keys ('political' / 'hate' / 'spam') in sync with the rest of the
 # app — they're used as filter_reason values throughout database.py/routes_comments.py.
 CATEGORY_QUESTIONS = {
@@ -44,6 +54,14 @@ CATEGORY_QUESTIONS = {
                   "discriminatory language?",
     'spam':      "Is this comment spam — a commercial advertisement, repeated or "
                   "bot-like content, or an off-topic promotion?",
+}
+
+# ai_examples categories (see database.get_ai_examples_for_learning) that map
+# onto each question here — same curated training data the OpenAI engine uses.
+_EXAMPLE_KEYS = {
+    'political': ('false_positive_political', 'correct_political', 'missed_political'),
+    'hate':      ('false_positive_hate', 'correct_hate', 'missed_hate'),
+    'spam':      ('false_positive_spam', 'correct_spam', 'missed_spam'),
 }
 
 
@@ -57,16 +75,47 @@ class ClefCommentFilter:
         self.threshold = threshold
         self.db = db  # kept for interface parity with CommentFilter; unused here
 
-    def _run(self, state: str) -> dict:
+    def _build_questions(self) -> dict:
+        """Build the typed-question schema sent with every call: shared page
+        context + each category's base instructions + a handful of curated
+        examples from ai_examples (false positives to NOT flag, confirmed/
+        missed violations to flag), when a db is available. Computed once per
+        filter_comments_batch() call, not per comment, so the examples query
+        only runs once even though Clef scores one comment at a time."""
+        examples_by_category = {}
+        if self.db:
+            try:
+                examples_by_category = self.db.get_ai_examples_for_learning()
+            except Exception as e:
+                print(f"   [clef] couldn't load curated examples, using bare "
+                      f"instructions: {e}")
+
+        questions = {}
+        for cat, base_instructions in CATEGORY_QUESTIONS.items():
+            text = PAGE_CONTEXT + base_instructions
+
+            fp_key, correct_key, missed_key = _EXAMPLE_KEYS[cat]
+            dont_flag = (examples_by_category.get(fp_key) or [])[:3]
+            do_flag = ((examples_by_category.get(correct_key) or [])[:2]
+                       + (examples_by_category.get(missed_key) or [])[:2])
+
+            if dont_flag:
+                text += "\n\nDo NOT answer yes for comments like these (acceptable on this page):\n"
+                text += "\n".join(f'- "{e["comment_text"][:150]}"' for e in dont_flag)
+            if do_flag:
+                text += "\n\nDO answer yes for comments like these:\n"
+                text += "\n".join(f'- "{e["comment_text"][:150]}"' for e in do_flag[:4])
+
+            questions[cat] = {"type": "noul", "instructions": text}
+        return questions
+
+    def _run(self, state: str, questions: dict) -> dict:
         url = f"{self.API_BASE}/accounts/{self.account_id}/ai/run/{self.MODEL}"
         headers = {"Authorization": f"Bearer {self.api_token}"}
         body = {
             # Stay well under the 24,576-token shared context window.
             "state": state[:4000],
-            "questions": {
-                cat: {"type": "noul", "instructions": instructions}
-                for cat, instructions in CATEGORY_QUESTIONS.items()
-            },
+            "questions": questions,
         }
         resp = requests.post(url, headers=headers, json=body, timeout=15)
         resp.raise_for_status()
@@ -98,11 +147,12 @@ class ClefCommentFilter:
         one result out, per comment. `batch_size` is accepted for interface
         parity but unused — Clef scores one comment ("state") per call."""
         results = []
+        questions = self._build_questions()
         for comment in comments:
             comment_id = comment['comment_id']
             text = comment.get('comment_text', '')
             try:
-                raw = self._run(text)
+                raw = self._run(text, questions)
                 # Workers AI wraps model output in a "result" envelope.
                 answers = raw.get('result', raw).get('answers', {})
 
@@ -142,7 +192,7 @@ class ClefCommentFilter:
     def test_connection(self) -> bool:
         """Return True if Cloudflare accepts a minimal scoring call."""
         try:
-            self._run("test")
+            self._run("test", self._build_questions())
             return True
         except Exception as e:
             print(f"[clef] ❌ connection test failed: {e}")
