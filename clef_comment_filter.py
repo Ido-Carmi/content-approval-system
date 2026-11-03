@@ -35,25 +35,34 @@ from typing import Dict, List, Optional
 import requests
 
 # Shared context prepended to every question — Clef scores each question with
-# no memory of the others, so each one needs this independently.
+# no memory of the others, so each one needs this independently. The actual
+# `state` sent per-call is "the post" + "the comment" (see filter_comments_batch);
+# this tells the model to judge only the comment, using the post as context.
 PAGE_CONTEXT = (
-    "Context: this is a comment on an anonymous Hebrew-language IDF (Israel "
-    "Defense Forces) confessions Facebook page, where soldiers and veterans "
-    "share personal experiences. Normal military/service venting, dark humor, "
-    "and raw emotional language are expected here and are NOT, on their own, "
-    "violations.\n\n"
+    "Context: this is an anonymous Hebrew-language IDF (Israel Defense Forces) "
+    "confessions Facebook page, where soldiers and veterans share personal "
+    "experiences. Normal military/service venting, dark humor, and raw "
+    "emotional language are expected here and are NOT, on their own, violations.\n\n"
+    "You will be given the ORIGINAL POST, then a COMMENT replying to it. "
+    "Answer only about the COMMENT — the post is there purely so you can tell "
+    "whether the comment is on-topic for the discussion it's part of.\n\n"
 )
 
 # Keep these keys ('political' / 'hate' / 'spam') in sync with the rest of the
 # app — they're used as filter_reason values throughout database.py/routes_comments.py.
 CATEGORY_QUESTIONS = {
-    'political': "Is this comment focused on partisan politics, politicians, political "
+    'political': "Is the COMMENT focused on partisan politics, politicians, political "
                   "parties, or government policy debates (rather than general military/"
                   "army experience, which is the normal topic of this page)?",
-    'hate':      "Does this comment contain slurs, hate speech, personal attacks, or "
+    'hate':      "Does the COMMENT contain slurs, hate speech, personal attacks, or "
                   "discriminatory language?",
-    'spam':      "Is this comment spam — a commercial advertisement, repeated or "
-                  "bot-like content, or an off-topic promotion?",
+    'spam':      "Is the COMMENT spam — meaning a commercial advertisement for a "
+                  "product or service, bot-like repeated/copy-pasted content, or a "
+                  "message whose sole purpose is unsolicited promotion UNRELATED to "
+                  "the post? Genuine opinions, advice, personal anecdotes, debate, or "
+                  "disagreement about the post's topic are NOT spam, even if long, "
+                  "assertive, or detailed — nor is a single personal recommendation "
+                  "mentioned naturally within an otherwise on-topic reply.",
 }
 
 # ai_examples categories (see database.get_ai_examples_for_learning) that map
@@ -151,8 +160,11 @@ class ClefCommentFilter:
         for comment in comments:
             comment_id = comment['comment_id']
             text = comment.get('comment_text', '')
+            post_text = (comment.get('post_text') or '').strip()
+            state = (f"ORIGINAL POST:\n{post_text}\n\nCOMMENT:\n{text}"
+                     if post_text else f"COMMENT:\n{text}")
             try:
-                raw = self._run(text, questions)
+                raw = self._run(state, questions)
                 # Workers AI wraps model output in a "result" envelope.
                 answers = raw.get('result', raw).get('answers', {})
 
