@@ -30,9 +30,35 @@ One difference from the OpenAI engine: Clef's schema scores one "state" per
 call (the questions are about that one piece of content), so this makes one
 API call per comment rather than batching many comments into one call.
 """
+import re
 from typing import Dict, List, Optional
 
 import requests
+
+# Clef's 'spam' score alone turned out to fire on ordinary logistics advice and
+# personal (non-commercial) recommendations — "ask your רס״פ", "I got mine
+# cheap from so-and-so" — scoring 0.70-0.91, indistinguishable by threshold
+# alone from genuine ads in the same range. Real spam on this page almost
+# always carries a concrete contact method; these false positives never do.
+# So 'spam' only counts toward hiding when there's an actual promo signal, or
+# the model is near-certain (>=0.93) even without one.
+_URL_RE = re.compile(r'(https?://|www\.|\.(?:com|co\.il|net|org)\b)', re.IGNORECASE)
+_PHONE_RE = re.compile(r'(\+?972[-\s]?\d{1,2}[-\s]?\d{3}[-\s]?\d{4}|0\d{1,2}[-\s]?\d{3}[-\s]?\d{4})')
+_PROMO_KEYWORDS = (
+    'למכירה', 'להזמנות', 'הזמנה עכשיו', 'וואטסאפ', 'whatsapp', 'לרכישה',
+    'מחיר מיוחד', 'קישור בביו', 'שלחו הודעה', 'קוד קופון', 'קופון', 'dm me',
+)
+_SPAM_SIGNAL_SCORE_FLOOR = 0.93
+
+
+def _has_spam_signal(text: str) -> bool:
+    """A concrete promo signal: link, phone number, or an explicit sales
+    keyword — not just promo-adjacent phrasing, which is exactly what was
+    causing the false positives."""
+    if _URL_RE.search(text) or _PHONE_RE.search(text):
+        return True
+    lowered = text.lower()
+    return any(k in lowered for k in _PROMO_KEYWORDS)
 
 # Shared context prepended to every question — Clef scores each question with
 # no memory of the others, so each one needs this independently. The actual
@@ -177,7 +203,16 @@ class ClefCommentFilter:
                         prob = 0.0
                     scores[cat] = prob
 
-                worst_cat, worst_score = max(scores.items(), key=lambda kv: kv[1])
+                # Gate 'spam' on an actual promo signal (see _has_spam_signal)
+                # unless the model is near-certain anyway — raw score alone was
+                # auto-hiding ordinary advice/recommendations. Other categories
+                # are untouched.
+                decision_scores = dict(scores)
+                if (decision_scores['spam'] < _SPAM_SIGNAL_SCORE_FLOOR
+                        and not _has_spam_signal(text)):
+                    decision_scores['spam'] = min(decision_scores['spam'], self.threshold - 0.01)
+
+                worst_cat, worst_score = max(decision_scores.items(), key=lambda kv: kv[1])
                 should_hide = worst_score >= self.threshold
                 # Confidence in whichever decision was made: how sure it's a
                 # violation when hiding, how sure it's clean when not.
