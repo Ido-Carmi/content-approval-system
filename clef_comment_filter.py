@@ -30,35 +30,9 @@ One difference from the OpenAI engine: Clef's schema scores one "state" per
 call (the questions are about that one piece of content), so this makes one
 API call per comment rather than batching many comments into one call.
 """
-import re
 from typing import Dict, List, Optional
 
 import requests
-
-# Clef's 'spam' score alone turned out to fire on ordinary logistics advice and
-# personal (non-commercial) recommendations — "ask your רס״פ", "I got mine
-# cheap from so-and-so" — scoring 0.70-0.91, indistinguishable by threshold
-# alone from genuine ads in the same range. Real spam on this page almost
-# always carries a concrete contact method; these false positives never do.
-# So 'spam' only counts toward hiding when there's an actual promo signal, or
-# the model is near-certain (>=0.93) even without one.
-_URL_RE = re.compile(r'(https?://|www\.|\.(?:com|co\.il|net|org)\b)', re.IGNORECASE)
-_PHONE_RE = re.compile(r'(\+?972[-\s]?\d{1,2}[-\s]?\d{3}[-\s]?\d{4}|0\d{1,2}[-\s]?\d{3}[-\s]?\d{4})')
-_PROMO_KEYWORDS = (
-    'למכירה', 'להזמנות', 'הזמנה עכשיו', 'וואטסאפ', 'whatsapp', 'לרכישה',
-    'מחיר מיוחד', 'קישור בביו', 'שלחו הודעה', 'קוד קופון', 'קופון', 'dm me',
-)
-_SPAM_SIGNAL_SCORE_FLOOR = 0.93
-
-
-def _has_spam_signal(text: str) -> bool:
-    """A concrete promo signal: link, phone number, or an explicit sales
-    keyword — not just promo-adjacent phrasing, which is exactly what was
-    causing the false positives."""
-    if _URL_RE.search(text) or _PHONE_RE.search(text):
-        return True
-    lowered = text.lower()
-    return any(k in lowered for k in _PROMO_KEYWORDS)
 
 # Shared context prepended to every question — Clef scores each question with
 # no memory of the others, so each one needs this independently. The actual
@@ -74,29 +48,63 @@ PAGE_CONTEXT = (
     "whether the comment is on-topic for the discussion it's part of.\n\n"
 )
 
-# Keep these keys ('political' / 'hate' / 'spam') in sync with the rest of the
-# app — they're used as filter_reason values throughout database.py/routes_comments.py.
+# Keep 'political' / 'hate' / 'spam' in sync with the rest of the app — they're
+# used as filter_reason values throughout database.py/routes_comments.py.
+#
+# 'spam' used to be one compound question ("commercial ad OR bot junk OR
+# unsolicited promotion"). That bundled definition scored ordinary logistics
+# advice and personal non-commercial recommendations ("ask your רס״פ", "I got
+# mine cheap from so-and-so") at 0.70-0.91 — indistinguishable by threshold
+# from real spam in that range (32% of all comments in one real week auto-
+# hidden, nearly all false positives). A decision model answers one crisp
+# question much better than an OR of three, so 'spam' is now two separate
+# questions — PROMO_QUESTIONS below — combined by taking the max of the two.
 CATEGORY_QUESTIONS = {
     'political': "Is the COMMENT focused on partisan politics, politicians, political "
                   "parties, or government policy debates (rather than general military/"
                   "army experience, which is the normal topic of this page)?",
     'hate':      "Does the COMMENT contain slurs, hate speech, personal attacks, or "
                   "discriminatory language?",
-    'spam':      "Is the COMMENT spam — meaning a commercial advertisement for a "
-                  "product or service, bot-like repeated/copy-pasted content, or a "
-                  "message whose sole purpose is unsolicited promotion UNRELATED to "
-                  "the post? Genuine opinions, advice, personal anecdotes, debate, or "
-                  "disagreement about the post's topic are NOT spam, even if long, "
-                  "assertive, or detailed — nor is a single personal recommendation "
-                  "mentioned naturally within an otherwise on-topic reply.",
+}
+
+# The two sub-questions that together make up 'spam'. Each is judged
+# independently by Clef; filter_comments_batch() takes the max as the
+# combined spam score.
+SPAM_SUBQUESTIONS = {
+    'spam_promo': "Is the COMMENT commercial promotion — meaning it advertises a "
+                  "specific product, business, or service AND gives a concrete way "
+                  "to act on it (a link, phone number, named business, or price to "
+                  "pay)? General advice, telling someone which office/commander to "
+                  "ask, or a personal non-commercial recommendation (e.g. mentioning "
+                  "you personally bought something from someone, without directing "
+                  "others to buy or giving contact details) is NOT promotion, even "
+                  "if it names a product, place, or person. Telling someone to "
+                  "search for, contact, or go through an official program, "
+                  "government office, military chain of command, or organization "
+                  "is advice, NOT promotion, even when it names that program/office "
+                  "specifically — this only becomes promotion if a private commercial "
+                  "business is being advertised with a way to buy.",
+    'spam_junk':  "Is the COMMENT bot-like junk — meaning it is gibberish, a "
+                  "meaningless string, or text that is mechanically repeated/"
+                  "copy-pasted (e.g. the same word or phrase looped many times) — "
+                  "as opposed to ANY genuine human reply? A comment that expresses "
+                  "a real opinion, reaction, question, or piece of advice is a "
+                  "genuine human reply and is NOT junk, no matter how short, blunt, "
+                  "terse, sarcastic, rhetorical, one-sided, or low-effort it reads. "
+                  "Being terse, unclear, or argumentative is never, by itself, a "
+                  "reason to answer yes — only actual gibberish or mechanical "
+                  "repetition is.",
 }
 
 # ai_examples categories (see database.get_ai_examples_for_learning) that map
 # onto each question here — same curated training data the OpenAI engine uses.
+# Both spam sub-questions draw on the same underlying 'spam' example pool —
+# the db only tracks one 'spam' category, not a promo/junk split.
 _EXAMPLE_KEYS = {
-    'political': ('false_positive_political', 'correct_political', 'missed_political'),
-    'hate':      ('false_positive_hate', 'correct_hate', 'missed_hate'),
-    'spam':      ('false_positive_spam', 'correct_spam', 'missed_spam'),
+    'political':  ('false_positive_political', 'correct_political', 'missed_political'),
+    'hate':       ('false_positive_hate', 'correct_hate', 'missed_hate'),
+    'spam_promo': ('false_positive_spam', 'correct_spam', 'missed_spam'),
+    'spam_junk':  ('false_positive_spam', 'correct_spam', 'missed_spam'),
 }
 
 
@@ -112,7 +120,7 @@ class ClefCommentFilter:
 
     def _build_questions(self) -> dict:
         """Build the typed-question schema sent with every call: shared page
-        context + each category's base instructions + a handful of curated
+        context + each question's base instructions + a handful of curated
         examples from ai_examples (false positives to NOT flag, confirmed/
         missed violations to flag), when a db is available. Computed once per
         filter_comments_batch() call, not per comment, so the examples query
@@ -125,12 +133,13 @@ class ClefCommentFilter:
                 print(f"   [clef] couldn't load curated examples, using bare "
                       f"instructions: {e}")
 
+        all_base = {**CATEGORY_QUESTIONS, **SPAM_SUBQUESTIONS}
         questions = {}
-        for cat, base_instructions in CATEGORY_QUESTIONS.items():
+        for cat, base_instructions in all_base.items():
             text = PAGE_CONTEXT + base_instructions
 
             fp_key, correct_key, missed_key = _EXAMPLE_KEYS[cat]
-            dont_flag = (examples_by_category.get(fp_key) or [])[:3]
+            dont_flag = (examples_by_category.get(fp_key) or [])[:10]
             do_flag = ((examples_by_category.get(correct_key) or [])[:2]
                        + (examples_by_category.get(missed_key) or [])[:2])
 
@@ -194,25 +203,25 @@ class ClefCommentFilter:
                 # Workers AI wraps model output in a "result" envelope.
                 answers = raw.get('result', raw).get('answers', {})
 
-                scores = {}
-                for cat in CATEGORY_QUESTIONS:
+                raw_scores = {}
+                for cat in questions:
                     prob = self._extract_probability(answers.get(cat))
                     if prob is None:
                         print(f"   [clef] ⚠️ unrecognized '{cat}' answer shape for "
                               f"comment {comment_id}, treating as 0: {answers.get(cat)!r}")
                         prob = 0.0
-                    scores[cat] = prob
+                    raw_scores[cat] = prob
 
-                # Gate 'spam' on an actual promo signal (see _has_spam_signal)
-                # unless the model is near-certain anyway — raw score alone was
-                # auto-hiding ordinary advice/recommendations. Other categories
-                # are untouched.
-                decision_scores = dict(scores)
-                if (decision_scores['spam'] < _SPAM_SIGNAL_SCORE_FLOOR
-                        and not _has_spam_signal(text)):
-                    decision_scores['spam'] = min(decision_scores['spam'], self.threshold - 0.01)
+                # Combine the two spam sub-questions into one 'spam' score
+                # (max — either sub-concern alone is enough to call it spam),
+                # presented alongside political/hate exactly like before.
+                scores = {
+                    'political': raw_scores['political'],
+                    'hate': raw_scores['hate'],
+                    'spam': max(raw_scores['spam_promo'], raw_scores['spam_junk']),
+                }
 
-                worst_cat, worst_score = max(decision_scores.items(), key=lambda kv: kv[1])
+                worst_cat, worst_score = max(scores.items(), key=lambda kv: kv[1])
                 should_hide = worst_score >= self.threshold
                 # Confidence in whichever decision was made: how sure it's a
                 # violation when hiding, how sure it's clean when not.
@@ -222,7 +231,7 @@ class ClefCommentFilter:
                     'comment_id': comment_id,
                     'should_hide': should_hide,
                     'reason': worst_cat if should_hide else None,
-                    'explanation': f"clef-flash scores: {scores}",
+                    'explanation': f"clef-flash scores: {scores} (spam_promo={raw_scores['spam_promo']:.3f}, spam_junk={raw_scores['spam_junk']:.3f})",
                     'confidence': confidence,
                 })
             except Exception as e:
