@@ -452,6 +452,7 @@ class Database:
     def get_posts_needing_ref_comment(self) -> List[Dict]:
         """Live posts (published ≥2 min ago) that haven't yet had their reference-link
         comment evaluated. Time filtered in Python to avoid SQLite tz issues."""
+        import pytz
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute('''
